@@ -273,6 +273,11 @@ type UserConfig struct {
 	// keeps the section when the TUI rewrites config.toml.
 	WorldStore WorldStoreSettings `toml:"worldstore,omitempty"`
 
+	// matrix/hardened: the user's own `agent-deck web` service (LaunchAgent or
+	// systemd unit) that alt+w and `agent-deck webservice` watch and control.
+	// Off unless [webservice].manager and .service are set.
+	WebService WebServiceSettings `toml:"webservice,omitempty"`
+
 	// Display defines rendering and display settings
 	Display DisplaySettings `toml:"display,omitempty"`
 
