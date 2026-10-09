@@ -1,2 +1,2 @@
-  ▶├─ ● API worker shell
+  ▶├─ ● API worker shell 
    ├─ ○ Notes shell

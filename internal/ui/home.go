@@ -21953,7 +21953,8 @@ func (h *Home) renderCreatingSessionItem(
 	}
 
 	b.WriteString(spinnerStyle.Render(spinner))
-	b.WriteString(" ")
+	// matrix/hardened: keep the highlight bar unbroken between spinner and title.
+	b.WriteString(spinnerStyle.Render(" "))
 	b.WriteString(titleStyle.Render(item.CreatingTitle))
 	b.WriteString(subtitleStyle.Render(" (creating worktree...)"))
 	b.WriteString("\n")
@@ -22226,9 +22227,19 @@ func (h *Home) renderSessionItem(
 		}
 		chevronStyle := TreeConnectorStyle
 		if selected {
-			chevronStyle = TreeConnectorSelStyle
+			chevronStyle = SessionStatusSelStyle
 		}
 		windowChevron = chevronStyle.Render(chevronChar)
+	} else if selected {
+		// matrix/hardened: the placeholder doubles as the highlight bar's left
+		// padding, so the bar reads as one piece from here to the badges.
+		windowChevron = SessionStatusSelStyle.Render(" ")
+	}
+	// matrix/hardened: the gap between status icon and title, and the bar's
+	// right padding, carry the selection background on the selected row.
+	statusGap, barEnd := " ", ""
+	if selected {
+		statusGap, barEnd = SessionStatusSelStyle.Render(" "), SessionStatusSelStyle.Render(" ")
 	}
 
 	// The session name stays first. A useful pane or saved task description is
@@ -22255,7 +22266,7 @@ func (h *Home) renderSessionItem(
 		cellWidth(status) + 1 + cellWidth(tool) +
 		cellWidth(maestroBadge) + cellWidth(yoloBadge) + cellWidth(worktreeBadge) +
 		cellWidth(sandboxBadge) + cellWidth(multiRepoBadge) + cellWidth(sshBadge) +
-		cellWidth(agentBadge) + cellWidth(timestampBadge)
+		cellWidth(agentBadge) + cellWidth(timestampBadge) + cellWidth(barEnd)
 	// Keep a useful title before spending narrow-row space on a worktree badge.
 	if listWidth > 0 && listWidth < 40 && worktreeBadge != "" {
 		originalWidth := cellWidth(worktreeBadge)
@@ -22313,13 +22324,14 @@ func (h *Home) renderSessionItem(
 	// The leading gutter (leftGutterWidth) keeps sessions aligned with group
 	// rows, which reserve the same gutter for root hotkey numbers.
 	row := fmt.Sprintf(
-		"%s%s%s%s%s%s %s%s%s%s%s%s%s%s%s%s%s%s",
+		"%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s",
 		strings.Repeat(" ", leftGutterWidth),
 		baseIndent,
 		selectionPrefix,
 		treeStyle.Render(treeConnector),
 		windowChevron,
 		status,
+		statusGap,
 		title,
 		tool,
 		maestroBadge,
@@ -22332,6 +22344,7 @@ func (h *Home) renderSessionItem(
 		viewersBadgeText,
 		accountBadge,
 		timestampBadge,
+		barEnd,
 	)
 
 	// Append pane title filling remaining row space (only for the selected item).
@@ -22402,6 +22415,12 @@ func (h *Home) renderWindowItem(b *strings.Builder, item session.Item, selected 
 		}
 	}
 
+	// matrix/hardened: on the selected row the separator before the label and
+	// a trailing space are part of the highlight bar (padding on both ends).
+	winGap, winEnd := " ", ""
+	if selected {
+		winGap, winEnd = SessionStatusSelStyle.Render(" "), SessionStatusSelStyle.Render(" ")
+	}
 	winLabel := indexStyle.Render(fmt.Sprintf("[%d]", item.WindowIndex))
 	winName := nameStyle.Render(" " + item.WindowName)
 
@@ -22416,14 +22435,16 @@ func (h *Home) renderWindowItem(b *strings.Builder, item session.Item, selected 
 	}
 
 	row := fmt.Sprintf(
-		"%s%s%s%s %s%s%s",
+		"%s%s%s%s%s%s%s%s%s",
 		strings.Repeat(" ", leftGutterWidth), // align with group/session hotkey gutter
 		baseIndent,
 		selectionPrefix,
 		treeStyle.Render(treeConnector),
+		winGap,
 		winLabel,
 		winName,
 		toolBadge,
+		winEnd,
 	)
 	b.WriteString(row)
 	b.WriteString("\n")

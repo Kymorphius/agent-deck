@@ -486,7 +486,10 @@ func initStyles() {
 
 	// Tree connector styles
 	TreeConnectorStyle = lipgloss.NewStyle().Foreground(ColorText)
-	TreeConnectorSelStyle = lipgloss.NewStyle().Foreground(ColorBg).Background(ColorAccent)
+	// matrix/hardened: the selected row's tree lines stay outside the highlight
+	// bar (accent foreground only). Drawn as dark glyphs on the accent
+	// background they cut the bar into broken blocks.
+	TreeConnectorSelStyle = lipgloss.NewStyle().Foreground(ColorAccent)
 
 	// Session status indicator styles
 	SessionStatusRunning = lipgloss.NewStyle().Foreground(ColorGreen)
