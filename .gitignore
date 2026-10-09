@@ -75,3 +75,6 @@ RESULTS/
 
 # sentrux structural baseline (issue #2148); generated, never committed
 .sentrux/
+
+# matrix/hardened: machine-specific notes, never committed (repo is public)
+MATRIX-LOCAL.md
