@@ -291,7 +291,10 @@ func (h *HelpOverlay) View() string {
 		{"G", "Recall search (every conversation on this machine)"},
 		{"h / Left", "Collapse / parent"},
 		{"l / Right", "Expand / toggle"},
-		{"1-9", "Jump to root group"},
+		// matrix/hardened: digits are a vim count; group jump moved to 'N.
+		{"'1-'9", "Jump to root group"},
+		{"3j / 3k", "Move 3 rows (any count)"},
+		{":12 Enter", "Jump to line 12 (:set nonu hides numbers)"},
 		{"Space", "Jump mode"},
 		{altSessionKey, "Alternate session (swap with the previous one, vim-style)"},
 		{mruBackKey, "Walk back through recently used sessions"},

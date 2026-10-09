@@ -305,10 +305,12 @@ func TestGroupNav_Regression_Plain1_JumpsToFirstRootGroup(t *testing.T) {
 	home, idx := buildTwoGroupHome(t)
 	home.cursor = idx["b2"]
 
-	model, _ := home.handleMainKey(plainKeyMsg('1'))
+	// matrix/hardened: plain digits are a vim count now; the jump is "'1".
+	model, _ := home.handleMainKey(plainKeyMsg('\''))
+	model, _ = model.(*Home).handleMainKey(plainKeyMsg('1'))
 	h := model.(*Home)
 
-	// Plain 1 still invokes existing jumpToRootGroup which lands on the
+	// 1 still invokes existing jumpToRootGroup which lands on the
 	// alpha group header (first root group).
 	item := h.flatItems[h.cursor]
 	if item.Type != session.ItemTypeGroup || item.Path != "alpha" {

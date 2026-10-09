@@ -161,6 +161,16 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 - **改动地图**：`internal/session/matrix_codex_resume.go`（新文件）；`cmd/agent-deck/recall_cmd.go`（`recallOpenCodexPlan`、帮助文字）；`cmd/agent-deck/main.go`（`add --resume-session` 的校验、rollout 检查、关联 harness、flag 说明）；`internal/ui/home.go`（`handleGlobalSearchSelection` 的 Codex 分支、`createCodexSessionFromGlobalSearch`）；goldens `help_add.stderr.golden`、`help_recall.golden`。
 - **测试**：`internal/session/matrix_codex_resume_test.go`、`cmd/agent-deck/recall_cmd_test.go` 的 `TestRecall_OpenResumesCodexThread`、`internal/ui/matrix_global_search_resume_test.go` 的 `TestMatrixGlobalSearch_CodexHit`。没有在真实 codex 上自动化测试启动后的 resume。
 
+## 11. 列表的 vim 计数前缀（我们自己加的功能）
+
+2026-10-09 新增。会话列表里数字只当 vim 计数（另见下面的行号和 `:N`）：`3j` / `3k`（也可用 ↑/↓、`ctrl+n/p`）一次移动 3 行，计数可多位（`12j`、`10k`，上限 999），没有超时，按其它键作废。
+
+- **跳根分组改成 `'` 加数字**（`'3` 跳到第 3 个根分组）。原来单按 `1`–`9` 跳分组，和计数冲突，用户选了纯 vim。`'` 后面不是 1–9 时，`'` 作废，那个键照常生效。分组标题上显示的数字不变，含义变成 `'N`。
+- **`0`**：有计数时追加一位（`10j`）；没有计数时照旧清除状态筛选。`!@#$` 等筛选键不受影响。
+- **行号和 `:N`**：列表每一行左边显示行号（vim 的 `:set number`），分组标题也编号，视图模式的分隔线不编号。按 `:` 在底部帮助栏位置打开命令行，`:12` 回车跳到第 12 行（行号超出范围时报错、光标不动），`:set nonu` / `:set nu` 隐藏或显示行号（只在本次运行有效，不写配置），`Esc` 或空命令行上的退格取消。行号只在普通列表里画；内嵌侧栏（embedded layout）的卡片高度随宽度变，为了不影响鼠标点击和滚动，那里不画行号，但 `:N` 照样能用。各行渲染时宽度减去行号列，再在前面补行号。
+- **改动地图**：`internal/ui/matrix_nav_count.go`（新文件，`matrixHandleNavPrefix`）、`internal/ui/matrix_line_numbers.go`（新文件，行号列和 `:` 命令行）；`internal/ui/home.go`（`navCount` 字段、`Update` 里紧跟 jump mode 的 `:` 命令行路由、`handleMainKey` 在 switch 前调用前缀处理、`up/k` 与 `down/j` 按计数循环、`renderSessionList` 的行号列、`View` 里帮助栏替换；原 `1`–`9` 分支保留但已不可达，注释说明）；`internal/ui/help.go`（帮助里 `'1-'9`、`3j / 3k`、`:12`）。合并上游时注意上游若改了数字键、`'`、`:` 键的绑定或 `renderSessionList` 的循环。
+- **测试**：`internal/ui/matrix_nav_count_test.go`；`group_nav_test.go` 的 `TestGroupNav_Regression_Plain1_JumpsToFirstRootGroup` 改为按 `'1`。列表快照（`testdata/funccheck/`、`testdata/viewers/`、`tree-*` 帧）已用 `UPDATE_GOLDEN=1` 重新生成，去掉行号列后与原快照逐行一致。
+
 ## 12. 接管已在运行的 Claude（我们自己加的功能）
 
 2026-10-09 新增。用户自己在 tmux 里开的 Claude（不是 agent-deck 建的会话）可以不中断地交给 agent-deck 管：`agent-deck session adopt <tmux会话>`，`--list` 列出候选；远程用 `agent-deck remote <名> session adopt …`；TUI 里 `alt+u` 打开列表（光标在远程分组或会话上时列远程的），回车后按 `y` 确认才接管。

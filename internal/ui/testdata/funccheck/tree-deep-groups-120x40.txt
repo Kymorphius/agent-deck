@@ -1,7 +1,7 @@
-▶ ▾ alpha (2)
-   └─ ○ deep-root claude
-    ▾ one (1)
-      ▾ two (1)
-        ▾ three (1)
-          ▾ four (1)
-           └─ ○ deep-leaf claude
+1 ▶ ▾ alpha (2)
+2    └─ ○ deep-root claude
+3     ▾ one (1)
+4       ▾ two (1)
+5         ▾ three (1)
+6           ▾ four (1)
+7            └─ ○ deep-leaf claude

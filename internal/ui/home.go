@@ -623,6 +623,9 @@ type Home struct {
 	// Double ESC to quit (#28) - for non-English keyboard users
 	lastEscTime time.Time // When ESC was last pressed (double-tap within 500ms quits)
 
+	// matrix/hardened: vim-style count prefix ("3j"); see matrix_nav_count.go.
+	navCount matrixNavCount
+
 	// Mouse double-click tracking
 	lastClickTime   time.Time // When left button was last pressed
 	lastClickIndex  int       // flatItems index of last click (-1 = none)
@@ -10035,6 +10038,11 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return h.handleJumpKey(msg)
 		}
 
+		// matrix/hardened: the ":" line prompt takes every key until Enter/Esc.
+		if h.navCount.cmd {
+			return h.matrixHandleCmdKey(msg)
+		}
+
 		// Handle setup wizard first (modal, blocks everything)
 		if h.setupWizard.IsVisible() {
 			var cmd tea.Cmd
@@ -11563,6 +11571,12 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	// matrix/hardened: vim count digits ("3j") and the "'N" root-group jump
+	// are handled here; see matrix_nav_count.go.
+	if h.matrixHandleNavPrefix(key) {
+		return h, nil
+	}
+
 	switch key {
 	case "q", "ctrl+c":
 		return h.tryQuit()
@@ -11589,9 +11603,14 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "up", "k", "ctrl+p":
 		h.previewScrollOffset = 0
-		if h.cursor > 0 {
+		// matrix/hardened: "3k" moves 3 rows.
+		before := h.cursor
+		steps := h.matrixTakeNavCount()
+		for i := 0; i < steps && h.cursor > 0; i++ {
 			h.cursor--
 			h.skipDivider(-1)
+		}
+		if h.cursor != before {
 			h.syncViewport()
 			h.markNavigationActivity()
 			// PERFORMANCE: Debounced preview fetch - waits 150ms for navigation to settle
@@ -11602,9 +11621,14 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "down", "j", "ctrl+n":
 		h.previewScrollOffset = 0
-		if h.cursor < len(h.flatItems)-1 {
+		// matrix/hardened: "3j" moves 3 rows.
+		before := h.cursor
+		steps := h.matrixTakeNavCount()
+		for i := 0; i < steps && h.cursor < len(h.flatItems)-1; i++ {
 			h.cursor++
 			h.skipDivider(1)
+		}
+		if h.cursor != before {
 			h.syncViewport()
 			h.markNavigationActivity()
 			// PERFORMANCE: Debounced preview fetch - waits 150ms for navigation to settle
@@ -13139,6 +13163,8 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return h, nil
 
 	case "1", "2", "3", "4", "5", "6", "7", "8", "9":
+		// matrix/hardened: unreachable; digits are a vim count and the group
+		// jump is "'N" (matrixHandleNavPrefix).
 		// Quick jump to Nth root group (1-indexed)
 		targetNum := int(key[0] - '0') // Convert "1" -> 1, "2" -> 2, etc.
 		h.jumpToRootGroup(targetNum)
@@ -19323,6 +19349,8 @@ func (h *Home) renderFrame() string {
 	var helpBar string
 	if h.insertMode {
 		helpBar = h.renderInsertModeBar()
+	} else if h.navCount.cmd { // matrix/hardened: ":" line prompt
+		helpBar = h.matrixRenderCmdBar()
 	} else {
 		helpBar = h.renderHelpBar()
 	}
@@ -21558,6 +21586,12 @@ func (h *Home) renderSessionList(width, height int) string {
 		}
 	}
 
+	// matrix/hardened: vim line-number column (matrix_line_numbers.go). Rows
+	// render numW narrower into rowBuf; the number is prefixed afterwards.
+	lineNums, lineTotal := h.matrixRowNumbers()
+	numW := h.matrixLineNumberWidth(lineTotal)
+	itemWidth := width - numW
+
 	nextItem := h.viewOffset
 	rowLines := h.sidebarRowLines()
 	for i := h.viewOffset; i < len(h.flatItems); i++ {
@@ -21566,34 +21600,38 @@ func (h *Home) renderSessionList(width, height int) string {
 		if usedLines > 0 && usedLines+rowHeight > lineBudget {
 			break
 		}
+		var rowBuf strings.Builder
 		if h.jumpMode && item.Type != session.ItemTypeDivider {
 			hint, ok := jumpHintByItemIndex[i]
 			if !ok {
-				h.renderItem(&b, item, i == h.cursor, i, groupStats, snapshot, width)
-				usedLines += rowHeight
-				nextItem = i + 1
-				continue
-			}
-			// Render item to temp buffer, then paint the fixed row gutter.
-			var itemBuf strings.Builder
-			h.renderItem(&itemBuf, item, i == h.cursor, i, groupStats, snapshot, width)
-			raw := itemBuf.String()
-			isMatch := h.jumpBuffer == "" || strings.HasPrefix(hint, h.jumpBuffer)
-
-			if isMatch {
-				// Overlay hint on the first line, preserve rest exactly
-				if idx := strings.Index(raw, "\n"); idx >= 0 {
-					b.WriteString(h.overlayJumpHintAtWidth(raw[:idx], hint, h.jumpBuffer, width))
-					b.WriteString(raw[idx:]) // includes \n and any subsequent lines
-				} else {
-					b.WriteString(h.overlayJumpHintAtWidth(raw, hint, h.jumpBuffer, width))
-				}
+				h.renderItem(&rowBuf, item, i == h.cursor, i, groupStats, snapshot, itemWidth)
 			} else {
-				// Non-matching: render normally (no dimming to preserve layout)
-				b.WriteString(raw)
+				// Render item to temp buffer, then paint the fixed row gutter.
+				var itemBuf strings.Builder
+				h.renderItem(&itemBuf, item, i == h.cursor, i, groupStats, snapshot, itemWidth)
+				raw := itemBuf.String()
+				isMatch := h.jumpBuffer == "" || strings.HasPrefix(hint, h.jumpBuffer)
+
+				if isMatch {
+					// Overlay hint on the first line, preserve rest exactly
+					if idx := strings.Index(raw, "\n"); idx >= 0 {
+						rowBuf.WriteString(h.overlayJumpHintAtWidth(raw[:idx], hint, h.jumpBuffer, itemWidth))
+						rowBuf.WriteString(raw[idx:]) // includes \n and any subsequent lines
+					} else {
+						rowBuf.WriteString(h.overlayJumpHintAtWidth(raw, hint, h.jumpBuffer, itemWidth))
+					}
+				} else {
+					// Non-matching: render normally (no dimming to preserve layout)
+					rowBuf.WriteString(raw)
+				}
 			}
 		} else {
-			h.renderItem(&b, item, i == h.cursor, i, groupStats, snapshot, width)
+			h.renderItem(&rowBuf, item, i == h.cursor, i, groupStats, snapshot, itemWidth)
+		}
+		if numW > 0 {
+			b.WriteString(matrixNumberRow(rowBuf.String(), lineNums[i], numW, width, i == h.cursor))
+		} else {
+			b.WriteString(rowBuf.String())
 		}
 		usedLines += rowHeight
 		nextItem = i + 1
