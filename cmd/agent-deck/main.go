@@ -466,6 +466,9 @@ func main() {
 		case "tasks": // matrix/hardened: World Store task board
 			handleTasks(profile, args[1:])
 			return
+		case "webservice": // matrix/hardened: this host's own `agent-deck web` service
+			handleWebService(args[1:])
+			return
 		case "mcp":
 			handleMCP(profile, args[1:])
 			return
@@ -1492,6 +1495,7 @@ var commandRegistry = map[string]bool{
 	"group": true, "try": true, "launch": true, "conductor": true,
 	"agents": true, "agent": true,
 	"tasks":           true, // matrix/hardened: World Store task board
+	"webservice":      true, // matrix/hardened: this host's own `agent-deck web` service
 	"telegram-doctor": true, "watcher": true, "openclaw": true, "oc": true,
 	"remote": true, "remote-agent": true, "system": true, "worktree": true, "wt": true, "costs": true, "events": true, "daemon": true, "usage": true, "web": true, "config": true, "recall": true,
 	"uninstall": true, "migrate-paths": true, "hook-handler": true,

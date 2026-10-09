@@ -195,3 +195,20 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 - **重载竞态**：和改名一样登记在 `pendingGroupOps`（`groupOpMoveGroup`），保存失败后重载时补做；源分组不在了，或已经在目标下面，就不做。
 - **改动地图**：`internal/ui/matrix_group_move.go`（新文件）；`internal/ui/group_dialog.go`（`moveGroupSource`、`ShowMoveGroup`、`SelectedMoveGroupParent`、标题和 `(root)` 显示）；`internal/ui/home.go`（`groupOpMoveGroup` 常量和补做分支、`M` 的分组和远程分组分支、对话框回车的分组移动分支、分组行底栏的 `M Move` 提示）；`internal/ui/help.go`（GROUPS 里的 `M`）。
 - **测试**：`internal/ui/matrix_group_move_test.go`。
+
+## 14. 查看和控制本机的 `agent-deck web` 服务（我们自己加的功能，CLI 部分）
+
+2026-10-09 新增。手机用的 `agent-deck web --no-tui` 是用户自己写的 LaunchAgent / systemd 单元，agent-deck 不安装它。`agent-deck webservice [status|start|stop|restart] [--json]` 读取它在服务管理器里的状态、探测 `<url>/healthz`，并让服务管理器启动、停止或重启它。`remote_exec.go` 放行了 `webservice`，所以也能对远程主机执行。
+
+- **配置**（默认关闭，`manager` 和 `service` 都填了才启用）：
+  ```toml
+  [webservice]
+  manager = "launchd"              # launchd | systemd | systemd-user
+  service = "<launchd label 或 systemd 单元名>"
+  url = "http://<地址>:8420"       # 可选：探测 /healthz
+  # plist = "..."                  # launchd：默认 ~/Library/LaunchAgents/<service>.plist
+  # sudo = true                    # systemd：用 `sudo -n systemctl` 控制
+  ```
+- **行为**：launchd 的 `stop` 是 `bootout`（卸载，避免 KeepAlive 立刻拉起），`start` 在未加载时用 plist `bootstrap`，`restart` 是 `kickstart -k`；操作后最多等 10 秒，直到状态反映出来。健康探测是一次不带凭据的 GET，不走环境里的代理、不跟随重定向（R1/R3 不受影响）。
+- **还没做**：TUI 里的 `alt+w` 面板（代码注释里提到它，但还没有接线）；没有自动化测试。2026-10-09 在本机对 `matrix.agent-deck-web` 手动验证过 `status`（运行中、healthz 应答），没有在真机上试 `start/stop/restart`。
+- **改动地图**：`internal/session/matrix_webservice.go`（新文件）、`cmd/agent-deck/matrix_webservice_cmd.go`（新文件）；`cmd/agent-deck/main.go`（分发和 commandRegistry）、`cmd/agent-deck/remote_exec.go`、`internal/session/userconfig.go`（`WebService` 字段，必须在结构体里，否则 SaveUserConfig 会丢掉这一节）。
