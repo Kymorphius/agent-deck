@@ -184,3 +184,14 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 - **注意**：接管后在 agent-deck 里删除这个会话会连同 tmux 会话和 Claude 进程一起杀掉；原来的 tmux 会话名没了（`tmux new -A -s 原名` 会新建一个空的）。tmux 列表输出的分隔符必须是可打印字符：没有已连接客户端时（所有经 SSH 的命令）tmux 会把控制字符改成 `_`。
 - **改动地图**：`internal/session/matrix_adopt.go`、`cmd/agent-deck/matrix_adopt_cmd.go`、`internal/ui/matrix_adopt_panel.go`、`internal/ui/matrix_adopt_home.go`（新文件）；`cmd/agent-deck/session_cmd.go`（`adopt` 分发和帮助）、`cmd/agent-deck/remote_exec.go`（允许转发 `session adopt`）、`internal/ui/hotkeys.go`（`adopt_panel` = `alt+u`）、`internal/ui/help.go`、`internal/ui/home.go`（字段、消息分发、SetSize、按键路由、hasModalVisible、热键分支、View，共 7 处）。
 - **测试**：`cmd/agent-deck/matrix_adopt_cmd_test.go`（真 tmux、隔离 socket、`sleep` 代替 Claude、手写状态文件；验证接管后窗格 pid 不变、同一对话重复打开时拒绝、多窗格拒绝）、`internal/ui/matrix_adopt_panel_test.go`。
+
+## 13. 用 `M` 移动分组（我们自己加的功能）
+
+2026-10-09 新增。上游 TUI 里 `M` 只能移动会话，光标在分组行上时按 `M` 没有反应；`K`/`J` 只能和同一层的分组交换顺序。把分组挪到别的父分组下只能用命令行 `agent-deck group change`。现在光标在本地分组行上按 `M`，会打开同一个移动对话框（标题 "Move Group"），选择新的父分组，或者 `(root)` 移到最顶层，回车确认。子分组和组内会话随它一起移动，分组自己的展开/折叠状态保持不变；目标父分组如果是折叠的会被展开，让光标能停在移动后的分组上。
+
+- **引擎**：`GroupTree.MoveGroupTo`，和 `group change` 用的是同一个。
+- **候选列表**：`(root)` 排第一，其余按树的顺序排列；不包括分组自己、它的子孙，以及它当前所在的父分组。目标位置已有同名分组时不列出（`MoveGroupTo` 也会拒绝）。有分组范围（scope）时不提供 `(root)`：移到最顶层就出了范围。
+- **拒绝的情况**：默认分组（`my-sessions`）；没有可去的地方；远程分组（给出提示，让用户在远端运行 `agent-deck group change`）。
+- **重载竞态**：和改名一样登记在 `pendingGroupOps`（`groupOpMoveGroup`），保存失败后重载时补做；源分组不在了，或已经在目标下面，就不做。
+- **改动地图**：`internal/ui/matrix_group_move.go`（新文件）；`internal/ui/group_dialog.go`（`moveGroupSource`、`ShowMoveGroup`、`SelectedMoveGroupParent`、标题和 `(root)` 显示）；`internal/ui/home.go`（`groupOpMoveGroup` 常量和补做分支、`M` 的分组和远程分组分支、对话框回车的分组移动分支、分组行底栏的 `M Move` 提示）；`internal/ui/help.go`（GROUPS 里的 `M`）。
+- **测试**：`internal/ui/matrix_group_move_test.go`。
