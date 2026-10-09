@@ -250,7 +250,7 @@ for item in "${FOUND_ITEMS[@]}"; do
                   if (.value | type) == "array" then
                     .value |= (map(
                         if (.hooks | type) == "array" then
-                          .hooks |= map(select(((.command // "") | tostring | contains("agent-deck")) | not))
+                          .hooks |= map(select(((.command // "") | tostring | test("^\\s*([A-Za-z_][A-Za-z0-9_]*=\\S*\\s+)*(\\S*/)?agent-deck(\\.exe)?\\s+hook-handler(\\s|$)")) | not))
                         else . end)
                       | map(select((.hooks | type) != "array" or (.hooks | length) > 0)))
                   else . end)
