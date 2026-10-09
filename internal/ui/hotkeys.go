@@ -74,6 +74,8 @@ const (
 	// have the bare key can set [hotkeys].agents_panel = "a" and move
 	// quick_approve.
 	hotkeyAgentsPanel = "agents_panel"
+	// matrix/hardened: World Store task board (internal/ui/kanban_panel.go).
+	hotkeyTaskBoard = "task_board"
 	// Session switcher. While attached it is intercepted in the tmux attach
 	// loop (see internal/tmux/pty.go AttachOptions); on the home screen it is
 	// dispatched like any other hotkey. Must resolve to a "ctrl+<letter>" chord.
@@ -158,6 +160,7 @@ var hotkeyActionOrder = []string{
 	hotkeyWatcherPanel,
 	hotkeyDeadLetters,
 	hotkeyAgentsPanel,
+	hotkeyTaskBoard,
 	hotkeySwitchSession,
 	hotkeyAltSession,
 	hotkeyMRUBack,
@@ -214,6 +217,7 @@ var defaultHotkeyBindings = map[string]string{
 	hotkeyWatcherPanel:     "w",
 	hotkeyDeadLetters:      "alt+d",
 	hotkeyAgentsPanel:      "alt+a",
+	hotkeyTaskBoard:        "alt+t", // matrix/hardened
 	hotkeySwitchSession:    "ctrl+s",
 	hotkeyAltSession:       "`",
 	hotkeyMRUBack:          "alt+left",

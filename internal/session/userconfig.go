@@ -268,6 +268,11 @@ type UserConfig struct {
 	// OpenClaw defines OpenClaw gateway integration settings
 	OpenClaw OpenClawSettings `toml:"openclaw,omitempty"`
 
+	// matrix/hardened: World Store task board (local Unix-socket bridge; off
+	// unless [worldstore].bridge is set). Lives in the struct so SaveUserConfig
+	// keeps the section when the TUI rewrites config.toml.
+	WorldStore WorldStoreSettings `toml:"worldstore,omitempty"`
+
 	// Display defines rendering and display settings
 	Display DisplaySettings `toml:"display,omitempty"`
 

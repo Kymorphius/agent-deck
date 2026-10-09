@@ -126,3 +126,21 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 
 - **不要做**：用 Homebrew 装 agent-deck；`agent-deck update` 换成上游发布包；把令牌或 `gh` 交给它。
 
+## 8. World Store 任务看板（我们自己加的功能）
+
+2026-10-09 新增。任务只存在 World Store（personal-panel 仓库），agent-deck 不存副本，只在打开看板或按 `r` 时读取，用户逐项确认后才写入。
+
+- **连接方式**：运行 personal-panel 的 `scripts/multica-task-bridge.cjs`（`node`，stdin 一个 JSON 请求），它经 World Store 的本用户私有 Unix socket 访问原生资料。不联网、不带令牌、不后台轮询，不影响 R1–R8。World Store 没运行时看板显示不可用。
+- **配置**（默认关闭，`bridge` 为空即不启用）：
+  ```toml
+  [worldstore]
+  bridge = "/path/to/personal-panel/scripts/multica-task-bridge.cjs"
+  # node = "node"          # 默认 PATH 中的 node
+  # device_id = "..."      # 链接里本机的名字，默认主机名去掉 .local；改了会让旧链接失配
+  ```
+- **一次性初始化**：`agent-deck tasks init-links --yes`，在 World Store 的「任务」类型上建 `任务｜agent-deck 会话关联` 属性（改 World Store 结构，所以必须显式 `--yes`）。不初始化也能看板和改状态，只是不能关联会话。
+- **用法**：TUI 里 `alt+t` 打开看板（打开时光标所在的会话就是“当前会话”）：`h/l j/k` 移动，`m` 改状态（待办/进行中/暂停/已取消），`x` 完成，`L/U` 关联/解除当前会话，`n` 在当前会话的目录和分组里新建 claude 会话并把任务作为首条消息、自动关联，`Enter` 跳到已关联会话，`/` 筛选，`r` 重新读取。CLI：`agent-deck tasks [list|show|move|done|link|unlink|launch|init-links] --help`。
+- **写入安全**：每次写都带读取时的 owner 和 revision，过期返回 CONFLICT；`WRITE_UNCERTAIN`（超时、中断、回读不符）表示可能已写入，看板锁住所有写操作直到重新读取，绝不自动重试。导入对象只读；“已调整、周期进行中”等非标准状态只展示，状态改动回 World Store 做。
+- **改动地图**：`internal/worldstore/`（客户端、分栏、launch）、`internal/ui/kanban_panel.go`、`internal/ui/kanban_home.go`、`cmd/agent-deck/tasks_cmd.go`、`internal/session/userconfig_worldstore.go`（新文件）；对上游文件只加了钩子行：`internal/session/userconfig.go`（`WorldStore` 字段，必须在结构体里，否则 SaveUserConfig 重写 config.toml 时会丢掉这一节）、`internal/ui/home.go`（字段、SetSize、按键路由、View、hasModalVisible、热键分支、updateInner 开头的消息分发，共 7 处）、`internal/ui/hotkeys.go`（`task_board` = `alt+t`）、`cmd/agent-deck/main.go`（`tasks` 分发和 commandRegistry）。合并上游时这些钩子行都带 `matrix/hardened` 注释。
+- **personal-panel 侧**：`src/native-task-execution-links.cjs`、`src/multica-task-bridge.cjs` 接受 `source: "agent-deck"`，存进独立属性，与 Codex 关联互不影响；`src/native-game-snapshot.cjs` 读取该属性。说明见该仓库 `docs/multica-task-bridge.md`。
+- **测试**：`go test ./internal/worldstore/ ./internal/ui/ -run Kanban`；personal-panel 里 `npm test`。真实写入（改状态、关联、新建会话）没有在真实空间上做过自动化测试。
