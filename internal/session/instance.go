@@ -2579,6 +2579,13 @@ func (i *Instance) buildCodexCommand(baseCommand string) string {
 			command, yoloFlag, modelFlag, reasoningFlag, identityFlag, i.CodexSessionID)
 	}
 
+	// matrix/hardened: a shared thread resumes with no overrides, so it attaches
+	// alongside the Codex app instead of demanding exclusive ownership (see
+	// CodexOptions.SharedThread).
+	if i.CodexSessionID != "" && i.codexSharedThread() {
+		return envPrefix + command + " resume " + i.CodexSessionID
+	}
+
 	if i.CodexSessionID != "" {
 		return envPrefix + fmt.Sprintf("%s%s%s%s%s resume %s",
 			command, yoloFlag, modelFlag, reasoningFlag, identityFlag, i.CodexSessionID)

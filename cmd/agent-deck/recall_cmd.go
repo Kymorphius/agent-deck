@@ -1010,12 +1010,11 @@ func recallOpenPlan(env *recallEnv, sess query.SessionRow, title string) ([]stri
 // launches with the same CODEX_HOME, and session.LocateCodexResume checks the
 // rollout really is there (a miss would start a fresh thread instead).
 func recallOpenCodexPlan(sess query.SessionRow, title string) ([]string, string, error) {
+	// A thread still open in the Codex app is not refused: the session
+	// attaches to it as a shared thread (add --resume-session marks it).
 	loc, err := session.LocateCodexResume(sess.Profile, sess.NativeID)
 	if err != nil {
 		return nil, "", err
-	}
-	if age, live := loc.LiveFor(time.Now()); live {
-		return nil, "", fmt.Errorf("thread %s was written %s ago and is probably still open in another terminal; continue it there, or close it and run recall open again", sess.NativeID, age.Round(time.Second))
 	}
 	if title == "" {
 		title = sess.Title
