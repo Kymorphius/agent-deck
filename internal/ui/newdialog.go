@@ -1211,6 +1211,11 @@ func (d *NewDialog) GetValues() (name, path, command string) {
 
 	// Expand environment variables and ~ prefix
 	path = session.ExpandPath(path)
+	// matrix/hardened: Tab completion leaves a trailing "/"; drop it so the
+	// session path matches the same directory typed without one.
+	if path != "" {
+		path = filepath.Clean(path)
+	}
 
 	// Get command - either from preset or custom input
 	command = d.resolveCommand()
@@ -1361,6 +1366,7 @@ func (d *NewDialog) GetMultiRepoPaths() ([]string, bool) {
 				p = p[idx:]
 			}
 			p = session.ExpandPath(p)
+			p = filepath.Clean(p) // matrix/hardened: drop Tab completion's trailing "/"
 			paths = append(paths, p)
 		}
 	}
@@ -1988,6 +1994,15 @@ func isNewDialogTabKey(msg tea.KeyMsg) bool {
 	return msg.Type == tea.KeyTab || msg.String() == "tab"
 }
 
+// withTrailingPathSep appends a path separator unless one is already there.
+// matrix/hardened: used by unique-match Tab completion.
+func withTrailingPathSep(p string) string {
+	if strings.HasSuffix(p, string(os.PathSeparator)) {
+		return p
+	}
+	return p + string(os.PathSeparator)
+}
+
 func isNewDialogShiftTabKey(msg tea.KeyMsg) bool {
 	switch msg.String() {
 	case "shift+tab", "shift-tab", "backtab", "btab":
@@ -2248,6 +2263,17 @@ func (d *NewDialog) Update(msg tea.Msg) (*NewDialog, tea.Cmd) {
 						return d, nil
 					}
 					matches, err := session.GetDirectoryCompletions(path)
+					// matrix/hardened: a unique match descends like a shell
+					// (append "/" and list its subdirectories) instead of
+					// arming a one-entry cycler that re-offers the same
+					// directory on every Tab, which left completion stuck.
+					if err == nil && len(matches) == 1 {
+						d.pathCycler.Reset()
+						d.pathInput.SetValue(withTrailingPathSep(matches[0]))
+						d.pathInput.SetCursor(len(d.pathInput.Value()))
+						d.filterPathSuggestions()
+						return d, nil
+					}
 					if err == nil && len(matches) > 0 {
 						d.pathCycler.SetMatches(matches)
 						d.pathInput.SetValue(d.pathCycler.Next())
@@ -3771,7 +3797,8 @@ func (d *NewDialog) renderCompletionDropdown() string {
 	}
 
 	b.WriteString("\n")
-	footerText := fmt.Sprintf(" %d matches │ Tab cycle │ type to edit ", total)
+	// matrix/hardened: say how to descend into the highlighted match.
+	footerText := fmt.Sprintf(" %d matches │ Tab cycle │ / open dir ", total)
 	b.WriteString(lipgloss.NewStyle().Foreground(ColorBorder).Background(menuBg).Render(footerText))
 
 	menuStyle := lipgloss.NewStyle().
