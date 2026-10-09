@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库。**我们没有自己的远程**，仓库只在本地，提交后不推送。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.1`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.2`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -66,7 +66,7 @@
 - `internal/session/claude_hooks.go`：`isAgentDeckHookCommand` 的判断规则：先去掉开头的 `VAR=值`，再要求第二个词是 `hook-handler`、程序名的文件名部分是 `agent-deck`。`RemoveClaudeHooks` 会扫描全部事件，并做 UTC 时间戳备份（约 387–414 行）。
 - `cmd/agent-deck/main.go`（约 4845、5070 行）：`agent-deck uninstall` 会移除这些钩子。`uninstall.sh` 第 253 行附近的 jq 过滤用的是同一套规则（正则），写回时用 `cat >` 保持软链接和权限。
 
-**版本（R7）**：`cmd/agent-deck/main.go:47` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.1`。
+**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.2`。
 
 **测试**：以 `_hardened_test.go` 结尾的文件、`update_check_disable_test.go`、`update_timer_wiring_test.go` 等是新增或调整过的测试；`testdata/goldens/*` 里的快照已经按加固后的输出更新。
 
@@ -144,3 +144,7 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 - **改动地图**：`internal/worldstore/`（客户端、分栏、launch）、`internal/ui/kanban_panel.go`、`internal/ui/kanban_home.go`、`cmd/agent-deck/tasks_cmd.go`、`internal/session/userconfig_worldstore.go`（新文件）；对上游文件只加了钩子行：`internal/session/userconfig.go`（`WorldStore` 字段，必须在结构体里，否则 SaveUserConfig 重写 config.toml 时会丢掉这一节）、`internal/ui/home.go`（字段、SetSize、按键路由、View、hasModalVisible、热键分支、updateInner 开头的消息分发，共 7 处）、`internal/ui/hotkeys.go`（`task_board` = `alt+t`）、`cmd/agent-deck/main.go`（`tasks` 分发和 commandRegistry）。合并上游时这些钩子行都带 `matrix/hardened` 注释。
 - **personal-panel 侧**：`src/native-task-execution-links.cjs`、`src/multica-task-bridge.cjs` 接受 `source: "agent-deck"`，存进独立属性，与 Codex 关联互不影响；`src/native-game-snapshot.cjs` 读取该属性。说明见该仓库 `docs/multica-task-bridge.md`。
 - **测试**：`go test ./internal/worldstore/ ./internal/ui/ -run Kanban`；personal-panel 里 `npm test`。真实写入（改状态、关联、新建会话）没有在真实空间上做过自动化测试。
+
+## 9. 修过的上游 bug
+
+- **从全局搜索（`G`）接回 Claude 对话后会话立即退出**（`1.16.26+matrix.2`，2026-10-09，上游 main 当时仍未修）。`internal/ui/home.go` 的 `createSessionFromGlobalSearch` 把 `exec claude --resume <id> <权限参数>` 整条存进 `inst.Command`；启动时 `buildClaudeResumeCommand` 把不是 `claude` 的 Command 当作自定义程序，再包一层，结果是 `exec exec claude --resume <id> … --resume <id> …`，不到 1 秒就退出（`spawn_died_fast`）。修法：和 CLI 的 `add --resume-session` 一样，只设置 `ClaudeSessionID`，Command 保持 `claude`，resume、`CLAUDE_CONFIG_DIR` 和权限参数都交给启动路径拼。测试：`internal/session/matrix_global_search_resume_test.go`、`internal/ui/matrix_global_search_resume_test.go`。修复前已经接回、命令被写坏的会话，用 `agent-deck session set <会话> command claude` 修正。
