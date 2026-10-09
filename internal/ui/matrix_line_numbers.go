@@ -76,7 +76,7 @@ func (h *Home) matrixJumpToLine(n int) bool {
 	nums, _ := h.matrixRowNumbers()
 	for i, num := range nums {
 		if num == n {
-			h.jumpToIndex(i)
+			h.matrixJump(func() { h.jumpToIndex(i) })
 			return true
 		}
 	}

@@ -887,6 +887,11 @@ type sshAttachInput struct {
 }
 
 func (input *sshAttachInput) forward(data []byte) (bool, error) {
+	// matrix/hardened: Alt+Q also detaches (tmux/matrix_alt_detach.go).
+	if tmux.MatrixIsAltQDetach(data) {
+		input.detachRequested.Store(true)
+		return true, nil
+	}
 	if idx := tmux.IndexCtrlQ(data); idx >= 0 {
 		// Record intent before forwarding can block or SSH can exit.
 		input.detachRequested.Store(true)

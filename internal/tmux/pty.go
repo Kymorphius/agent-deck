@@ -229,6 +229,10 @@ func scrollbackPageUpAllowed(opts AttachOptions) bool {
 // Extracted from the stdin goroutine so the precedence is unit-testable without
 // spawning a PTY.
 func resolveAttachInterrupt(chunk []byte, detach byte, opts AttachOptions) (int, SwitchIntent) {
+	// matrix/hardened: Alt+Q also detaches (matrix_alt_detach.go).
+	if MatrixIsAltQDetach(chunk) {
+		return 0, SwitchNone
+	}
 	detachIdx := IndexDetachKey(chunk, detach)
 	switchIdx, switchIn := indexSwitchKey(chunk, opts)
 	scrollIdx := indexScrollbackTrigger(chunk, opts)
