@@ -10402,18 +10402,23 @@ func (h *Home) jumpToSession(inst *session.Instance) {
 // createSessionFromGlobalSearch creates a new Agent Deck session from global search result
 func (h *Home) createSessionFromGlobalSearch(result *GlobalSearchResult) tea.Cmd {
 	return func() tea.Msg {
-		// Derive title from CWD or session ID
-		title := "Claude Session"
-		projectPath := result.CWD
-		if result.CWD != "" {
-			parts := strings.Split(result.CWD, "/")
-			if len(parts) > 0 {
-				title = parts[len(parts)-1]
-			}
+		// matrix/hardened: resume from the directory the conversation was
+		// started in, found from its transcript. The hit's cwd is the LAST cwd
+		// the conversation recorded, and resuming there started a new, empty
+		// conversation under the picked id (see session.LocateClaudeResumeDir).
+		// A conversation that cannot be located, or that is still being
+		// written by another Claude process, is refused instead.
+		groupPath := h.resolveNewSessionGroup()
+		userConfig, _ := session.LoadUserConfig()
+		loc, err := session.LocateClaudeResumeDir(userConfig, result.SessionID, session.GetClaudeConfigDirForGroup(groupPath))
+		if err != nil {
+			return sessionCreatedMsg{err: err}
 		}
-		if projectPath == "" {
-			projectPath = "."
+		if age, live := loc.LiveFor(time.Now()); live {
+			return sessionCreatedMsg{err: fmt.Errorf("conversation %s was written %s ago and is probably still open in another terminal; continue it there, or close it and pick it again", result.SessionID, age.Round(time.Second))}
 		}
+		projectPath := loc.Dir
+		title := filepath.Base(projectPath)
 		// #1706: "." (and any relative CWD a search result carries) must not be
 		// persisted as project_path — tmux resolves it against the tmux server's
 		// cwd, and the Claude project slug derived from it would point elsewhere
@@ -10426,7 +10431,7 @@ func (h *Home) createSessionFromGlobalSearch(result *GlobalSearchResult) tea.Cmd
 		// cursor-group (Window / RemoteGroup / placeholder flatItems) so
 		// the empty string never reaches NewInstanceWithGroupAndTool, which
 		// would otherwise override the extractGroupPath default with "".
-		inst := session.NewInstanceWithGroupAndTool(title, projectPath, h.resolveNewSessionGroup(), "claude")
+		inst := session.NewInstanceWithGroupAndTool(title, projectPath, groupPath, "claude")
 		inst.ClaudeSessionID = result.SessionID
 		// #1815: the user picked this exact conversation for this brand-new
 		// instance — an explicit ownership declaration, not a disk-scan
@@ -10435,7 +10440,6 @@ func (h *Home) createSessionFromGlobalSearch(result *GlobalSearchResult) tea.Cmd
 		// instance's taint map being empty by construction.
 		session.MarkClaudeSessionIDVerified(inst)
 
-		userConfig, _ := session.LoadUserConfig()
 		opts := session.NewClaudeOptions(userConfig)
 
 		// #1815: the TUI picker routes through the same resume-time identity

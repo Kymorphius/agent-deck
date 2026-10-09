@@ -22,3 +22,28 @@ func TestMatrixGlobalSearchImport_DoesNotBakeResumeCommand(t *testing.T) {
 		}
 	}
 }
+
+// matrix/hardened: the G import resumes from the transcript's launch dir via
+// session.LocateClaudeResumeDir, never from result.CWD (the conversation's
+// last cwd), so a picked conversation is not restarted empty elsewhere.
+func TestMatrixGlobalSearchImport_ResumesFromLaunchDir(t *testing.T) {
+	src, err := os.ReadFile("home.go")
+	if err != nil {
+		t.Fatalf("read home.go: %v", err)
+	}
+	body := string(src)
+	start := strings.Index(body, "func (h *Home) createSessionFromGlobalSearch(")
+	if start < 0 {
+		t.Fatal("createSessionFromGlobalSearch not found")
+	}
+	fn := body[start:]
+	if end := strings.Index(fn, "\n}\n"); end > 0 {
+		fn = fn[:end]
+	}
+	if !strings.Contains(fn, "session.LocateClaudeResumeDir(") || !strings.Contains(fn, "LiveFor(") {
+		t.Error("createSessionFromGlobalSearch no longer locates the launch dir / checks for a live conversation")
+	}
+	if strings.Contains(fn, "result.CWD") {
+		t.Error("createSessionFromGlobalSearch uses result.CWD (the last cwd) again")
+	}
+}
