@@ -26,6 +26,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/asheshgoplani/agent-deck/internal/tmux"
 )
 
 // AdoptDefaultSocket names the user's default tmux server (`tmux -L default`
@@ -278,11 +280,16 @@ func adoptProcessParents() (map[int]int, error) {
 }
 
 // adoptTmux runs tmux against one server.
+//
+// matrix/hardened: through tmux.ExecContext, the sanctioned factory, not a raw
+// exec of "tmux": it adds -u, so non-ASCII session names are not printed as
+// "_" when the locale is not UTF-8 (SSH, launchd), sets WaitDelay, and under
+// `go test` refuses to touch the user's real default server. The socket is
+// still explicit (-L <socket>, "default" for the user's own server).
 func adoptTmux(socket string, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), adoptTmuxTimeout)
 	defer cancel()
-	full := append([]string{"-L", NormalizeAdoptSocket(socket)}, args...)
-	cmd := exec.CommandContext(ctx, "tmux", full...)
+	cmd := tmux.ExecContext(ctx, NormalizeAdoptSocket(socket), args...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()

@@ -182,6 +182,7 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 - **怎么接**：登记一个 claude 会话（绑定对话 ID、`TmuxSocketName` 指向原服务器），再把 tmux 会话改名成新记录要的名字；进程不动。先改名、后保存，保存失败就改回原名。和 `add` 一样持有注册锁。
 - **拒绝的情况**：已被 agent-deck 管（同名同服务器的 tmux 会话，或同一对话 ID 已登记）；tmux 会话里不止这一个窗格（agent-deck 管整个 tmux 会话）；同一对话还有别的活着的 Claude 进程（两个进程写一段对话会写乱）；目录不存在；目标名字在该服务器上已被占用。
 - **注意**：接管后在 agent-deck 里删除这个会话会连同 tmux 会话和 Claude 进程一起杀掉；原来的 tmux 会话名没了（`tmux new -A -s 原名` 会新建一个空的）。tmux 列表输出的分隔符必须是可打印字符：没有已连接客户端时（所有经 SSH 的命令）tmux 会把控制字符改成 `_`。
+- **tmux 调用**：所有 tmux 命令经 `tmux.ExecContext`（`adoptTmux`），显式 `-L <socket>`（用户自己的服务器是 `default`）。最初版本直接执行 `tmux`，`TestNoRawTmuxExec_OutsideAllowlist` 报错；改用工厂后多了 `-u`（非 UTF-8 环境下中文等非 ASCII 会话名不会被印成 `_`，否则按名字匹配会失败）和测试时不碰真实默认服务器的保护。
 - **改动地图**：`internal/session/matrix_adopt.go`、`cmd/agent-deck/matrix_adopt_cmd.go`、`internal/ui/matrix_adopt_panel.go`、`internal/ui/matrix_adopt_home.go`（新文件）；`cmd/agent-deck/session_cmd.go`（`adopt` 分发和帮助）、`cmd/agent-deck/remote_exec.go`（允许转发 `session adopt`）、`internal/ui/hotkeys.go`（`adopt_panel` = `alt+u`）、`internal/ui/help.go`、`internal/ui/home.go`（字段、消息分发、SetSize、按键路由、hasModalVisible、热键分支、View，共 7 处）。
 - **测试**：`cmd/agent-deck/matrix_adopt_cmd_test.go`（真 tmux、隔离 socket、`sleep` 代替 Claude、手写状态文件；验证接管后窗格 pid 不变、同一对话重复打开时拒绝、多窗格拒绝）、`internal/ui/matrix_adopt_panel_test.go`。
 
