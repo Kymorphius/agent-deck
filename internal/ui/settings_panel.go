@@ -468,6 +468,11 @@ func (s *SettingsPanel) GetConfig() *session.UserConfig {
 	config.Updates.AutoInstall = &autoInstall
 	autoRestart := s.autoRestart
 	config.Updates.AutoRestart = &autoRestart
+	// matrix/hardened: turning either on in this build's panel is the
+	// explicit consent GetCheckEnabled/GetAutoInstall require.
+	if checkForUpdates || autoInstall {
+		config.Updates.MatrixOptIn = true
+	}
 
 	// Log settings
 	config.Logs.MaxSizeMB = s.logMaxSizeMB

@@ -35,7 +35,7 @@ func stubUpdateSettings(t *testing.T, s session.UpdateSettings) {
 // matrix/hardened: both default to false now, so tests of the (opt-in)
 // automatic check/install behaviour must turn them on explicitly.
 func optedInUpdateSettings() session.UpdateSettings {
-	return session.UpdateSettings{CheckEnabled: boolPtr(true), AutoInstall: boolPtr(true)}
+	return session.UpdateSettings{CheckEnabled: boolPtr(true), AutoInstall: boolPtr(true), MatrixOptIn: true}
 }
 
 // newAutoInstallTestHome is a clean home with an installable update, the

@@ -22,7 +22,7 @@ func TestHeadlessAutoInstall_Gates(t *testing.T) {
 	on := true
 	prevSettings := headlessUpdateSettings
 	headlessUpdateSettings = func() session.UpdateSettings {
-		return session.UpdateSettings{CheckEnabled: &on, AutoInstall: &on}
+		return session.UpdateSettings{CheckEnabled: &on, AutoInstall: &on, MatrixOptIn: true}
 	}
 	t.Cleanup(func() { headlessUpdateSettings = prevSettings })
 

@@ -1522,6 +1522,16 @@ type UpdateSettings struct {
 	// unless explicitly enabled.
 	CheckEnabled *bool `toml:"check_enabled,omitempty"`
 
+	// MatrixOptIn is the hardened build's own consent marker for update
+	// checks and unattended installs. matrix/hardened: the stock binary
+	// writes check_enabled = true / auto_install = true into config.toml
+	// (template and every settings-panel save), so a config inherited from
+	// a stock install cannot be read as consent. check_enabled and
+	// auto_install only take effect when this is also true; the hardened
+	// settings panel and `config set` write it when the user turns either
+	// on. Default false.
+	MatrixOptIn bool `toml:"matrix_opt_in,omitempty"`
+
 	// CheckIntervalHours is how often the startup remote sweep (see
 	// AutoUpdateRemotes/ShouldAutoUpdateRemotes) throttles itself, in hours.
 	// Default: 24. This is unrelated to CheckInterval below, which governs
@@ -1598,8 +1608,9 @@ func (u UpdateSettings) GetManageTimer() bool {
 
 // GetCheckEnabled returns whether update checks are enabled (default: false).
 func (u UpdateSettings) GetCheckEnabled() bool {
-	if u.CheckEnabled == nil {
-		// matrix/hardened: no update polling unless explicitly enabled.
+	if u.CheckEnabled == nil || !u.MatrixOptIn {
+		// matrix/hardened: no update polling unless explicitly enabled in
+		// this build (a stock-written check_enabled = true is not consent).
 		return false
 	}
 	return *u.CheckEnabled
@@ -1619,8 +1630,9 @@ func (u UpdateSettings) GetAutoUpdateRemotes() bool {
 // GetAutoInstall reports whether available updates are installed unattended
 // (default: false).
 func (u UpdateSettings) GetAutoInstall() bool {
-	if u.AutoInstall == nil {
-		// matrix/hardened: no unattended installs unless explicitly enabled.
+	if u.AutoInstall == nil || !u.MatrixOptIn {
+		// matrix/hardened: no unattended installs unless explicitly enabled
+		// in this build (a stock-written auto_install = true is not consent).
 		return false
 	}
 	return *u.AutoInstall

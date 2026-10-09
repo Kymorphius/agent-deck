@@ -227,16 +227,22 @@ echo ""
 
 # 0. matrix/hardened: remove agent-deck's Claude hook entries first, while
 # the binary still exists. Only hook commands containing "agent-deck" are
-# dropped; every other hook is kept. A timestamped (UTC) backup is made.
+# dropped; every other hook is kept. The timestamped (UTC) backup is always
+# made here in the shell, before either remover runs, because the
+# `agent-deck` first on PATH may be a stock upstream binary whose remover
+# makes no backup and only scans the current hook events.
 for item in "${FOUND_ITEMS[@]}"; do
     [[ "$item" == "claude-hooks" ]] || continue
     echo -e "Removing agent-deck Claude hooks..."
-    if command -v agent-deck &>/dev/null && agent-deck hooks uninstall; then
-        # The Go remover writes settings.json.bak-agentdeck-uninstall-<UTC>.
-        echo -e "${GREEN}✓${NC} agent-deck hooks removed from $CLAUDE_SETTINGS"
-    elif command -v jq &>/dev/null; then
-        backup="$CLAUDE_SETTINGS.bak-agentdeck-uninstall-$(date -u +%Y%m%dT%H%M%SZ)"
-        cp -p "$CLAUDE_SETTINGS" "$backup"
+    backup="$CLAUDE_SETTINGS.bak-agentdeck-uninstall-$(date -u +%Y%m%dT%H%M%SZ)"
+    if ! cp -p "$CLAUDE_SETTINGS" "$backup"; then
+        echo -e "${YELLOW}Warning: could not back up $CLAUDE_SETTINGS; leaving it unchanged${NC}"
+        continue
+    fi
+    chmod 600 "$backup" 2>/dev/null || true
+    if command -v jq &>/dev/null; then
+        # Preferred: exact rule (drop hook commands containing "agent-deck",
+        # across every hook event), independent of which binary is on PATH.
         tmp="$(mktemp "${CLAUDE_SETTINGS}.XXXXXX")"
         if jq '
             if (.hooks | type) == "object" then
@@ -257,8 +263,15 @@ for item in "${FOUND_ITEMS[@]}"; do
             rm -f "$tmp"
             echo -e "${YELLOW}Warning: failed to edit $CLAUDE_SETTINGS; unchanged (backup: $backup)${NC}"
         fi
+    elif command -v agent-deck &>/dev/null && agent-deck --version 2>/dev/null | grep -q '+matrix' \
+            && agent-deck hooks uninstall; then
+        # Hardened binary: scans legacy hook events too.
+        echo -e "${GREEN}✓${NC} agent-deck hooks removed from $CLAUDE_SETTINGS (backup: $backup)"
+    elif command -v agent-deck &>/dev/null && agent-deck hooks uninstall; then
+        # Stock binary: only removes the current hook events.
+        echo -e "${YELLOW}Warning: removed with a stock agent-deck; hooks under older event names may remain in $CLAUDE_SETTINGS (backup: $backup). Install jq and re-run to finish.${NC}"
     else
-        echo -e "${YELLOW}Warning: neither agent-deck nor jq available; remove agent-deck hooks from $CLAUDE_SETTINGS by hand${NC}"
+        echo -e "${YELLOW}Warning: neither jq nor agent-deck available; remove agent-deck hooks from $CLAUDE_SETTINGS by hand (backup: $backup)${NC}"
     fi
 done
 

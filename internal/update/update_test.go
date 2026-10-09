@@ -508,6 +508,10 @@ func selfUpdateTestTarget(t *testing.T, initial []byte) string {
 	t.Helper()
 
 	isolateUpdatePaths(t)
+	// matrix/hardened: these tests exercise the installer itself, so lift
+	// the hardened self-replace guard (TestPerformUpdate_HardenedRefuses
+	// covers the guard).
+	t.Setenv(AllowStockReplaceEnv, "1")
 	execPath := filepath.Join(t.TempDir(), "agent-deck")
 	require.NoError(t, os.WriteFile(execPath, initial, 0o755))
 
@@ -610,4 +614,20 @@ func TestGitHubAPIGet_NeverSendsAuthorization(t *testing.T) {
 	assert.False(t, authed)
 	require.Len(t, gotAuth, 1)
 	assert.Equal(t, "", gotAuth[0])
+}
+
+// matrix/hardened: both self-update entry points refuse to replace the
+// hardened binary with a stock release unless explicitly forced, and do so
+// before touching the network or the installed binary.
+func TestPerformUpdate_HardenedRefuses(t *testing.T) {
+	t.Setenv(AllowStockReplaceEnv, "")
+	require.ErrorIs(t, PerformUpdate("http://127.0.0.1:1/never-fetched.tar.gz"), ErrHardenedSelfReplace)
+	require.ErrorIs(t, PerformVerifiedUpdate(&Release{TagName: "v1.16.26"}, "linux", "amd64"), ErrHardenedSelfReplace)
+}
+
+// matrix/hardened: the "+matrix.N" suffix is build metadata, so the stock
+// release with the same core is not ranked newer than this build.
+func TestCompareVersions_HardenedBuildMetadata(t *testing.T) {
+	require.Equal(t, 0, CompareVersions("1.16.26+matrix.1", "v1.16.26"))
+	require.Equal(t, 1, CompareVersions("1.16.26+matrix.1", "v1.16.26-rc.1"))
 }

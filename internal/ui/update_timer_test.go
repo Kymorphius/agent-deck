@@ -151,3 +151,12 @@ func TestFetchOneRemote_TimerReadHasItsOwnBound(t *testing.T) {
 		})
 	}
 }
+
+// matrix/hardened: a TUI-confirmed remote update must never run
+// `update --ensure-timer` on the remote (the deployed stock binary would
+// install its auto-update timer there).
+func TestDeployRemoteUpdate_NeverEnsuresRemoteTimer(t *testing.T) {
+	if remoteUpdateEnsuresTimer {
+		t.Fatal("matrix/hardened: deployRemoteUpdate must not ensure the remote update timer")
+	}
+}

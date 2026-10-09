@@ -59,13 +59,25 @@ var configKeys = []ConfigKey{
 		set: func(c *UserConfig, v any) { c.Hermes.YoloMode = v.(bool) }},
 	{Key: "updates.check_enabled", Section: "Updates", Label: "Check for updates on startup", Help: "Check for a newer agent-deck on startup", Type: "bool",
 		get: func(c *UserConfig) any { return c.Updates.GetCheckEnabled() },
-		set: func(c *UserConfig, v any) { c.Updates.CheckEnabled = boolRef(v.(bool)) }},
+		set: func(c *UserConfig, v any) {
+			c.Updates.CheckEnabled = boolRef(v.(bool))
+			// matrix/hardened: an explicit `config set ... true` is consent in this build.
+			if v.(bool) {
+				c.Updates.MatrixOptIn = true
+			}
+		}},
 	{Key: "updates.auto_update", Section: "Updates", Label: "Offer to install on startup", Help: "Offer to install an available update on startup", Type: "bool",
 		get: func(c *UserConfig) any { return c.Updates.AutoUpdate },
 		set: func(c *UserConfig, v any) { c.Updates.AutoUpdate = v.(bool) }},
 	{Key: "updates.auto_install", Section: "Updates", Label: "Install updates automatically", Help: "Install updates without asking", Type: "bool",
 		get: func(c *UserConfig) any { return c.Updates.GetAutoInstall() },
-		set: func(c *UserConfig, v any) { c.Updates.AutoInstall = boolRef(v.(bool)) }},
+		set: func(c *UserConfig, v any) {
+			c.Updates.AutoInstall = boolRef(v.(bool))
+			// matrix/hardened: an explicit `config set ... true` is consent in this build.
+			if v.(bool) {
+				c.Updates.MatrixOptIn = true
+			}
+		}},
 	{Key: "updates.auto_restart", Section: "Updates", Label: "Restart automatically after update", Help: "Restart agent-deck after an update is installed", Type: "bool",
 		get: func(c *UserConfig) any { return c.Updates.GetAutoRestart() },
 		set: func(c *UserConfig, v any) { c.Updates.AutoRestart = boolRef(v.(bool)) }},

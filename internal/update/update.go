@@ -718,8 +718,29 @@ func CheckForUpdateAsync(currentVersion string) <-chan *UpdateInfo {
 	return ch
 }
 
+// matrix/hardened: there are no hardened releases on GitHub, so every
+// self-update would replace this build with stock upstream (token-bearing
+// polling, auto-update timer, telemetry, dangerous_mode on). Self-replace is
+// refused unless the user sets this variable to 1 for that one command.
+const AllowStockReplaceEnv = "AGENTDECK_MATRIX_ALLOW_STOCK_UPDATE"
+
+// ErrHardenedSelfReplace is returned by PerformUpdate/PerformVerifiedUpdate in
+// the hardened build unless AllowStockReplaceEnv=1.
+var ErrHardenedSelfReplace = errors.New("matrix/hardened build: refusing to replace this binary with a stock upstream release (rebuild from the matrix/hardened branch instead, or set " + AllowStockReplaceEnv + "=1 to force)")
+
+// guardHardenedSelfReplace is checked before anything is downloaded.
+func guardHardenedSelfReplace() error {
+	if os.Getenv(AllowStockReplaceEnv) == "1" {
+		return nil
+	}
+	return ErrHardenedSelfReplace
+}
+
 // PerformUpdate downloads and installs the latest version
 func PerformUpdate(downloadURL string) error {
+	if err := guardHardenedSelfReplace(); err != nil {
+		return err
+	}
 	if downloadURL == "" {
 		return fmt.Errorf("no download URL available for %s/%s", runtime.GOOS, runtime.GOARCH)
 	}
@@ -776,6 +797,9 @@ func PerformUpdate(downloadURL string) error {
 // missing-entry, or hash mismatch errors occur before the installed binary is
 // touched.
 func PerformVerifiedUpdate(release *Release, goos, goarch string) error {
+	if err := guardHardenedSelfReplace(); err != nil { // matrix/hardened
+		return err
+	}
 	execPath, upgradeCmd, managed, err := detectHomebrewManagedInstall()
 	if err != nil {
 		return fmt.Errorf("failed to detect install type: %w", err)

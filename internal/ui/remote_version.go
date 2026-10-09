@@ -126,13 +126,22 @@ type remoteUpdatedMsg struct {
 	err        error
 }
 
+// remoteUpdateEnsuresTimer is false in the hardened build (see
+// deployRemoteUpdate). matrix/hardened.
+const remoteUpdateEnsuresTimer = false
+
 // deployRemoteUpdate performs the verified binary deploy for one remote. A
 // package variable so tests substitute a stub and count calls instead of
 // opening SSH; production uses the same path as `remote update <name>`.
 var deployRemoteUpdate = func(ctx context.Context, name string, rc session.RemoteConfig, target string) (string, error) {
 	runner := session.NewSSHRunner(name, rc)
 	deployed, err := session.DeployRemoteBinary(ctx, runner, target, session.RemoteUpdateOptions{})
-	if err == nil {
+	// matrix/hardened: never ask the remote to ensure/install its
+	// auto-update timer. The binary just deployed is a stock upstream
+	// release whose manage_timer defaults to true, so `update --ensure-timer`
+	// would install com.agentdeck.autoupdate there. Matches `remote update`
+	// (remote_cmd.go EnsureTimer: false).
+	if err == nil && remoteUpdateEnsuresTimer {
 		// Same as `remote update <name>`: the updated remote installs (or
 		// migrates) its own update timer; best-effort, logged (#2472).
 		if inst, terr := runner.InstallUpdateTimer(ctx, true); terr != nil {

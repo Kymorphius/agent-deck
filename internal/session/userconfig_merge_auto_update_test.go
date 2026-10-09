@@ -44,6 +44,7 @@ func TestMergePanelConfigOntoDisk_PropagatesAutoInstallAndRestart(t *testing.T) 
 	panel3 := &UserConfig{}
 	panel3.Updates.AutoInstall = &on
 	panel3.Updates.AutoRestart = &on
+	panel3.Updates.MatrixOptIn = true // matrix/hardened: what the panel writes when turning auto_install on
 	merged3, err := MergePanelConfigOntoDisk(panel3)
 	if err != nil {
 		t.Fatalf("MergePanelConfigOntoDisk returned error: %v", err)

@@ -68,6 +68,11 @@ func MergePanelConfigOntoDisk(panel *UserConfig) (*UserConfig, error) {
 	if panel.Updates.AutoRestart != nil {
 		merged.Updates.AutoRestart = panel.Updates.AutoRestart
 	}
+	// matrix/hardened: carry the hardened update opt-in the panel sets when
+	// the user turns check_enabled / auto_install on (never cleared here).
+	if panel.Updates.MatrixOptIn {
+		merged.Updates.MatrixOptIn = true
+	}
 
 	// ── Logs (panel manages 3 fields; other Logs.* preserved) ──────────
 	merged.Logs.MaxSizeMB = panel.Logs.MaxSizeMB

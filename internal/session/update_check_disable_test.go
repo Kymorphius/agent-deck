@@ -45,3 +45,18 @@ func TestUpdateCheckEnabled_FixtureConfigDisablesStartupCheck(t *testing.T) {
 		t.Fatal("matrix/hardened: update check must default off")
 	}
 }
+
+// matrix/hardened: check_enabled / auto_install written by a stock install
+// (template or settings-panel save) are not consent; they only count with
+// [updates] matrix_opt_in = true, which this build's panel / `config set` write.
+func TestUpdateSettings_StockWrittenValuesNeedMatrixOptIn(t *testing.T) {
+	on := true
+	stock := UpdateSettings{CheckEnabled: &on, AutoInstall: &on}
+	if stock.GetCheckEnabled() || stock.GetAutoInstall() {
+		t.Fatal("stock-written check_enabled/auto_install must be ignored without matrix_opt_in")
+	}
+	stock.MatrixOptIn = true
+	if !stock.GetCheckEnabled() || !stock.GetAutoInstall() {
+		t.Fatal("explicit opt-in in this build must enable check_enabled/auto_install")
+	}
+}
