@@ -32,6 +32,8 @@ func remoteCommandArgs(args []string) ([]string, error) {
 				switch args[1] {
 				case "show", "output", "send", "start", "stop", "restart", "fork", "archive", "unarchive", "set", "context", "metrics", "viewers", "annotate":
 					return append([]string(nil), args...), nil
+				case "adopt": // matrix/hardened: acts on the remote's own tmux servers
+					return append([]string(nil), args...), nil
 				case "switch", "switch-preview", "switch-account":
 					if err := validateRemoteSwitchArgs(args[1], args[2:]); err != nil {
 						return nil, err

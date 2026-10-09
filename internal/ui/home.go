@@ -314,6 +314,7 @@ type Home struct {
 	watcherPanel         *WatcherPanel         // For showing watcher status and events
 	agentsPanel          *AgentsPanel          // Agents tab: adopted agents, grouped by machine
 	kanbanPanel          *KanbanPanel          // matrix/hardened: World Store task board (alt+t)
+	adoptPanel           *AdoptPanel           // matrix/hardened: adopt a running Claude from tmux (alt+u)
 	deadLetterPanel      *DeadLetterPanel      // Inspect, retry, and explicitly purge delivery failures
 	// agentsView is the last built fleet view; agentBySession indexes its
 	// rows by adopted session id so the session list can mark agent-owned
@@ -7416,6 +7417,9 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if cmd, ok := h.handleKanbanMsg(msg); ok {
 		return h, cmd
 	}
+	if cmd, ok := h.handleAdoptMsg(msg); ok { // matrix/hardened: alt+u (matrix_adopt_home.go)
+		return h, cmd
+	}
 
 	switch msg := msg.(type) {
 	case quitMsg:
@@ -7444,6 +7448,7 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		h.watcherPanel.SetSize(msg.Width, msg.Height)
 		h.agentsPanel.SetSize(msg.Width, msg.Height)
 		h.kanbanPanel.SetSize(msg.Width, msg.Height) // matrix/hardened
+		h.adoptPanel.SetSize(msg.Width, msg.Height)  // matrix/hardened
 		if h.deadLetterPanel != nil {
 			h.deadLetterPanel.SetSize(msg.Width, msg.Height)
 		}
@@ -10076,6 +10081,11 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			h.kanbanPanel, cmd = h.kanbanPanel.Update(msg)
 			return h, cmd
 		}
+		if h.adoptPanel.IsVisible() { // matrix/hardened
+			var cmd tea.Cmd
+			h.adoptPanel, cmd = h.adoptPanel.Update(msg)
+			return h, cmd
+		}
 		if h.watcherPanel.IsVisible() {
 			var cmd tea.Cmd
 			h.watcherPanel, cmd = h.watcherPanel.Update(msg)
@@ -11106,6 +11116,7 @@ func (h *Home) hasModalVisible() bool {
 		h.watcherPanel.IsVisible() || // hotkeyWatcherPanel overlay
 		h.agentsPanel.IsVisible() || // hotkeyAgentsPanel overlay
 		h.kanbanPanel.IsVisible() || // matrix/hardened: hotkeyTaskBoard overlay
+		h.adoptPanel.IsVisible() || // matrix/hardened: hotkeyAdoptPanel overlay
 		(h.deadLetterPanel != nil && h.deadLetterPanel.IsVisible()) || // hotkeyDeadLetters overlay
 		h.helpOverlay.IsVisible() || h.search.IsVisible() || h.globalSearch.IsVisible() ||
 		h.newDialog.IsVisible() || h.groupDialog.IsVisible() || h.forkDialog.IsVisible() ||
@@ -12324,6 +12335,9 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case defaultHotkeyBindings[hotkeyTaskBoard]: // matrix/hardened: World Store task board
 		return h, h.openKanbanPanel()
+
+	case defaultHotkeyBindings[hotkeyAdoptPanel]: // matrix/hardened: adopt a running Claude from tmux
+		return h, h.openAdoptPanel()
 
 	case "E":
 		// Exec an interactive shell inside the sandbox container.
@@ -18871,6 +18885,9 @@ func (h *Home) renderFrame() string {
 	}
 	if h.kanbanPanel.IsVisible() { // matrix/hardened
 		return h.kanbanPanel.View()
+	}
+	if h.adoptPanel.IsVisible() { // matrix/hardened
+		return h.adoptPanel.View()
 	}
 	if h.watcherPanel.IsVisible() {
 		return h.watcherPanel.View()

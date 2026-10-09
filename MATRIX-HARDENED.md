@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.3`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.4`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -66,7 +66,7 @@
 - `internal/session/claude_hooks.go`：`isAgentDeckHookCommand` 的判断规则：先去掉开头的 `VAR=值`，再要求第二个词是 `hook-handler`、程序名的文件名部分是 `agent-deck`。`RemoveClaudeHooks` 会扫描全部事件，并做 UTC 时间戳备份（约 387–414 行）。
 - `cmd/agent-deck/main.go`（约 4845、5070 行）：`agent-deck uninstall` 会移除这些钩子。`uninstall.sh` 第 253 行附近的 jq 过滤用的是同一套规则（正则），写回时用 `cat >` 保持软链接和权限。
 
-**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.3`。
+**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.4`。
 
 **测试**：以 `_hardened_test.go` 结尾的文件、`update_check_disable_test.go`、`update_timer_wiring_test.go` 等是新增或调整过的测试；`testdata/goldens/*` 里的快照已经按加固后的输出更新。
 
@@ -149,3 +149,14 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 
 - **从全局搜索（`G`）接回 Claude 对话后会话立即退出**（`1.16.26+matrix.2`，2026-10-09，上游 main 当时仍未修）。`internal/ui/home.go` 的 `createSessionFromGlobalSearch` 把 `exec claude --resume <id> <权限参数>` 整条存进 `inst.Command`；启动时 `buildClaudeResumeCommand` 把不是 `claude` 的 Command 当作自定义程序，再包一层，结果是 `exec exec claude --resume <id> … --resume <id> …`，不到 1 秒就退出（`spawn_died_fast`）。修法：和 CLI 的 `add --resume-session` 一样，只设置 `ClaudeSessionID`，Command 保持 `claude`，resume、`CLAUDE_CONFIG_DIR` 和权限参数都交给启动路径拼。测试：`internal/session/matrix_global_search_resume_test.go`、`internal/ui/matrix_global_search_resume_test.go`。修复前已经接回、命令被写坏的会话，用 `agent-deck session set <会话> command claude` 修正。
 - **从搜索接回 Claude 对话时在错误目录新开了一段空对话**（`1.16.26+matrix.3`，2026-10-09）。全局搜索（`G`）和 `recall open` 用 recall 索引里的 `cwd` 作为恢复目录，而这个 `cwd` 是对话**最后**所在的目录（Claude 会跟随 Bash 工具里的 `cd`；`internal/recall/ingest/ingest.go` 的 `Session` 后写覆盖前写）。`claude --resume <id>` 只能在对话**启动**目录下找到它（`<config>/projects/` 下的项目目录按启动目录命名），找不到时启动路径退回 `--session-id <id>`，结果是在无关目录用同一个 ID 开了一段空对话，还在那个目录的项目目录里留下同 ID 的小文件。修法：新增 `internal/session/matrix_resume_dir.go` 的 `LocateClaudeResumeDir`，在所有已知 Claude 配置目录里找 `<id>.jsonl`，取最大的那份，返回其中编码后等于所在项目目录名的那个 `cwd`（不一定是第一个：从别的目录续上的对话保留着旧目录的记录），找不到这样的 `cwd` 的副本不能恢复，跳过；找不到或启动目录已不存在就报错，不再猜目录。`G`（`createSessionFromGlobalSearch`）和 `recall open`（`recallOpenPlan`）都改用它；对话文件 2 分钟内被写过（`ClaudeConversationLiveWindow`，多半还开在别的终端里）时拒绝接回，避免两个 Claude 进程写同一段对话。测试：`internal/session/matrix_resume_dir_test.go`、`internal/ui/matrix_global_search_resume_test.go`、`cmd/agent-deck/recall_cmd_test.go` 的 `TestRecall_OpenPlansResumeOrStart`（夹具改成真实的项目目录命名和结束于子目录的对话）。修复前误开的会话和留下的小文件要手动清理：`find ~/.claude/projects -name '<id>.jsonl'`，只保留在启动目录对应项目目录里的那份，然后 `agent-deck recall rebuild`。
+
+## 12. 接管已在运行的 Claude（我们自己加的功能）
+
+2026-10-09 新增。用户自己在 tmux 里开的 Claude（不是 agent-deck 建的会话）可以不中断地交给 agent-deck 管：`agent-deck session adopt <tmux会话>`，`--list` 列出候选；远程用 `agent-deck remote <名> session adopt …`；TUI 里 `alt+u` 打开列表（光标在远程分组或会话上时列远程的），回车后按 `y` 确认才接管。
+
+- **怎么找**：Claude Code 每个进程在 `<配置目录>/sessions/<pid>.json` 写一个状态文件（`sessionId`、`cwd`、`kind`、`status`）。扫描默认 tmux 服务器和 `[tmux].socket_name` 的服务器（`--socket` 可指定），用 `ps` 的父子关系把 Claude 进程对到窗格。登记的目录用 `LocateClaudeResumeDir` 找到的恢复目录，找不到才用状态文件里的 `cwd`。
+- **怎么接**：登记一个 claude 会话（绑定对话 ID、`TmuxSocketName` 指向原服务器），再把 tmux 会话改名成新记录要的名字；进程不动。先改名、后保存，保存失败就改回原名。和 `add` 一样持有注册锁。
+- **拒绝的情况**：已被 agent-deck 管（同名同服务器的 tmux 会话，或同一对话 ID 已登记）；tmux 会话里不止这一个窗格（agent-deck 管整个 tmux 会话）；同一对话还有别的活着的 Claude 进程（两个进程写一段对话会写乱）；目录不存在；目标名字在该服务器上已被占用。
+- **注意**：接管后在 agent-deck 里删除这个会话会连同 tmux 会话和 Claude 进程一起杀掉；原来的 tmux 会话名没了（`tmux new -A -s 原名` 会新建一个空的）。tmux 列表输出的分隔符必须是可打印字符：没有已连接客户端时（所有经 SSH 的命令）tmux 会把控制字符改成 `_`。
+- **改动地图**：`internal/session/matrix_adopt.go`、`cmd/agent-deck/matrix_adopt_cmd.go`、`internal/ui/matrix_adopt_panel.go`、`internal/ui/matrix_adopt_home.go`（新文件）；`cmd/agent-deck/session_cmd.go`（`adopt` 分发和帮助）、`cmd/agent-deck/remote_exec.go`（允许转发 `session adopt`）、`internal/ui/hotkeys.go`（`adopt_panel` = `alt+u`）、`internal/ui/help.go`、`internal/ui/home.go`（字段、消息分发、SetSize、按键路由、hasModalVisible、热键分支、View，共 7 处）。
+- **测试**：`cmd/agent-deck/matrix_adopt_cmd_test.go`（真 tmux、隔离 socket、`sleep` 代替 Claude、手写状态文件；验证接管后窗格 pid 不变、同一对话重复打开时拒绝、多窗格拒绝）、`internal/ui/matrix_adopt_panel_test.go`。
