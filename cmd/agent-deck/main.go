@@ -1919,7 +1919,7 @@ func handleAddCommand(profile string, args []string, inspectFlags func(*flag.Fla
 	sshRemotePath := fs.String("remote-path", "", "Remote working directory (used with --ssh)")
 
 	// Resume session flag
-	resumeSession := fs.String("resume-session", "", "Claude session ID to resume (skips new session creation)")
+	resumeSession := fs.String("resume-session", "", "Claude session ID or Codex thread ID to resume (skips new session creation)") // matrix/hardened: Codex too
 	modelID := fs.String("model", "", "Model ID/version to use for this session (claude, codex, gemini, opencode)")
 	effort := fs.String("effort", "", "Reasoning effort for this session (claude: low, medium, high, xhigh, max; codex: minimal, low, medium, high, xhigh, max, ultra)")
 	yoloMode := fs.Bool("yolo", false, "Enable YOLO mode for Gemini, Codex or Hermes sessions")
@@ -2090,10 +2090,21 @@ func handleAddCommand(profile string, args []string, inspectFlags func(*flag.Fla
 	}
 
 	// Validate --resume-session requires Claude
+	// matrix/hardened: or Codex, which resumes a thread id (`recall open`
+	// registers found Codex threads this way); the rollout is checked against
+	// the session's Codex home once its account is known, below.
+	resumeCodex := false
 	if *resumeSession != "" {
 		tool := firstNonEmpty(sessionCommandTool, detectTool(sessionCommandInput))
-		if !session.IsClaudeCompatible(tool) {
-			fmt.Println("Error: --resume-session only works with Claude sessions (-c claude)")
+		if session.IsCodexCompatible(tool) {
+			if !session.IsBareCodexThreadID(*resumeSession) {
+				fmt.Println("Error: --resume-session must be a bare Codex thread UUID " +
+					"(8-4-4-4-12 lowercase hex)")
+				os.Exit(1)
+			}
+			resumeCodex = true
+		} else if !session.IsClaudeCompatible(tool) {
+			fmt.Println("Error: --resume-session only works with Claude or Codex sessions (-c claude, -c codex)")
 			os.Exit(1)
 		}
 		// #1815 (Codex review on #1830): the value below is passed to
@@ -2103,7 +2114,7 @@ func handleAddCommand(profile string, args []string, inspectFlags func(*flag.Fla
 		// "Operator-named" has to mean the operator named an actual
 		// conversation id, so refuse anything that is not a bare UUID
 		// rather than vouching for it or silently continuing unverified.
-		if !session.IsBareClaudeSessionUUID(*resumeSession) {
+		if !resumeCodex && !session.IsBareClaudeSessionUUID(*resumeSession) {
 			fmt.Println("Error: --resume-session must be a bare Claude conversation UUID " +
 				"(8-4-4-4-12 lowercase hex, e.g. 91fd7978-1a2b-3c4d-5e6f-7a8b9c0d1e2f)")
 			os.Exit(1)
@@ -2591,8 +2602,21 @@ func handleAddCommand(profile string, args []string, inspectFlags func(*flag.Fla
 		newInstance.SSHRemotePath = *sshRemotePath
 	}
 
+	// matrix/hardened: a Codex resume binds the thread id; buildCodexCommand
+	// then launches `codex resume <id>`. A rollout missing from this session's
+	// Codex home would be dropped there and a fresh thread started, so it is
+	// refused here (local sessions; a remote's home is not readable here).
+	if resumeCodex {
+		newInstance.CodexSessionID = *resumeSession
+		newInstance.CodexDetectedAt = time.Now()
+		if newInstance.SSHHost == "" && session.CodexRolloutPathForInstance(newInstance) == "" {
+			out.Error(fmt.Sprintf("no rollout of Codex thread %s under %s, this session's Codex home; nothing to resume", *resumeSession, session.CodexHomeDirForInstance(newInstance)), ErrCodeInvalidOperation)
+			os.Exit(1)
+		}
+	}
+
 	// Handle --resume-session: set Claude session ID and resume mode
-	if *resumeSession != "" {
+	if *resumeSession != "" && !resumeCodex {
 		newInstance.ClaudeSessionID = *resumeSession
 		// #1815: operator-named conversation — explicit ownership.
 		session.MarkClaudeSessionIDVerified(newInstance)
@@ -2667,8 +2691,13 @@ func handleAddCommand(profile string, args []string, inspectFlags func(*flag.Fla
 	// creation: the recall index binds the transcript to this session
 	// without waiting for a hook (docs/recall.md, "Harness links").
 	if *resumeSession != "" {
+		// matrix/hardened: a resumed Codex thread is linked as "codex".
+		linkHarness := "claude"
+		if resumeCodex {
+			linkHarness = "codex"
+		}
 		if db := storage.GetDB(); db != nil {
-			if err := db.UpsertSessionLink(newInstance.ID, "claude", *resumeSession, "", true); err != nil {
+			if err := db.UpsertSessionLink(newInstance.ID, linkHarness, *resumeSession, "", true); err != nil {
 				fmt.Fprintf(os.Stderr, "Warning: session link: %v\n", err)
 			}
 		}

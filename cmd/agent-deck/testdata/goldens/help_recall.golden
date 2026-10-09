@@ -12,7 +12,7 @@ Commands:
   timeline <session>  Ordered typed conversation turns with a resume cursor
   follow <session>    Stream new turns after a timeline cursor as JSONL
   context <session>  Render a session as context for any harness; --into current delivers it to this session
-  open <session>   Relaunch a session (start its deck session, or resume a Claude conversation)
+  open <session>   Relaunch a session (start its deck session, or resume a Claude conversation or Codex thread)
   enrich           Drain the classifier queue (where did we lose time, session kind, outcome)
   status           Index size, sources by state, what is pending
   backfill         Index all history (resumable; refuses while sessions are busy)

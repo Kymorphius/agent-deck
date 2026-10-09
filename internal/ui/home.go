@@ -10370,7 +10370,9 @@ func (h *Home) openGlobalSearch() tea.Cmd {
 func (h *Home) handleGlobalSearchSelection(result *GlobalSearchResult) tea.Cmd {
 	h.instancesMu.RLock()
 	for _, inst := range h.instances {
-		if (result.DeckID != "" && inst.ID == result.DeckID) || (result.Harness == reader.HarnessClaude && inst.ClaudeSessionID == result.SessionID) {
+		// matrix/hardened: a Codex hit also jumps to the session already on its thread.
+		if (result.DeckID != "" && inst.ID == result.DeckID) || (result.Harness == reader.HarnessClaude && inst.ClaudeSessionID == result.SessionID) ||
+			(result.Harness == reader.HarnessCodex && inst.CodexSessionID == result.SessionID) {
 			h.instancesMu.RUnlock()
 			h.jumpToSession(inst)
 			return nil
@@ -10381,14 +10383,60 @@ func (h *Home) handleGlobalSearchSelection(result *GlobalSearchResult) tea.Cmd {
 	case result.Sidechain:
 		h.setError(fmt.Errorf("a subagent transcript cannot be resumed; open its parent session (agent-deck recall show %s)", query.Ref(result.SessID)))
 		return nil
-	case result.Harness != reader.HarnessClaude:
+	case result.Harness != reader.HarnessClaude && result.Harness != reader.HarnessCodex:
 		h.setError(fmt.Errorf("%s conversations are searchable but not resumable yet: agent-deck recall show %s", result.Harness, query.Ref(result.SessID)))
 		return nil
 	case result.Missing:
 		h.setError(fmt.Errorf("the transcript file is gone; its text is still in the index: agent-deck recall show %s", query.Ref(result.SessID)))
 		return nil
+	case result.Harness == reader.HarnessCodex:
+		// matrix/hardened: Codex threads resume too.
+		return h.createCodexSessionFromGlobalSearch(result)
 	}
 	return h.createSessionFromGlobalSearch(result)
+}
+
+// createCodexSessionFromGlobalSearch registers and starts a codex session
+// resuming a found Codex thread, like `recall open` (recallOpenCodexPlan).
+//
+// matrix/hardened: upstream only resumed Claude conversations from search.
+// The hit's profile names the account whose Codex home holds the rollout;
+// the session gets that account so it launches with the same CODEX_HOME,
+// and session.LocateCodexResume refuses a thread that is not there (it
+// would be dropped at launch and a fresh thread started), a subagent thread,
+// or one still being written by another codex process.
+func (h *Home) createCodexSessionFromGlobalSearch(result *GlobalSearchResult) tea.Cmd {
+	return func() tea.Msg {
+		loc, err := session.LocateCodexResume(result.Profile, result.SessionID)
+		if err != nil {
+			return sessionCreatedMsg{err: err}
+		}
+		if age, live := loc.LiveFor(time.Now()); live {
+			return sessionCreatedMsg{err: fmt.Errorf("thread %s was written %s ago and is probably still open in another terminal; continue it there, or close it and pick it again", result.SessionID, age.Round(time.Second))}
+		}
+		projectPath := loc.Dir
+		if resolved, resErr := session.ResolveProjectPath(projectPath); resErr == nil {
+			projectPath = resolved
+		}
+		title := result.Title
+		if title == "" {
+			title = filepath.Base(projectPath)
+		}
+		inst := session.NewInstanceWithGroupAndTool(title, projectPath, h.resolveNewSessionGroup(), "codex")
+		inst.Account = result.Profile
+		inst.CodexSessionID = result.SessionID
+		inst.CodexDetectedAt = time.Now()
+		if err := inst.Start(); err != nil {
+			return sessionCreatedMsg{err: fmt.Errorf("failed to start session: %w", err)}
+		}
+		// An explicitly picked thread is an authoritative recall link, as
+		// `add --resume-session` writes it.
+		if db := statedb.GetGlobal(); db != nil {
+			_ = db.UpsertSessionLink(inst.ID, "codex", result.SessionID, "", true)
+		}
+		inst.RecordTelemetryCreate(telemetry.ViaTUINew)
+		return sessionCreatedMsg{instance: inst}
+	}
 }
 
 // jumpToSession jumps the cursor to the specified session

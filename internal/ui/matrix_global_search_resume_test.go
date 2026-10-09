@@ -4,6 +4,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/asheshgoplani/agent-deck/internal/session"
 )
 
 // matrix/hardened: createSessionFromGlobalSearch must not bake a resume
@@ -45,5 +47,40 @@ func TestMatrixGlobalSearchImport_ResumesFromLaunchDir(t *testing.T) {
 	}
 	if strings.Contains(fn, "result.CWD") {
 		t.Error("createSessionFromGlobalSearch uses result.CWD (the last cwd) again")
+	}
+}
+
+// matrix/hardened: a Codex hit jumps to the session already on its thread,
+// and otherwise is resumed (createCodexSessionFromGlobalSearch), which
+// refuses a thread with no rollout in the launch's Codex home instead of
+// starting a fresh one.
+func TestMatrixGlobalSearch_CodexHit(t *testing.T) {
+	const thread = "01a12172-c424-7502-b2c3-5e250fde3050"
+	t.Setenv("CODEX_HOME", t.TempDir())
+	home := NewHome()
+	home.width, home.height = 120, 40
+	inst := session.NewInstanceWithTool("codex-on-thread", t.TempDir(), "codex")
+	inst.CodexSessionID = thread
+	home.instancesMu.Lock()
+	home.instances = []*session.Instance{inst}
+	home.instanceByID[inst.ID] = inst
+	home.instancesMu.Unlock()
+	home.groupTree = session.NewGroupTree(home.instances)
+	home.rebuildFlatItems()
+
+	if cmd := home.handleGlobalSearchSelection(&GlobalSearchResult{Harness: "codex", SessionID: thread}); cmd != nil {
+		t.Fatal("hit on a thread a session already owns must jump, not create")
+	}
+	if item := home.flatItems[home.cursor]; item.Session == nil || item.Session.ID != inst.ID {
+		t.Fatalf("cursor not on the owning session: %+v", item)
+	}
+
+	cmd := home.handleGlobalSearchSelection(&GlobalSearchResult{Harness: "codex", SessionID: "01a12172-0000-7000-8000-000000000000"})
+	if cmd == nil {
+		t.Fatal("unowned Codex hit produced no command")
+	}
+	msg, ok := cmd().(sessionCreatedMsg)
+	if !ok || msg.err == nil || !strings.Contains(msg.err.Error(), "nothing to resume") {
+		t.Fatalf("thread without rollout: %#v", msg)
 	}
 }
