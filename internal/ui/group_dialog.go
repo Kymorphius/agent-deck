@@ -35,6 +35,12 @@ type GroupDialog struct {
 	sessionID     string   // Session ID being renamed (for rename session)
 	validationErr string   // Inline validation error displayed inside the dialog
 
+	// matrix/hardened: M on a group row reuses the move dialog to reparent the
+	// whole group. moveGroupSource is the group being moved ("" = moving a
+	// session); in that mode groupPaths holds destination PARENTS and "" in it
+	// means the root level.
+	moveGroupSource string
+
 	// Tab toggle between Root and Subgroup modes (Issue #111)
 	contextParentPath string // Original cursor context parent path (for toggling back)
 	contextParentName string // Original cursor context parent name (for toggling back)
@@ -250,6 +256,30 @@ func (g *GroupDialog) ShowMove(groupPaths []string) {
 	g.validationErr = ""
 	g.groupPaths = groupPaths
 	g.selected = 0
+	g.moveGroupSource = "" // matrix/hardened: session move, not a group move
+}
+
+// ShowMoveGroup shows the dialog for moving a whole group under a new parent.
+// matrix/hardened: parents are destination parent paths; "" is the root level.
+func (g *GroupDialog) ShowMoveGroup(sourcePath string, parents []string) {
+	g.ShowMove(parents)
+	g.moveGroupSource = sourcePath
+}
+
+// MoveGroupSource returns the group being moved, or "" when the move dialog
+// moves a session. matrix/hardened.
+func (g *GroupDialog) MoveGroupSource() string {
+	return g.moveGroupSource
+}
+
+// SelectedMoveGroupParent returns the chosen destination parent for a group
+// move ("" = root) and whether a choice exists. matrix/hardened: separate from
+// GetSelectedGroup because "" is a valid destination here.
+func (g *GroupDialog) SelectedMoveGroupParent() (string, bool) {
+	if g.selected >= 0 && g.selected < len(g.groupPaths) {
+		return g.groupPaths[g.selected], true
+	}
+	return "", false
 }
 
 // ShowRenameSession shows the dialog for renaming a session
@@ -665,7 +695,17 @@ func (g *GroupDialog) View() string {
 	case GroupDialogMove:
 		title = "Move to Group"
 		var items []string
+		// matrix/hardened: a group move names the group and offers "(root)".
+		if g.moveGroupSource != "" {
+			title = "Move Group"
+			items = append(items, lipgloss.NewStyle().
+				Foreground(ColorCyan).
+				Render("Group: "+g.moveGroupSource+"  →  new parent:"), "")
+		}
 		for i, groupPath := range g.groupPaths {
+			if g.moveGroupSource != "" && groupPath == "" {
+				groupPath = "(root)"
+			}
 			if i == g.selected {
 				items = append(items, lipgloss.NewStyle().
 					Foreground(ColorBg).

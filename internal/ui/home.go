@@ -12180,7 +12180,7 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return h, nil
 
 	case "M", "shift+m":
-		// Move session to different group
+		// Move session (or, matrix/hardened, a whole group) to a different group
 		if h.cursor < len(h.flatItems) {
 			item := h.flatItems[h.cursor]
 			// Refuse mutations on a still-creating placeholder — moving one
@@ -12189,6 +12189,12 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				h.setError(errSessionStillCreating)
 			} else if item.Type == session.ItemTypeSession {
 				h.groupDialog.ShowMove(h.scopedGroupPaths())
+			} else if item.Type == session.ItemTypeGroup {
+				// matrix/hardened: M on a group moves the whole group.
+				h.openGroupMoveDialog(item)
+			} else if item.Type == session.ItemTypeRemoteGroup {
+				// matrix/hardened: remote groups live in the remote's DB.
+				h.setError(fmt.Errorf("moving a remote group is not supported here; run `agent-deck group change` on %s", item.RemoteName))
 			} else if item.Type == session.ItemTypeRemoteSession && item.RemoteSession != nil {
 				// Remote sessions live in the remote's own state DB, so the
 				// local tree cannot move them. Offer the group paths currently
@@ -14649,6 +14655,7 @@ const (
 	groupOpCreateSub
 	groupOpRename
 	groupOpMove
+	groupOpMoveGroup // matrix/hardened: oldPath = group moved, targetPath = new parent ("" = root)
 )
 
 // pendingGroupOp records a group create/rename/move so it can be re-applied if
@@ -14745,6 +14752,8 @@ func (h *Home) reapplyPendingGroupOps() bool {
 				opApplied = true
 				uiLog.Info("pending_group_reapplied", slog.String("kind", "move"), slog.String("session_id", op.sessionID), slog.String("target", op.targetPath))
 			}
+		case groupOpMoveGroup: // matrix/hardened
+			opApplied = h.reapplyPendingGroupMove(op)
 		}
 		if opApplied {
 			pending = append(pending, op)
@@ -14844,6 +14853,14 @@ func (h *Home) handleGroupDialogKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				h.saveInstances()
 			}
 		case GroupDialogMove:
+			// matrix/hardened: a group move (M on a group row) reparents the
+			// whole group; "" is a valid destination (root level).
+			if source := h.groupDialog.MoveGroupSource(); source != "" {
+				if dest, ok := h.groupDialog.SelectedMoveGroupParent(); ok {
+					h.moveGroupTo(source, dest)
+				}
+				break
+			}
 			targetGroupPath := h.groupDialog.GetSelectedGroup()
 			if targetGroupPath != "" && h.cursor < len(h.flatItems) {
 				item := h.flatItems[h.cursor]
@@ -20936,6 +20953,9 @@ func (h *Home) renderHelpBarFull() string {
 			}
 			if renameKey != "" {
 				secondaryHints = append(secondaryHints, h.helpKey(renameKey, "Rename"))
+			}
+			if moveKey != "" { // matrix/hardened: M moves groups too
+				secondaryHints = append(secondaryHints, h.helpKey(moveKey, "Move"))
 			}
 			if deleteKey != "" {
 				secondaryHints = append(secondaryHints, h.helpKey(deleteKey, "Delete"))

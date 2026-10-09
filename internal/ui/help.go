@@ -420,6 +420,7 @@ func (h *HelpOverlay) View() string {
 			items: [][2]string{
 				{groupKey, "New group"},
 				{renameKey, "Rename group"},
+				{moveKey, "Move group (under another group / to root)"}, // matrix/hardened
 				{"Tab", "Toggle expand"},
 			},
 		},
