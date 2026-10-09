@@ -22,7 +22,6 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"al.essio.dev/pkg/shellescape"
 	"github.com/BurntSushi/toml"
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
@@ -10436,55 +10435,32 @@ func (h *Home) createSessionFromGlobalSearch(result *GlobalSearchResult) tea.Cmd
 		// instance's taint map being empty by construction.
 		session.MarkClaudeSessionIDVerified(inst)
 
-		// Build resume command with config dir and permission flags
 		userConfig, _ := session.LoadUserConfig()
 		opts := session.NewClaudeOptions(userConfig)
 
-		// Build command - only set CLAUDE_CONFIG_DIR if explicitly configured
-		// If not explicit, let the tmux shell's environment handle it
-		// This is critical for WSL and other environments where users have
-		// CLAUDE_CONFIG_DIR set in their .bashrc/.zshrc
-		var cmdBuilder strings.Builder
-		if session.IsClaudeConfigDirExplicitForGroup(inst.GroupPath) {
-			configDir := session.GetClaudeConfigDirForGroup(inst.GroupPath)
-			// #1815 (Codex review on #1830): quote exactly as
-			// Instance.buildBashExportPrefix does (instance.go, audit F2) —
-			// this string is baked into inst.Command and ends up in a
-			// `bash -c` payload, so an unquoted config_dir containing
-			// whitespace, ;, or $(...) breaks the command or injects.
-			cmdBuilder.WriteString(fmt.Sprintf("CLAUDE_CONFIG_DIR=%s ", shellescape.Quote(configDir)))
-		}
-		// #1815: the TUI picker builds a resume command too, so it routes
-		// through the same resume-time identity guard as restart / start /
-		// fork. The id was just recorded onto inst above (the user picked
-		// this conversation FOR this session), so the check passes by
-		// construction today — it is here so a future change that reuses an
-		// existing instance here cannot resume a conversation that instance
-		// does not own. Only the identity half applies: the user's explicit
-		// pick must not be downgraded to a fresh session by the
-		// conversation-data heuristics.
-		//
-		// exec so the agent replaces the wrapper shell and leads the pane,
-		// matching buildClaudeResumeCommand and the fresh-start path
-		if allowed, _ := session.ResumeIdentityAllowed(inst, result.SessionID); allowed {
-			cmdBuilder.WriteString("exec claude --resume ")
-			cmdBuilder.WriteString(result.SessionID)
-		} else {
+		// #1815: the TUI picker routes through the same resume-time identity
+		// guard as restart / start / fork. The id was just recorded onto inst
+		// above (the user picked this conversation FOR this session), so the
+		// check passes by construction today — it is here so a future change
+		// that reuses an existing instance here cannot resume a conversation
+		// that instance does not own.
+		if allowed, _ := session.ResumeIdentityAllowed(inst, result.SessionID); !allowed {
 			freshID := session.NewClaudeSessionUUID()
 			inst.ClaudeSessionID = freshID
 			// #1815: a freshly minted id is vouched ownership, same as every
 			// other minted-id writer (Instance.replaceRefusedClaudeSessionID,
 			// buildClaudeCommandWithMessage's own mint path).
 			session.MarkClaudeSessionIDVerified(inst)
-			cmdBuilder.WriteString("exec claude --session-id ")
-			cmdBuilder.WriteString(freshID)
 		}
-		if opts.SkipPermissions {
-			cmdBuilder.WriteString(" --dangerously-skip-permissions")
-		} else if opts.AllowSkipPermissions {
-			cmdBuilder.WriteString(" --allow-dangerously-skip-permissions")
-		}
-		inst.Command = cmdBuilder.String()
+		// matrix/hardened: keep the plain "claude" command, like `add
+		// --resume-session`. This used to bake an exec/claude/--resume/<id>
+		// <perm flags> string into inst.Command, but buildClaudeResumeCommand treats
+		// any Command other than "claude" as a custom binary and wraps it again
+		// ("exec exec claude --resume <id> ... --resume <id> ..."), so every
+		// session imported from global search (G) died on start. Start now
+		// builds the resume / --session-id command, CLAUDE_CONFIG_DIR export
+		// and permission flags from ClaudeSessionID and the options below.
+		inst.Command = "claude"
 
 		// Persist options so restarts use per-session settings
 		_ = inst.SetClaudeOptions(opts)
