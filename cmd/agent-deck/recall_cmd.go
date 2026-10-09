@@ -47,7 +47,7 @@ Commands:
   timeline <session>  Ordered typed conversation turns with a resume cursor
   follow <session>    Stream new turns after a timeline cursor as JSONL
   context <session>  Render a session as context for any harness; --into current delivers it to this session
-  open <session>   Relaunch a session (start its deck session, or resume a Claude conversation)
+  open <session>   Relaunch a session (start its deck session, or resume a Claude conversation or Codex thread)
   enrich           Drain the classifier queue (where did we lose time, session kind, outcome)
   status           Index size, sources by state, what is pending
   backfill         Index all history (resumable; refuses while sessions are busy)
@@ -888,7 +888,7 @@ func handleRecallOpen(profile string, args []string) {
 	dryRun := fs.Bool("dry-run", false, "Print what would run instead of running it")
 	title := fs.String("title", "", "Title for a re-registered session (default: the conversation's title)")
 	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), "Usage: agent-deck recall open <session> [--title T] [--dry-run] [--json]\n\nRelaunch a found conversation: starts its agent-deck session if it still exists, otherwise registers a new session that resumes the Claude conversation in its original directory.")
+		fmt.Fprintln(fs.Output(), "Usage: agent-deck recall open <session> [--title T] [--dry-run] [--json]\n\nRelaunch a found conversation: starts its agent-deck session if it still exists, otherwise registers a new session that resumes the Claude conversation in its original directory, or the Codex thread in its last directory.")
 		fs.PrintDefaults()
 	}
 	if !parseRecallFlags(fs, args) {
@@ -962,11 +962,15 @@ func recallOpenPlan(env *recallEnv, sess query.SessionRow, title string) ([]stri
 			}
 		}
 	}
-	if sess.Harness != reader.HarnessClaude {
+	// matrix/hardened: Codex threads resume too (recallOpenCodexPlan).
+	if sess.Harness != reader.HarnessClaude && sess.Harness != reader.HarnessCodex {
 		return nil, "", fmt.Errorf("%s conversations are searchable but not resumable yet (no registered session owns this one); read it with recall show", sess.Harness)
 	}
 	if sess.Missing {
 		return nil, "", errors.New("the transcript file is gone; nothing to resume (the index still has its text: recall show)")
+	}
+	if sess.Harness == reader.HarnessCodex {
+		return recallOpenCodexPlan(sess, title)
 	}
 	// matrix/hardened: resume from the directory the conversation was started
 	// in, found from its transcript. sess.CWD is the LAST cwd it recorded, and
@@ -992,6 +996,36 @@ func recallOpenPlan(env *recallEnv, sess query.SessionRow, title string) ([]stri
 			args = append(args, "--account", name)
 			break
 		}
+	}
+	args = append(args, loc.Dir)
+	return args, "add", nil
+}
+
+// recallOpenCodexPlan registers a new codex session resuming a found Codex
+// thread.
+//
+// matrix/hardened: upstream only resumed Claude conversations from the index.
+// The row's profile names the account whose Codex home the rollout was found
+// in ("" for the default home); the new session gets that account so it
+// launches with the same CODEX_HOME, and session.LocateCodexResume checks the
+// rollout really is there (a miss would start a fresh thread instead).
+func recallOpenCodexPlan(sess query.SessionRow, title string) ([]string, string, error) {
+	loc, err := session.LocateCodexResume(sess.Profile, sess.NativeID)
+	if err != nil {
+		return nil, "", err
+	}
+	if age, live := loc.LiveFor(time.Now()); live {
+		return nil, "", fmt.Errorf("thread %s was written %s ago and is probably still open in another terminal; continue it there, or close it and run recall open again", sess.NativeID, age.Round(time.Second))
+	}
+	if title == "" {
+		title = sess.Title
+	}
+	if title == "" {
+		title = "recall-" + shortNative(sess.NativeID)
+	}
+	args := []string{"add", "-t", title, "-c", "codex", "--resume-session", sess.NativeID, "--hint", "recalled_from=" + sess.NativeID}
+	if sess.Profile != "" {
+		args = append(args, "--account", sess.Profile)
 	}
 	args = append(args, loc.Dir)
 	return args, "add", nil

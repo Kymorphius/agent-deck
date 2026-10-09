@@ -68,7 +68,7 @@
   -remote-path string
     	Remote working directory (used with --ssh)
   -resume-session string
-    	Claude session ID to resume (skips new session creation)
+    	Claude session ID or Codex thread ID to resume (skips new session creation)
   -sandbox
     	Run session in Docker sandbox
   -sandbox-image string

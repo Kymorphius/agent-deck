@@ -426,6 +426,76 @@ func TestRecall_OpenPlansResumeOrStart(t *testing.T) {
 	}
 }
 
+// matrix/hardened: a found Codex thread is resumable too. recall open
+// registers `add -c codex --resume-session <thread>` in the thread's last
+// directory, and once added the plan becomes a start of that session.
+func TestRecall_OpenResumesCodexThread(t *testing.T) {
+	home, _ := recallHome(t, 1)
+	proj := filepath.Join(home, "proj")
+	if err := os.MkdirAll(proj, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rollout, err := testcorpus.CodexHome(filepath.Join(home, ".codex"), -1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(rollout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(rollout, []byte(strings.ReplaceAll(string(data), "/Users/x/proj", proj)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(rollout, old, old); err != nil {
+		t.Fatal(err)
+	}
+	env := []string{"CODEX_HOME="}
+	if _, stderr, code := runAgentDeckEnv(t, home, "", env, "recall", "backfill", "--quiet"); code != 0 {
+		t.Fatalf("backfill: %s", stderr)
+	}
+	thread := testcorpus.CodexThread
+	stdout, stderr, code := runAgentDeckEnv(t, home, "", env, "recall", "open", thread, "--dry-run", "--json")
+	if code != 0 {
+		t.Fatalf("open dry-run: %d %s %s", code, stdout, stderr)
+	}
+	var plan struct {
+		Action string   `json:"action"`
+		Args   []string `json:"args"`
+	}
+	mustJSON(t, stdout, &plan)
+	want := []string{"add", "-t", "Fix flaky auth", "-c", "codex", "--resume-session", thread, "--hint", "recalled_from=" + thread, proj}
+	if plan.Action != "add" || !reflect.DeepEqual(plan.Args, want) {
+		t.Fatalf("plan: %s %v\nwant %v", plan.Action, plan.Args, want)
+	}
+	stdout, stderr, code = runAgentDeckEnv(t, home, "", env, "recall", "open", thread, "--json")
+	if code != 0 {
+		t.Fatalf("open: %d %s %s", code, stdout, stderr)
+	}
+	var added struct {
+		ID            string `json:"id"`
+		ResumeSession string `json:"resume_session"`
+	}
+	mustJSON(t, stdout, &added)
+	if added.ResumeSession != thread || added.ID == "" {
+		t.Fatalf("open did not register a resume: %s", stdout)
+	}
+	stdout, _, code = runAgentDeckEnv(t, home, "", env, "recall", "open", thread, "--dry-run", "--json")
+	if code != 0 {
+		t.Fatalf("open after add: %s", stdout)
+	}
+	mustJSON(t, stdout, &plan)
+	if plan.Action != "start" || !reflect.DeepEqual(plan.Args, []string{"session", "start", added.ID}) {
+		t.Fatalf("plan after add: %s %v", plan.Action, plan.Args)
+	}
+	// add refuses a thread with no rollout in the session's Codex home
+	// rather than letting the launch start a fresh thread.
+	stdout, _, code = runAgentDeckEnv(t, home, "", env, "add", "-t", "nope", "-c", "codex", "--resume-session", "01a0b956-0000-7000-8000-000000000000", "--json", proj)
+	if code == 0 || !strings.Contains(stdout, "nothing to resume") {
+		t.Fatalf("add with unknown thread: %d %s", code, stdout)
+	}
+}
+
 // recall.db is machine-global, state.db is per profile. A conversation
 // linked in the work profile (its transcript under the work config dir)
 // must keep the work link's hints on its card and get its cost events in
