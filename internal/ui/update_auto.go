@@ -105,6 +105,12 @@ func (h *Home) requestUpdateCheck(now time.Time) tea.Cmd {
 	if h.updateCheckInFlight {
 		return nil
 	}
+	// matrix/hardened: no TUI-initiated release poll (startup, periodic or
+	// post-install) unless [updates] check_enabled = true was set explicitly,
+	// and never in a test-, CI- or script-driven process.
+	if h.autoUpdateSuppressedReason != "" || !loadUpdateSettings().GetCheckEnabled() {
+		return nil
+	}
 	h.lastUpdateCheck = now
 	h.updateCheckInFlight = true
 	return h.checkForUpdate()
@@ -151,11 +157,19 @@ func (h *Home) handleUpdateCheck(msg updateCheckMsg) tea.Cmd {
 	return h.maybeEnsureUpdateTimer()
 }
 
+// hardenedNoTimerEnsure is the matrix/hardened kill switch for the TUI's
+// automatic update-timer install/heal.
+const hardenedNoTimerEnsure = true
+
 // maybeEnsureUpdateTimer installs or heals this host's update timer once
 // per TUI process, from the periodic check path, so a host that only ever
 // runs the TUI still gets its own timer (#2472). Never in a test-, CI- or
 // script-driven TUI.
 func (h *Home) maybeEnsureUpdateTimer() tea.Cmd {
+	// matrix/hardened: the TUI never installs or heals the update timer.
+	if hardenedNoTimerEnsure {
+		return nil
+	}
 	if h.updateTimerEnsureStarted || h.autoUpdateSuppressedReason != "" {
 		return nil
 	}

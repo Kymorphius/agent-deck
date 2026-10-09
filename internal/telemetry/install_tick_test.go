@@ -30,6 +30,7 @@ func tickEnv(t *testing.T) *clock {
 func tickOK(context.Context, []byte, time.Duration) postResult { return postResult{status: 200} }
 
 func TestInstallTickRetryPrivacyAndRollover(t *testing.T) {
+	t.Skip("matrix/hardened: telemetry sending removed (no key, post() is a no-op)")
 	c := tickEnv(t)
 	var bodies [][]byte
 	sender := func(ctx context.Context, body []byte, timeout time.Duration) postResult {
@@ -105,6 +106,7 @@ func TestInstallTickRetryPrivacyAndRollover(t *testing.T) {
 }
 
 func TestInstallTickConcurrentAndLegacyWriter(t *testing.T) {
+	t.Skip("matrix/hardened: telemetry sending removed (no key, post() is a no-op)")
 	tickEnv(t)
 	var calls atomic.Int32
 	sender := func(context.Context, []byte, time.Duration) postResult {
@@ -209,6 +211,7 @@ func TestInstallTickMalformedLedgerFailsClosed(t *testing.T) {
 }
 
 func TestInstallTickDisableResetAndPendingStatus(t *testing.T) {
+	t.Skip("matrix/hardened: telemetry sending removed (no key, post() is a no-op)")
 	c := tickEnv(t)
 	fail := func(context.Context, []byte, time.Duration) postResult {
 		return postResult{err: errors.New("lost ack")}
@@ -300,6 +303,7 @@ func TestInstallTickProcessWorker(t *testing.T) {
 }
 
 func TestInstallTickCrossProcess(t *testing.T) {
+	t.Skip("matrix/hardened: telemetry sending removed (no key, post() is a no-op)")
 	tickEnv(t)
 	root := os.Getenv("HOME")
 	var wg sync.WaitGroup
@@ -325,6 +329,7 @@ func TestInstallTickCrossProcess(t *testing.T) {
 }
 
 func TestInstallTickPreviewAndOwnerScope(t *testing.T) {
+	t.Skip("matrix/hardened: telemetry sending removed (no key, post() is a no-op)")
 	c := tickEnv(t)
 	p, _ := siblingPath(installTickFileName)
 	if _, err := PreviewBatch(); err != nil {
@@ -361,6 +366,7 @@ func TestInstallTickPreviewAndOwnerScope(t *testing.T) {
 }
 
 func TestInstallTickDisableWaitsForInflight(t *testing.T) {
+	t.Skip("matrix/hardened: telemetry sending removed (no key, post() is a no-op)")
 	c := tickEnv(t)
 	entered, release, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	go func() {
@@ -394,6 +400,7 @@ func TestInstallTickDisableWaitsForInflight(t *testing.T) {
 }
 
 func TestInstallTickReservationSyncFailureNeverSends(t *testing.T) {
+	t.Skip("matrix/hardened: telemetry sending removed (no key, post() is a no-op)")
 	tickEnv(t)
 	original := syncInstallTickDirectory
 	t.Cleanup(func() { syncInstallTickDirectory = original })
@@ -463,6 +470,7 @@ func TestInstallTickPreviewRespectsDestinationAndVersion(t *testing.T) {
 }
 
 func TestInstallTickRestartRetryReuse(t *testing.T) {
+	t.Skip("matrix/hardened: telemetry sending removed (no key, post() is a no-op)")
 	tickEnv(t)
 	root := os.Getenv("HOME")
 	for _, fail := range []string{"1", "0"} {
@@ -483,6 +491,7 @@ func TestInstallTickRestartRetryReuse(t *testing.T) {
 }
 
 func TestInstallTickCancellationPreservesNonce(t *testing.T) {
+	t.Skip("matrix/hardened: telemetry sending removed (no key, post() is a no-op)")
 	tickEnv(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
 	defer cancel()
@@ -508,6 +517,7 @@ func TestInstallTickCancellationPreservesNonce(t *testing.T) {
 }
 
 func TestInstallTickLocalCalendarMidnight(t *testing.T) {
+	t.Skip("matrix/hardened: telemetry sending removed (no key, post() is a no-op)")
 	c := tickEnv(t)
 	previous := time.Local
 	time.Local = time.FixedZone("test-local", 5*3600+30*60)
@@ -531,6 +541,7 @@ func TestInstallTickLocalCalendarMidnight(t *testing.T) {
 }
 
 func TestInstallTickRequiresFreshSchemaConsent(t *testing.T) {
+	t.Skip("matrix/hardened: telemetry sending removed (no key, post() is a no-op)")
 	c := tickEnv(t)
 	legacy := LoadState()
 	legacy.SchemaVersion = 2

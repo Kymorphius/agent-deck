@@ -11,10 +11,11 @@ import (
 	"github.com/asheshgoplani/agent-deck/internal/update"
 )
 
-// #2472: the TUI's periodic check installs or heals this host's update
-// timer once per process, never in a test-, CI- or script-driven TUI.
-func TestUpdateCheck_EnsuresTheTimerOncePerProcess(t *testing.T) {
-	stubUpdateSettings(t, session.UpdateSettings{})
+// #2472 upstream: the TUI's periodic check installs or heals this host's
+// update timer once per process. matrix/hardened: it never does, even with
+// update checks opted in and nothing suppressing automatic update work.
+func TestUpdateCheck_NeverEnsuresTheTimer(t *testing.T) {
+	stubUpdateSettings(t, optedInUpdateSettings())
 	calls := 0
 	prev := ensureUpdateTimer
 	ensureUpdateTimer = func(*slog.Logger) (update.TimerEnsureResult, error) {
@@ -26,30 +27,21 @@ func TestUpdateCheck_EnsuresTheTimerOncePerProcess(t *testing.T) {
 	t.Cleanup(func() { ensureUpdateTimer, pendingLaunchAgents = prev, prevPending })
 
 	h := newRestartTestHome(t)
-	h.autoUpdateSuppressedReason = "running under go test"
-	if cmd := h.handleUpdateCheck(updateCheckMsg{info: &update.UpdateInfo{CurrentVersion: "1.16.0", LatestVersion: "1.16.0"}}); cmd != nil {
-		t.Fatal("a suppressed TUI must not touch the timer")
-	}
-
 	h.autoUpdateSuppressedReason = ""
-	cmd := h.handleUpdateCheck(updateCheckMsg{info: &update.UpdateInfo{CurrentVersion: "1.16.0", LatestVersion: "1.16.0"}})
-	if cmd == nil {
-		t.Fatal("the first check result must start the timer heal")
+	for i := 0; i < 2; i++ {
+		if cmd := h.handleUpdateCheck(updateCheckMsg{info: &update.UpdateInfo{CurrentVersion: "1.16.0", LatestVersion: "1.16.0"}}); cmd != nil {
+			t.Fatal("matrix/hardened: the TUI must never start a timer heal")
+		}
 	}
-	msg, ok := cmd().(updateTimerEnsuredMsg)
-	if !ok || calls != 1 || msg.result.Action != update.TimerActionMigrated {
-		t.Fatalf("heal msg = %+v ok=%v calls=%d", msg, ok, calls)
-	}
-	h.Update(msg)
-	if cmd := h.handleUpdateCheck(updateCheckMsg{info: &update.UpdateInfo{CurrentVersion: "1.16.0", LatestVersion: "1.16.0"}}); cmd != nil {
-		t.Fatal("the heal runs once per TUI process, not per check")
+	if calls != 0 {
+		t.Fatalf("ensureUpdateTimer called %d times", calls)
 	}
 }
 
 // When the check starts the unattended updater, the child (`update
 // --unattended`) heals the timer; the TUI does not run a second heal.
 func TestUpdateCheck_InstallRunLeavesTheHealToTheChild(t *testing.T) {
-	stubUpdateSettings(t, session.UpdateSettings{})
+	stubUpdateSettings(t, optedInUpdateSettings()) // matrix/hardened: explicit opt-in
 	t.Setenv(update.SkipUpdateCheckEnv, "")
 	calls := 0
 	prev, prevRun := ensureUpdateTimer, runUnattendedUpdate

@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 
 	"github.com/asheshgoplani/agent-deck/internal/session"
 	"github.com/asheshgoplani/agent-deck/internal/update"
@@ -19,53 +18,37 @@ import (
 // the daemon start, the real unattended run and the explicit remote update.
 // Each test drives the production wiring and fails when it is removed.
 
-// The notify daemon's real start sequence heals the timer exactly once,
-// through the daemonEnsureUpdateTimer seam.
-func TestNotifyDaemonStart_HealsTheTimerExactlyOnce(t *testing.T) {
+// matrix/hardened: the notify daemon's real start sequence never heals the
+// update timer (upstream healed it exactly once per start).
+func TestNotifyDaemonStart_NeverHealsTheTimer(t *testing.T) {
 	var calls atomic.Int32
-	healed := make(chan struct{}, 4)
 	prev := daemonEnsureUpdateTimer
 	daemonEnsureUpdateTimer = func(*slog.Logger) (update.TimerEnsureResult, error) {
 		calls.Add(1)
-		healed <- struct{}{}
 		return update.TimerEnsureResult{Action: update.TimerActionNone}, nil
 	}
 	t.Cleanup(func() { daemonEnsureUpdateTimer = prev })
 
 	start := realNotifyDaemonStart()
-	require.NotNil(t, start.healUpdateTimer, "the daemon start must heal the update timer")
 	// The other start work is replaced so the test touches nothing real.
-	var watched, polled atomic.Int32
-	start.watchVersion = func(context.Context, context.CancelFunc) { watched.Add(1) }
+	var polled atomic.Int32
+	start.watchVersion = func(context.Context, context.CancelFunc) {}
 	start.headlessAutoInstall = func(context.Context) { polled.Add(1) }
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	start.begin(ctx, cancel)
-
-	select {
-	case <-healed:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the daemon start never healed the update timer")
-	}
-	// A second heal from the same start would land well within this.
 	time.Sleep(200 * time.Millisecond)
-	assert.Equal(t, int32(1), calls.Load(), "one heal per daemon start")
+	assert.Equal(t, int32(0), calls.Load(), "matrix/hardened: no timer heal at daemon start")
 	assert.Equal(t, int32(1), polled.Load())
 }
 
-// The real unattended run heals the timer through AutoEnsureUpdateTimer;
-// under go test that answers with the suppression skip, which proves the
-// wiring without touching the host's init system.
-func TestRealUnattendedDeps_WiresTheTimerHeal(t *testing.T) {
+// matrix/hardened: the real unattended run never installs or heals the timer.
+func TestRealUnattendedDeps_NeverHealsTheTimer(t *testing.T) {
 	setupTask6XDGEnv(t)
 	deps, closeLog := realUnattendedDeps("timer")
 	t.Cleanup(closeLog)
-	require.NotNil(t, deps.ensureTimer, "update --unattended must install or heal the timer")
-	res, err := deps.ensureTimer()
-	require.NoError(t, err)
-	assert.Equal(t, update.TimerActionSkipped, res.Action)
-	assert.Contains(t, res.Reason, "automatic update work suppressed")
+	assert.Nil(t, deps.ensureTimer, "matrix/hardened: update --unattended must not touch the timer")
 }
 
 // ensureCountingRemote is a current remote that counts the timer heals
@@ -95,9 +78,9 @@ func (s *ensureCountingRemote) InstallUpdateTimer(_ context.Context, ensureOnly 
 	}}, nil
 }
 
-// `remote update <name>` asks each remote it leaves current or updated for
-// its own timer heal (`update --ensure-timer`); a dry run never does.
-func TestHandleRemoteUpdate_AsksTheRemoteToEnsureItsTimer(t *testing.T) {
+// matrix/hardened: `remote update <name>` never asks a remote to install or
+// heal its timer (upstream ran `update --ensure-timer` on each remote).
+func TestHandleRemoteUpdate_NeverAsksTheRemoteToEnsureItsTimer(t *testing.T) {
 	setupRemoteListJSONTest(t)
 	stub := &ensureCountingRemote{}
 	prev := remoteUpdateRunner
@@ -105,10 +88,6 @@ func TestHandleRemoteUpdate_AsksTheRemoteToEnsureItsTimer(t *testing.T) {
 	t.Cleanup(func() { remoteUpdateRunner = prev })
 
 	out := captureStdout(t, func() { handleRemoteUpdate([]string{"lab"}) })
-	assert.Equal(t, 1, stub.ensureOnly, "remote update must ask the remote to ensure its timer; output:\n%s", out)
-	assert.Equal(t, 0, stub.explicit, "the update path uses the automatic heal, not --install-timer")
-	assert.Contains(t, out, "update timer")
-
-	captureStdout(t, func() { handleRemoteUpdate([]string{"--dry-run", "lab"}) })
-	assert.Equal(t, 1, stub.ensureOnly, "a dry run changes nothing on the remote")
+	assert.Equal(t, 0, stub.ensureOnly, "matrix/hardened: no remote timer heal; output:\n%s", out)
+	assert.Equal(t, 0, stub.explicit)
 }

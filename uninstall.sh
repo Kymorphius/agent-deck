@@ -146,6 +146,13 @@ if [[ -f "$TMUX_CONF" ]] && grep -q "# agent-deck configuration" "$TMUX_CONF" 2>
     echo -e "Found: ${GREEN}tmux configuration${NC} in $TMUX_CONF"
 fi
 
+# matrix/hardened: agent-deck hook entries in Claude's settings.json
+CLAUDE_SETTINGS="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json"
+if [[ -f "$CLAUDE_SETTINGS" ]] && grep -q 'agent-deck' "$CLAUDE_SETTINGS" 2>/dev/null; then
+    FOUND_ITEMS+=("claude-hooks")
+    echo -e "Found: ${GREEN}agent-deck hooks${NC} in $CLAUDE_SETTINGS"
+fi
+
 echo ""
 
 # Nothing found?
@@ -189,6 +196,9 @@ for item in "${FOUND_ITEMS[@]}"; do
                 echo -e "  ${RED}•${NC} tmux config block in ~/.tmux.conf"
             fi
             ;;
+        claude-hooks)
+            echo -e "  ${RED}•${NC} agent-deck hook entries in $CLAUDE_SETTINGS ${DIM}(other hooks kept, backup made)${NC}"
+            ;;
     esac
 done
 
@@ -214,6 +224,43 @@ fi
 # Perform uninstallation
 echo -e "${BLUE}Uninstalling...${NC}"
 echo ""
+
+# 0. matrix/hardened: remove agent-deck's Claude hook entries first, while
+# the binary still exists. Only hook commands containing "agent-deck" are
+# dropped; every other hook is kept. A timestamped (UTC) backup is made.
+for item in "${FOUND_ITEMS[@]}"; do
+    [[ "$item" == "claude-hooks" ]] || continue
+    echo -e "Removing agent-deck Claude hooks..."
+    if command -v agent-deck &>/dev/null && agent-deck hooks uninstall; then
+        # The Go remover writes settings.json.bak-agentdeck-uninstall-<UTC>.
+        echo -e "${GREEN}✓${NC} agent-deck hooks removed from $CLAUDE_SETTINGS"
+    elif command -v jq &>/dev/null; then
+        backup="$CLAUDE_SETTINGS.bak-agentdeck-uninstall-$(date -u +%Y%m%dT%H%M%SZ)"
+        cp -p "$CLAUDE_SETTINGS" "$backup"
+        tmp="$(mktemp "${CLAUDE_SETTINGS}.XXXXXX")"
+        if jq '
+            if (.hooks | type) == "object" then
+              .hooks |= (with_entries(
+                  if (.value | type) == "array" then
+                    .value |= (map(
+                        if (.hooks | type) == "array" then
+                          .hooks |= map(select(((.command // "") | tostring | contains("agent-deck")) | not))
+                        else . end)
+                      | map(select((.hooks | type) != "array" or (.hooks | length) > 0)))
+                  else . end)
+                | with_entries(select((.value | type) != "array" or (.value | length) > 0)))
+              | if (.hooks | length) == 0 then del(.hooks) else . end
+            else . end' "$CLAUDE_SETTINGS" > "$tmp"; then
+            mv "$tmp" "$CLAUDE_SETTINGS"
+            echo -e "${GREEN}✓${NC} agent-deck hooks removed (backup: $backup)"
+        else
+            rm -f "$tmp"
+            echo -e "${YELLOW}Warning: failed to edit $CLAUDE_SETTINGS; unchanged (backup: $backup)${NC}"
+        fi
+    else
+        echo -e "${YELLOW}Warning: neither agent-deck nor jq available; remove agent-deck hooks from $CLAUDE_SETTINGS by hand${NC}"
+    fi
+done
 
 # 1. Homebrew
 if [[ "$HOMEBREW_INSTALLED" == "true" ]]; then

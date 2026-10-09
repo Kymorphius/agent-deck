@@ -82,9 +82,11 @@ func TestShouldAutoInstallCursorHooks(t *testing.T) {
 			t.Cleanup(func() { homeBackgroundWorkersEnabled = orig })
 
 			got := shouldAutoInstallCursorHooks(tt.userConfig, tt.cursorCmd)
-			if got != tt.want {
+			// matrix/hardened: Cursor hooks are never auto-installed.
+			want := tt.want && !hardenedNoSilentHooks
+			if got != want {
 				t.Fatalf("shouldAutoInstallCursorHooks(cfg=%+v, cmd=%q) with workersEnabled=%v = %v, want %v",
-					tt.userConfig, tt.cursorCmd, tt.workersEnabled, got, tt.want)
+					tt.userConfig, tt.cursorCmd, tt.workersEnabled, got, want)
 			}
 		})
 	}

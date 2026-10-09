@@ -14,6 +14,7 @@ import (
 )
 
 func TestUploadHappyPathMapsToPostHogBatch(t *testing.T) {
+	t.Skip("matrix/hardened: telemetry sending removed (no key, post() is a no-op)")
 	c := env(t)
 	fake := newFakePostHog(t)
 	s := grant(t, c)
@@ -81,6 +82,7 @@ func TestUploadHappyPathMapsToPostHogBatch(t *testing.T) {
 }
 
 func TestUploadSendsOnlyCompletedHours(t *testing.T) {
+	t.Skip("matrix/hardened: telemetry sending removed (no key, post() is a no-op)")
 	c := env(t)
 	fake := newFakePostHog(t)
 	grant(t, c)
@@ -105,6 +107,7 @@ func TestUploadSendsOnlyCompletedHours(t *testing.T) {
 }
 
 func TestUploadRetryBackoffAndDailyAttemptBudget(t *testing.T) {
+	t.Skip("matrix/hardened: telemetry sending removed (no key, post() is a no-op)")
 	c := env(t)
 	fake := newFakePostHog(t)
 	grant(t, c)
@@ -145,6 +148,7 @@ func TestUploadRetryBackoffAndDailyAttemptBudget(t *testing.T) {
 }
 
 func TestUploadHonoursRetryAfterUpToSixHours(t *testing.T) {
+	t.Skip("matrix/hardened: telemetry sending removed (no key, post() is a no-op)")
 	c := env(t)
 	fake := newFakePostHog(t)
 	grant(t, c)
@@ -165,6 +169,7 @@ func TestUploadHonoursRetryAfterUpToSixHours(t *testing.T) {
 }
 
 func TestUploadRejectionStopsUntilNewVersionThenDrops(t *testing.T) {
+	t.Skip("matrix/hardened: telemetry sending removed (no key, post() is a no-op)")
 	c := env(t)
 	fake := newFakePostHog(t)
 	grant(t, c)
@@ -198,6 +203,7 @@ func TestUploadRejectionStopsUntilNewVersionThenDrops(t *testing.T) {
 }
 
 func TestUploadChunksAt500EventsAndFiveRequests(t *testing.T) {
+	t.Skip("matrix/hardened: telemetry sending removed (no key, post() is a no-op)")
 	c := env(t)
 	fake := newFakePostHog(t)
 	grant(t, c)
@@ -255,6 +261,7 @@ func TestUploadRefusesRedirects(t *testing.T) {
 }
 
 func TestUploadIgnoresProxyAndForeignEnvironment(t *testing.T) {
+	t.Skip("matrix/hardened: telemetry sending removed (no key, post() is a no-op)")
 	c := env(t)
 	fake := newFakePostHog(t)
 	for k, v := range map[string]string{
@@ -358,6 +365,7 @@ func TestLogModeUploadWritesLocallyAndNeverConnects(t *testing.T) {
 // TestProjectKeyNeverInLocalOutput: the key goes on the wire only; preview,
 // show-last (LastPayload) and the log-mode file carry the placeholder.
 func TestProjectKeyNeverInLocalOutput(t *testing.T) {
+	t.Skip("matrix/hardened: telemetry sending removed (no key, post() is a no-op)")
 	c := env(t)
 	fake := newFakePostHog(t)
 	grant(t, c)
@@ -394,6 +402,7 @@ func TestProjectKeyNeverInLocalOutput(t *testing.T) {
 }
 
 func TestWithAPIKeyOnlyAcceptsRedactedBatches(t *testing.T) {
+	t.Skip("matrix/hardened: telemetry sending removed (no key, post() is a no-op)")
 	env(t)
 	t.Setenv(EnvPostHogKey, testKey)
 	got, err := withAPIKey([]byte(`{"api_key":"` + redactedAPIKey + `","batch":[]}`))
@@ -427,6 +436,7 @@ func TestLogFileIsCapped(t *testing.T) {
 }
 
 func TestDisableWaitsForInFlightUploadThenNothingIsSent(t *testing.T) {
+	t.Skip("matrix/hardened: telemetry sending removed (no key, post() is a no-op)")
 	c := env(t)
 	fake := newFakePostHog(t)
 	grant(t, c)
@@ -510,6 +520,7 @@ func TestUploadHasOneOverallDeadline(t *testing.T) {
 }
 
 func TestRollupsAreRebuiltWithStableUUIDs(t *testing.T) {
+	t.Skip("matrix/hardened: telemetry sending removed (no key, post() is a no-op)")
 	c := env(t)
 	fake := newFakePostHog(t)
 	grant(t, c)
@@ -574,6 +585,7 @@ func TestResetIDRotatesAndDeletesSpool(t *testing.T) {
 }
 
 func TestUninstallIsTheOneSynchronousSend(t *testing.T) {
+	t.Skip("matrix/hardened: telemetry sending removed (no key, post() is a no-op)")
 	c := env(t)
 	fake := newFakePostHog(t)
 	SetProcess("9.9.9", SurfaceCLI)
@@ -592,6 +604,7 @@ func TestUninstallIsTheOneSynchronousSend(t *testing.T) {
 }
 
 func TestShowLastKeepsExactBody(t *testing.T) {
+	t.Skip("matrix/hardened: telemetry sending removed (no key, post() is a no-op)")
 	c := env(t)
 	fake := newFakePostHog(t)
 	grant(t, c)

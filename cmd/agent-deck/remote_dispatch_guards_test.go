@@ -102,7 +102,9 @@ func TestCLIDispatchTelemetryCounters(t *testing.T) {
 					t.Fatal(err)
 				}
 				spool, _ := os.ReadFile(filepath.Join(dataDir, telemetry.SpoolFileName))
-				if control == "enabled" {
+				// matrix/hardened: telemetry is compiled out, so even the
+				// "enabled" control must leave state and spool untouched.
+				if control == "enabled" && !hardenedTelemetryRemoved {
 					cmds := 0
 					for _, day := range got.Daily {
 						cmds += day.CLICmds
@@ -117,3 +119,6 @@ func TestCLIDispatchTelemetryCounters(t *testing.T) {
 		}
 	}
 }
+
+// hardenedTelemetryRemoved (matrix/hardened): no CLI telemetry is recorded.
+const hardenedTelemetryRemoved = true

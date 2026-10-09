@@ -319,7 +319,7 @@ func realUnattendedDeps(trigger string) (unattendedDeps, func()) {
 		updateBridge: update.UpdateBridgePy,
 		hygiene:      func() error { return rebootstrapLaunchAgentsAfterInstall(log) },
 		drainPending: func() error { return drainPendingLaunchAgents(log) },
-		ensureTimer:  func() (update.TimerEnsureResult, error) { return session.AutoEnsureUpdateTimer(log) },
+		ensureTimer:  nil, // matrix/hardened: unattended runs never (re)install the update timer
 		sweepRemotes: remoteFollowUpForTrigger(trigger, log),
 	}, closeLog
 }
@@ -586,6 +586,10 @@ func runTimerCommandOpts(cfg update.TimerConfig, r update.Runner, action string,
 	return 1
 }
 
+// hardenedTimerInstallDisabled: matrix/hardened build never installs the
+// auto-update timer, not even on explicit request.
+const hardenedTimerInstallDisabled = true
+
 // runTimerEnsure is --install-timer (explicit: rewrites a stale timer, a
 // skip is a failure) and --ensure-timer (automatic: honours manage_timer,
 // a skip is not a failure). Both leave an active, current timer alone and
@@ -621,6 +625,14 @@ func runTimerEnsure(cfg update.TimerConfig, r update.Runner, auto bool, opts tim
 			fmt.Fprintln(out, res.Line())
 		}
 		return code
+	}
+	// matrix/hardened: --install-timer and --ensure-timer never write or load
+	// the auto-update LaunchAgent/systemd timer. install exits 1 (an explicit
+	// request that was refused); ensure reports a skip and exits 0 so remote
+	// callers parsing --json treat it as a no-op. Only --uninstall-timer and
+	// --timer-status remain functional.
+	if hardenedTimerInstallDisabled {
+		return report(update.TimerEnsureResult{Action: update.TimerActionSkipped, Reason: "update timer install is disabled in this build (matrix/hardened); only --uninstall-timer is supported", Status: update.QueryTimerStatus(cfg, nil)}, nil)
 	}
 	if auto && !opts.ManageTimer {
 		return report(update.TimerEnsureResult{Action: update.TimerActionSkipped, Reason: "[updates] manage_timer = false", Status: update.QueryTimerStatus(cfg, nil)}, nil)

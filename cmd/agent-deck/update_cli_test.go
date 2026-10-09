@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -46,7 +47,7 @@ func TestBuildUpdateCheckJSON(t *testing.T) {
 	assert.Equal(t, "1.17.1", got["publishing"])
 	assert.Equal(t, false, got["auto_install"])
 	assert.Equal(t, true, got["auto_restart"], "unset auto_restart defaults to true")
-	assert.Equal(t, true, got["auto_update_remotes"], "unset auto_update_remotes defaults to true")
+	assert.Equal(t, false, got["auto_update_remotes"], "matrix/hardened: unset auto_update_remotes defaults to false")
 	timer := got["timer"].(map[string]any)
 	assert.Equal(t, true, timer["installed"])
 	assert.Equal(t, "launchd", timer["kind"])
@@ -302,18 +303,19 @@ func testTimerConfig(t *testing.T) update.TimerConfig {
 	}
 }
 
+// matrix/hardened: --install-timer is refused, even as a dry run.
 func TestRunTimerCommand_DryRunWritesNothing(t *testing.T) {
 	cfg := testTimerConfig(t)
 	r := &recordingRunner{}
 	var out bytes.Buffer
-	assert.Equal(t, 0, runTimerCommandWith(cfg, r, "install", true, &out))
+	assert.Equal(t, 1, runTimerCommandWith(cfg, r, "install", true, &out))
 	assert.Empty(t, r.calls)
 	assert.NoFileExists(t, cfg.PlistPath())
-	assert.Contains(t, out.String(), "Dry run: would install")
-	assert.Contains(t, out.String(), "launchctl bootstrap gui/501 "+cfg.PlistPath())
-	assert.Contains(t, out.String(), "<string>/bin/sh</string>")
+	assert.Contains(t, out.String(), "disabled in this build (matrix/hardened)")
 }
 
+// matrix/hardened: install is refused (nothing written, nothing run);
+// status and uninstall of a pre-existing timer still work.
 func TestRunTimerCommand_InstallStatusUninstall(t *testing.T) {
 	cfg := testTimerConfig(t)
 	r := &recordingRunner{}
@@ -323,24 +325,15 @@ func TestRunTimerCommand_InstallStatusUninstall(t *testing.T) {
 	assert.Contains(t, out.String(), "not installed")
 	out.Reset()
 
-	assert.Equal(t, 0, runTimerCommandWith(cfg, r, "install", false, &out))
-	assert.FileExists(t, cfg.PlistPath())
-	assert.Contains(t, out.String(), "✓ Update timer installed (launchd)")
-	assert.Contains(t, out.String(), "daily at 07:11 local time")
-	assert.Equal(t, []string{
-		"launchctl bootout gui/501/com.agentdeck.autoupdate",
-		"launchctl bootstrap gui/501 " + cfg.PlistPath(),
-		"launchctl print gui/501/com.agentdeck.autoupdate",
-		// #2472: the result reports the timer's state after the install
-		// (a read, like the verify step before it).
-		"launchctl print gui/501/com.agentdeck.autoupdate",
-	}, r.calls)
+	assert.Equal(t, 1, runTimerCommandWith(cfg, r, "install", false, &out))
+	assert.NoFileExists(t, cfg.PlistPath())
+	assert.Empty(t, r.calls)
+	assert.Contains(t, out.String(), "disabled in this build (matrix/hardened)")
 	out.Reset()
 
-	assert.Equal(t, 0, runTimerCommandWith(cfg, r, "status", false, &out))
-	assert.Contains(t, out.String(), "Update timer: active (launchd)")
-	out.Reset()
-
+	// A timer left behind by a stock install can still be removed.
+	require.NoError(t, os.MkdirAll(filepath.Dir(cfg.PlistPath()), 0o755))
+	require.NoError(t, os.WriteFile(cfg.PlistPath(), []byte("<plist/>"), 0o644))
 	r.calls = nil
 	assert.Equal(t, 0, runTimerCommandWith(cfg, r, "uninstall", false, &out))
 	assert.NoFileExists(t, cfg.PlistPath())
@@ -352,12 +345,13 @@ func TestRunTimerCommand_InstallStatusUninstall(t *testing.T) {
 	assert.Contains(t, out.String(), "not installed; nothing to remove")
 }
 
+// matrix/hardened: install is refused before any OS-specific planning.
 func TestRunTimerCommand_UnsupportedOS(t *testing.T) {
 	cfg := testTimerConfig(t)
 	cfg.GOOS = "windows"
 	var out bytes.Buffer
 	assert.Equal(t, 1, runTimerCommandWith(cfg, &recordingRunner{}, "install", false, &out))
-	assert.Contains(t, out.String(), "not supported on windows")
+	assert.Contains(t, out.String(), "matrix/hardened")
 }
 
 // The only thing left for unattendedSweepDecision to decide, once a caller

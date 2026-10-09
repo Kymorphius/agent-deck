@@ -185,8 +185,8 @@ func NewSettingsPanel() *SettingsPanel {
 		logMaxSizeMB:        10,
 		logMaxLines:         10000,
 		removeOrphans:       true,
-		checkForUpdates:     true,
-		autoInstall:         true,
+		checkForUpdates:     false, // matrix/hardened: no update polling by default
+		autoInstall:         false, // matrix/hardened: no unattended installs by default
 		autoRestart:         true,
 		globalSearchEnabled: true,
 		recentDays:          90,

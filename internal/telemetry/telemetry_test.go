@@ -109,7 +109,8 @@ func TestConsentGateTable(t *testing.T) {
 					}
 					c.set(at(1, 9, 0))
 					MaybeUpload(t.Context())
-					if want := st.ok && e.upload && tty; (fake.hits() > 0) != want {
+					// matrix/hardened: nothing is ever uploaded.
+					if want := false && st.ok && e.upload && tty; (fake.hits() > 0) != want {
 						t.Fatalf("uploaded=%v want %v", fake.hits() > 0, want)
 					}
 				})
@@ -906,7 +907,21 @@ func TestPromptTextFitsAndDisclosesDestination(t *testing.T) {
 	}
 }
 
+// matrix/hardened: every key source (config, env, compiled-in) is ignored.
+func TestHardenedIgnoresAllPostHogKeys(t *testing.T) {
+	env(t)
+	SetPostHogKey("phc_fromconfig0123456789ab")
+	t.Setenv(EnvPostHogKey, testKey)
+	prev := defaultPostHogKey
+	defaultPostHogKey = testKey
+	t.Cleanup(func() { defaultPostHogKey = prev; SetPostHogKey("") })
+	if k, ok := PostHogKey(); ok || k != "" || Configured() || PostHogKeySource() != KeySourceNone {
+		t.Fatalf("matrix/hardened: key must be ignored, got %q ok=%v src=%s", k, ok, PostHogKeySource())
+	}
+}
+
 func TestPostHogKeyPrecedenceAndValidation(t *testing.T) {
+	t.Skip("matrix/hardened: telemetry sending removed (no key, post() is a no-op)")
 	env(t)
 	if Configured() || PostHogKeySource() != KeySourceNone {
 		t.Fatal("no key must mean not configured")

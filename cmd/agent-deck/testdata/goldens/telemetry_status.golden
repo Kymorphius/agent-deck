@@ -1,5 +1,5 @@
 Telemetry: OFF
-  Reason:        consent has not been given (default off)
+  Reason:        telemetry is removed in this build (matrix/hardened)
   Consent:       undecided
   Install id:    -
   Level:         full

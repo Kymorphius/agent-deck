@@ -24,7 +24,7 @@ func TestAutoUpdate_RestartWaitsForSweepAndMarkerClears(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 	t.Setenv(update.SkipUpdateCheckEnv, "")
-	stubUpdateSettings(t, session.UpdateSettings{})
+	stubUpdateSettings(t, optedInUpdateSettings()) // matrix/hardened: explicit opt-in
 	lockDir := t.TempDir()
 	lockPath := filepath.Join(lockDir, update.UpdateLockFileName)
 

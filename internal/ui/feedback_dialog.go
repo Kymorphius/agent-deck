@@ -2,7 +2,6 @@ package ui
 
 import (
 	"fmt"
-	"os/exec"
 	"runtime"
 	"strings"
 	"time"
@@ -46,11 +45,7 @@ type feedbackDismissMsg struct{}
 // or "" on any error. Used by stepConfirm to show users which account will carry the
 // post before they consent (issue #679, v1.7.37 TUI fix). Overridable for tests.
 var ghUserLogin = func() string {
-	out, err := exec.Command("gh", "api", "user", "-q", ".login").Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
+	return "" // matrix/hardened: never call gh/GitHub
 }
 
 // FeedbackDialog is a self-contained in-app feedback popup.

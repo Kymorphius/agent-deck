@@ -44,7 +44,8 @@ func TestRunRemoteAutoUpdate_SkipsMissingAndStamps(t *testing.T) {
 	if !session.RemoteAutoUpdateRanAt().IsZero() {
 		t.Fatal("stamp must start zero in an isolated home")
 	}
-	settings := session.UpdateSettings{CheckIntervalHours: 24} // on by default
+	on := true // matrix/hardened: auto_update_remotes is off by default; opt in
+	settings := session.UpdateSettings{CheckIntervalHours: 24, AutoUpdateRemotes: &on}
 	if !session.ClaimRemoteAutoUpdateRun(settings, 2, Version, time.Now()) {
 		t.Fatal("the first startup must claim the sweep")
 	}

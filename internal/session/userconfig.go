@@ -1502,13 +1502,13 @@ type UpdateSettings struct {
 	// remote that reports an older agent-deck: after a successful
 	// `agent-deck update`, and in the background on startup (throttled by
 	// CheckIntervalHours). Never prompts; a remote that fails stays on its
-	// version and is logged. Default: true (nil = true); opt out with
-	// auto_update_remotes = false (issue #2164).
+	// version and is logged. matrix/hardened: Default false (nil = false);
+	// no unrequested release fetches. Opt in with auto_update_remotes = true.
 	AutoUpdateRemotes *bool `toml:"auto_update_remotes,omitempty"`
 	// AutoInstall installs an available update unattended (no prompt) from
 	// the TUI's periodic check and from the `agent-deck update` timer
-	// (launchd on macOS, systemd on Linux). Set false to opt out.
-	// Default: true (nil = true)
+	// (launchd on macOS, systemd on Linux).
+	// matrix/hardened: Default false (nil = false); opt in explicitly.
 	AutoInstall *bool `toml:"auto_install,omitempty"`
 
 	// AutoRestart re-executes the running process in place once a newer
@@ -1518,7 +1518,8 @@ type UpdateSettings struct {
 	AutoRestart *bool `toml:"auto_restart,omitempty"`
 
 	// CheckEnabled enables automatic update checks on startup
-	// Default: true (nil = true)
+	// matrix/hardened: Default false (nil = false); no release polling
+	// unless explicitly enabled.
 	CheckEnabled *bool `toml:"check_enabled,omitempty"`
 
 	// CheckIntervalHours is how often the startup remote sweep (see
@@ -1551,8 +1552,8 @@ type UpdateSettings struct {
 	// `update --install-timer`: `update --unattended`, the TUI's periodic
 	// check, the notify daemon at start and `remote update` install it
 	// where none is active and migrate a hand-made agentdeck-autoupdate
-	// pair (#2472). Default: true (nil = true); set false to manage the
-	// timer by hand.
+	// pair (#2472). matrix/hardened: Default false (nil = false), and the
+	// hardened build never self-installs the timer regardless of this value.
 	ManageTimer *bool `toml:"manage_timer,omitempty"`
 
 	// NotifyInCLI shows update notification in CLI commands (not just TUI)
@@ -1586,36 +1587,41 @@ func (u UpdateSettings) GetSweepRemotes() bool {
 }
 
 // GetManageTimer reports whether agent-deck installs and heals its own
-// update timer (default: true).
+// update timer (default: false).
 func (u UpdateSettings) GetManageTimer() bool {
 	if u.ManageTimer == nil {
-		return true
+		// matrix/hardened: never self-install the update timer by default.
+		return false
 	}
 	return *u.ManageTimer
 }
 
-// GetCheckEnabled returns whether update checks are enabled (default: true).
+// GetCheckEnabled returns whether update checks are enabled (default: false).
 func (u UpdateSettings) GetCheckEnabled() bool {
 	if u.CheckEnabled == nil {
-		return true
+		// matrix/hardened: no update polling unless explicitly enabled.
+		return false
 	}
 	return *u.CheckEnabled
 }
 
 // GetAutoUpdateRemotes returns whether older remotes follow the controller's
-// version on their own (default: true).
+// version on their own (default: false).
 func (u UpdateSettings) GetAutoUpdateRemotes() bool {
 	if u.AutoUpdateRemotes == nil {
-		return true
+		// matrix/hardened: no background release fetches for remotes unless
+		// explicitly enabled.
+		return false
 	}
 	return *u.AutoUpdateRemotes
 }
 
 // GetAutoInstall reports whether available updates are installed unattended
-// (default: true).
+// (default: false).
 func (u UpdateSettings) GetAutoInstall() bool {
 	if u.AutoInstall == nil {
-		return true
+		// matrix/hardened: no unattended installs unless explicitly enabled.
+		return false
 	}
 	return *u.AutoInstall
 }
@@ -2054,8 +2060,8 @@ type ClaudeSettings struct {
 	ConfigDir string `toml:"config_dir,omitempty"`
 
 	// DangerousMode enables --dangerously-skip-permissions flag for Claude sessions
-	// Default: true (nil = use default true, explicitly set false to disable)
-	// Power users typically want this enabled for faster iteration
+	// matrix/hardened: Default false (nil = false); set dangerous_mode = true
+	// explicitly to enable.
 	DangerousMode *bool `toml:"dangerous_mode,omitempty"`
 
 	// AllowDangerousMode enables --allow-dangerously-skip-permissions flag
@@ -2440,11 +2446,12 @@ func (c *UserConfig) GetConductorHermesEnvFile(name string) string {
 	return conductorCfg.Hermes.EnvFile
 }
 
-// GetDangerousMode returns whether dangerous mode is enabled, defaulting to true
-// Power users (the primary audience) typically want this enabled for faster iteration
+// GetDangerousMode returns whether dangerous mode is enabled.
+// matrix/hardened: defaults to false; dangerous mode only applies when
+// dangerous_mode = true is set explicitly in config.
 func (c *ClaudeSettings) GetDangerousMode() bool {
 	if c.DangerousMode == nil {
-		return true
+		return false
 	}
 	return *c.DangerousMode
 }
@@ -5442,22 +5449,23 @@ remove_orphans = true
 [updates]
 # Offer to install an available update when the TUI starts (default: false)
 # auto_update = true
-# Install available updates unattended: from the TUI's periodic check and
-# from the "agent-deck update --install-timer" job (default: true)
-auto_install = true
+# Install available updates unattended from the TUI's periodic check
+# (default: false; matrix/hardened build)
+auto_install = false
 # Restart agent-deck in place once a newer binary is installed (default: true)
 auto_restart = true
-# Enable update checks on startup (default: true)
-check_enabled = true
+# Enable update checks on startup (default: false; matrix/hardened build:
+# no release polling unless you opt in)
+check_enabled = false
 # How often to poll GitHub for a new release, e.g. "90s", "2m" (default: "90s").
 # Polls are conditional (ETag) so an unchanged answer (304) is nearly free.
 # check_interval = "90s"
 # Push the controller's binary onto every configured remote after an
 # install, instead of nudging remotes to pull it themselves (default: false)
 # sweep_remotes = true
-# Install and heal the update timer automatically (unattended runs, the TUI,
-# the notify daemon, remote update); false leaves it to --install-timer
-# (default: true)
+# Install and heal the update timer automatically (default: false).
+# matrix/hardened: this build never installs the auto-update timer, whatever
+# this value; only "agent-deck update --uninstall-timer" is supported.
 # manage_timer = false
 # Show update notification in CLI commands, not just TUI (default: true)
 notify_in_cli = true

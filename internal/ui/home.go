@@ -61,6 +61,14 @@ import (
 // Version is set by main.go for update checking
 var Version = "0.0.0"
 
+// hardenedNoPrompts (matrix/hardened) disables the telemetry consent dialog
+// and the feedback popup / ctrl+e feedback dialog in the TUI.
+const hardenedNoPrompts = true
+
+// hardenedNoSilentHooks (matrix/hardened) stops the TUI from silently
+// writing tool hook files (Cursor) at startup.
+const hardenedNoSilentHooks = true
+
 // SetVersion sets the current version for update checking
 func SetVersion(v string) {
 	Version = v
@@ -1897,6 +1905,11 @@ var homeBackgroundWorkersEnabled = true
 // (storage, tmux, goroutines) — mirrors why AutoInstallCursorHooks was pulled
 // out of this same function in #1673.
 func shouldAutoInstallCursorHooks(userConfig *session.UserConfig, cursorCmd string) bool {
+	// matrix/hardened: never silently write ~/.cursor/hooks.json at TUI
+	// startup; only `agent-deck cursor-hooks install` does.
+	if hardenedNoSilentHooks {
+		return false
+	}
 	cursorHooksEnabled := userConfig == nil || userConfig.Cursor.GetHooksEnabled()
 	return homeBackgroundWorkersEnabled && cursorHooksEnabled && cursorCmd != ""
 }
@@ -1923,17 +1936,20 @@ type claudeHooksStartup struct {
 // "not installed, never asked" and re-prompted a user who had already
 // installed. Presence is consent: a present-but-drifted install is repaired
 // silently and never prompted; only an ABSENT install with no answer asks.
+//
+// matrix/hardened: never returns reinstall. Hooks are only written by an
+// explicit `agent-deck hooks install` or an explicit yes to the prompt in
+// this run. Drift is left alone (watch only); any recorded answer
+// (accepted or declined) with hooks absent means the user removed them, so
+// removal revokes consent and nothing is written or asked.
 func claudeHooksStartupDecision(present, installed bool, prompted string) claudeHooksStartup {
 	switch {
 	case installed:
 		return claudeHooksStartup{watch: true}
 	case present:
-		return claudeHooksStartup{reinstall: true, watch: true}
-	case prompted == "accepted":
-		// User previously accepted but hooks got removed: re-install silently.
-		return claudeHooksStartup{reinstall: true, watch: true}
+		return claudeHooksStartup{watch: true}
 	case prompted != "":
-		// "declined": user doesn't want hooks, skip.
+		// "accepted" then removed, or "declined": do nothing.
 		return claudeHooksStartup{}
 	default:
 		return claudeHooksStartup{prompt: true}
@@ -2285,9 +2301,9 @@ func NewHomeWithProfileAndMode(profile string) *Home {
 				uiLog.Info("claude_hooks_reinstalled", slog.String("config_dir", configDir))
 			}
 		}
-		if decision.reinstall || decision.watch {
-			logUsageFeedResults(session.HealUsageFeeds(userConfig))
-		}
+		// matrix/hardened: no HealUsageFeeds at startup; it silently rewrites
+		// the statusLine in profile settings.json files. Usage feeds are
+		// still wired by an explicit `agent-deck hooks install`.
 		if decision.watch {
 			hookWatcher, err := session.NewStatusFileWatcher(nil)
 			if err != nil {
@@ -4065,11 +4081,9 @@ func (h *Home) Init() tea.Cmd {
 		h.requestUpdateCheck(time.Now()),
 		h.fetchRemoteSessions,
 		h.waitRemoteChange,
-		// Opt-in telemetry upload check, now and hourly. MaybeUpload re-reads
-		// consent from disk and the kill switches from env, so this is a
-		// no-op for everyone who has not said yes.
-		telemetryUploadCmd(),
-		telemetryUploadTick(),
+		// matrix/hardened: no telemetry upload attempt at launch or hourly
+		// (telemetryUploadCmd/telemetryUploadTick removed; telemetry is
+		// compiled out of this build).
 	}
 
 	// Start listening for storage changes
@@ -7694,7 +7708,8 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// no other dialog is on screen; otherwise it waits for a later
 		// launch. It takes precedence over the feedback prompt so the two
 		// never stack.
-		if firstLoad && h.telemetryDialog != nil && !h.telemetryDialog.IsVisible() && !h.insertMode && !h.hasModalVisible() {
+		// matrix/hardened: the telemetry consent dialog is never shown.
+		if !hardenedNoPrompts && firstLoad && h.telemetryDialog != nil && !h.telemetryDialog.IsVisible() && !h.insertMode && !h.hasModalVisible() {
 			if h.telemetryDialog.Show(Version, telemetry.LoadState()) {
 				h.telemetryDialog.SetSize(h.width, h.height)
 			}
@@ -7703,7 +7718,9 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Show feedback popup if user has a new version and hasn't rated yet (D-11/D-12).
 		// v1.7.38: also skip when the user's config.toml has [feedback].disabled=true,
 		// so a user who opts out via config edit (not just state.json) is honoured.
-		if h.feedbackDialog != nil && !h.feedbackDialog.IsVisible() && (h.telemetryDialog == nil || !h.telemetryDialog.IsVisible()) {
+		// matrix/hardened: feedback popup never auto-shown (it posts publicly
+		// to a GitHub Discussion via gh).
+		if !hardenedNoPrompts && h.feedbackDialog != nil && !h.feedbackDialog.IsVisible() && (h.telemetryDialog == nil || !h.telemetryDialog.IsVisible()) {
 			fbState, _ := feedback.LoadState()
 			cfg, _ := session.LoadUserConfig()
 			configDisabled := cfg != nil && cfg.Feedback.Disabled
@@ -10922,7 +10939,13 @@ func persistClaudeDialogDefaults(opts *session.ClaudeOptions, args []string) {
 	} else {
 		cfg.Claude.ExtraArgs = cleaned
 	}
-	cfg.Claude.DangerousMode = &opts.SkipPermissions
+	// matrix/hardened: the dialog never persists dangerous_mode=true; it can
+	// only lower the setting. The per-session choice still goes into the
+	// session's own tool options.
+	if !opts.SkipPermissions {
+		f := false
+		cfg.Claude.DangerousMode = &f
+	}
 	cfg.Claude.AllowDangerousMode = opts.AllowSkipPermissions
 	cfg.Claude.AutoMode = opts.AutoMode
 	cfg.Claude.UseChrome = opts.UseChrome
@@ -13024,7 +13047,8 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "ctrl+e":
 		// Open feedback dialog on demand (per D-11: bypasses ShouldShow -- user-initiated)
-		if h.feedbackDialog != nil {
+		// matrix/hardened: feedback dialog disabled (it posts publicly via gh).
+		if !hardenedNoPrompts && h.feedbackDialog != nil {
 			st := h.feedbackState
 			if st == nil {
 				// Lazy-load state: h.feedbackState may be nil if the user already rated

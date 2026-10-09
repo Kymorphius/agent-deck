@@ -15,6 +15,10 @@ const EnvPostHogKey = "AGENTDECK_POSTHOG_KEY"
 // it empty and, without an env or config key, spool locally and never upload.
 var defaultPostHogKey = ""
 
+// hardenedNoTelemetry is the matrix/hardened telemetry kill switch: no key,
+// no network sends, consent never asked, stored consent ignored.
+const hardenedNoTelemetry = true
+
 var (
 	configKey   string
 	configLevel Level
@@ -60,6 +64,12 @@ const (
 )
 
 func postHogKeyWithSource() (string, string) {
+	// matrix/hardened: this build has no PostHog key. Compiled-in (-X),
+	// AGENTDECK_POSTHOG_KEY and [telemetry].posthog_key are all ignored, so
+	// Configured() is always false and nothing can be uploaded.
+	if hardenedNoTelemetry {
+		return "", KeySourceNone
+	}
 	if defaultPostHogKey != "" {
 		return defaultPostHogKey, KeySourceCompiled
 	}

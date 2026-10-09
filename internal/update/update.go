@@ -13,7 +13,6 @@ import (
 	"io/fs"
 	"net/http"
 	"os"
-	"os/exec"
 	"os/user"
 	"path/filepath"
 	"runtime"
@@ -224,34 +223,11 @@ func saveCache(cache *UpdateCache) error {
 	return os.WriteFile(cachePath, data, 0644)
 }
 
-// resolveGitHubToken returns a GitHub token from (in order) GITHUB_TOKEN,
-// GH_TOKEN, or `gh auth token --hostname github.com`. Returns "" if none
-// are available. The gh lookup is pinned to github.com because that is the
-// only host we talk to: without the flag gh returns the token for its
-// "default" host, which on a GitHub Enterprise-only machine is the
-// enterprise credential. Any failure invoking `gh` (including "no token
-// for github.com") is treated as "no token" so we fall back to anonymous
-// requests.
-func resolveGitHubToken() string {
-	if t := strings.TrimSpace(os.Getenv("GITHUB_TOKEN")); t != "" {
-		return t
-	}
-	if t := strings.TrimSpace(os.Getenv("GH_TOKEN")); t != "" {
-		return t
-	}
-	if _, err := exec.LookPath("gh"); err != nil {
-		return ""
-	}
-	out, err := exec.Command("gh", "auth", "token", "--hostname", "github.com").Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
-}
-
-// githubAPIGet performs an authenticated GET against the GitHub API when a
-// token is available. On a 403 response from an unauthenticated request it
-// returns a friendlier rate-limit error pointing the user at authentication.
+// githubAPIGet performs an anonymous GET against the GitHub API. On a 403
+// response it returns a friendlier rate-limit error.
+//
+// matrix/hardened: resolveGitHubToken (GITHUB_TOKEN / GH_TOKEN / `gh auth
+// token`) was removed; release requests never carry a GitHub credential.
 func githubAPIGet(url string) (*http.Response, bool, error) {
 	return githubAPIGetConditional(url, "")
 }
@@ -265,11 +241,9 @@ func githubAPIGetConditional(url, etag string) (*http.Response, bool, error) {
 	if err != nil {
 		return nil, false, err
 	}
-	token := resolveGitHubToken()
-	authed := token != ""
-	if authed {
-		req.Header.Set("Authorization", "Bearer "+token)
-	}
+	// matrix/hardened: never attach a GitHub credential (Authorization
+	// header) to release requests (privacy). Always anonymous.
+	authed := false
 	req.Header.Set("Accept", "application/vnd.github+json")
 	if etag != "" {
 		req.Header.Set("If-None-Match", etag)
@@ -287,7 +261,7 @@ func githubAPIGetConditional(url, etag string) (*http.Response, bool, error) {
 // GitHub, or the original status-based error otherwise.
 func rateLimitError(status int, authed bool) error {
 	if status == http.StatusForbidden && !authed {
-		return fmt.Errorf("GitHub API rate limit exceeded (anonymous limit is 60/hour). Set GITHUB_TOKEN or install/login with the gh CLI to authenticate")
+		return fmt.Errorf("GitHub API rate limit exceeded (anonymous limit is 60/hour). Please retry later")
 	}
 	return fmt.Errorf("GitHub API returned status %d", status)
 }
@@ -467,7 +441,7 @@ func FetchReleaseByTag(tag string) (*Release, error) {
 	}
 	if resp.StatusCode != http.StatusOK {
 		if resp.StatusCode == http.StatusForbidden && !authed {
-			return nil, fmt.Errorf("GitHub API rate limit exceeded fetching release %s (anonymous limit is 60/hour). Set GITHUB_TOKEN or install/login with the gh CLI to authenticate", normalized)
+			return nil, fmt.Errorf("GitHub API rate limit exceeded fetching release %s (anonymous limit is 60/hour). Please retry later", normalized)
 		}
 		return nil, fmt.Errorf("GitHub API returned status %d for release %s", resp.StatusCode, normalized)
 	}

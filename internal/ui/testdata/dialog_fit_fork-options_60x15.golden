@@ -6,7 +6,7 @@
     │    [ ] Run in Docker sandbox                     │
     │                                                  │
     │  ─ Advanced Options ─                            │
-    │  ▶ [x] Skip permissions                          │
+    │  ▶ [ ] Skip permissions                          │
     │    [ ] Auto mode                                 │
     │  ▼ more below                                    │
     │  Enter create │ Esc cancel                       │

@@ -210,23 +210,18 @@ func TestAutoEnsureUpdateTimer_Gates(t *testing.T) {
 		ran++
 		return update.TimerEnsureResult{Action: update.TimerActionInstalled}, nil
 	}
-	off := false
-	updateTimerSettings = func() UpdateSettings { return UpdateSettings{ManageTimer: &off} }
+	// matrix/hardened: AutoEnsureUpdateTimer never installs, whatever
+	// manage_timer or suppression say; manage_timer defaults to false.
+	on, off := true, false
 	updateTimerSuppressed = func() string { return "" }
-	if res, _ := AutoEnsureUpdateTimer(nil); res.Action != update.TimerActionSkipped || !strings.Contains(res.Reason, "manage_timer = false") || ran != 0 {
-		t.Fatalf("manage_timer off: %+v ran=%d", res, ran)
+	for _, s := range []UpdateSettings{{ManageTimer: &off}, {ManageTimer: &on}, {}} {
+		updateTimerSettings = func() UpdateSettings { return s }
+		if res, _ := AutoEnsureUpdateTimer(nil); res.Action != update.TimerActionSkipped || !strings.Contains(res.Reason, "matrix/hardened") || ran != 0 {
+			t.Fatalf("settings %+v: %+v ran=%d", s, res, ran)
+		}
 	}
-	updateTimerSettings = func() UpdateSettings { return UpdateSettings{} }
-	updateTimerSuppressed = func() string { return "CI=true" }
-	if res, _ := AutoEnsureUpdateTimer(nil); res.Action != update.TimerActionSkipped || ran != 0 {
-		t.Fatalf("suppressed: %+v ran=%d", res, ran)
-	}
-	updateTimerSuppressed = func() string { return "" }
-	if res, _ := AutoEnsureUpdateTimer(nil); res.Action != update.TimerActionInstalled || ran != 1 {
-		t.Fatalf("default (manage_timer unset = true): %+v ran=%d", res, ran)
-	}
-	if !(UpdateSettings{}).GetManageTimer() {
-		t.Fatal("manage_timer defaults to true")
+	if (UpdateSettings{}).GetManageTimer() {
+		t.Fatal("matrix/hardened: manage_timer defaults to false")
 	}
 }
 

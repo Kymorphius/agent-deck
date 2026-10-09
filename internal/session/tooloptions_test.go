@@ -332,15 +332,15 @@ func TestNewClaudeOptions_AllowDangerousMode(t *testing.T) {
 }
 
 func TestNewClaudeOptions_DefaultDangerousMode(t *testing.T) {
-	// With nil DangerousMode (default=true), SkipPermissions should be true
+	// matrix/hardened: nil dangerous_mode defaults to false
 	config := &UserConfig{
 		Claude: ClaudeSettings{},
 	}
 
 	opts := NewClaudeOptions(config)
 
-	if !opts.SkipPermissions {
-		t.Error("expected SkipPermissions=true when dangerous_mode is nil (default=true)")
+	if opts.SkipPermissions {
+		t.Error("matrix/hardened: expected SkipPermissions=false when dangerous_mode is nil (default=false)")
 	}
 }
 

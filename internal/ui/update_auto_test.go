@@ -31,12 +31,19 @@ func stubUpdateSettings(t *testing.T, s session.UpdateSettings) {
 	t.Cleanup(func() { loadUpdateSettings = prev })
 }
 
+// optedInUpdateSettings explicitly enables check_enabled and auto_install.
+// matrix/hardened: both default to false now, so tests of the (opt-in)
+// automatic check/install behaviour must turn them on explicitly.
+func optedInUpdateSettings() session.UpdateSettings {
+	return session.UpdateSettings{CheckEnabled: boolPtr(true), AutoInstall: boolPtr(true)}
+}
+
 // newAutoInstallTestHome is a clean home with an installable update, the
 // default settings (auto_install on) and a fake updater.
 func newAutoInstallTestHome(t *testing.T) (*Home, *fakeUpdater) {
 	t.Helper()
 	t.Setenv(update.SkipUpdateCheckEnv, "")
-	stubUpdateSettings(t, session.UpdateSettings{})
+	stubUpdateSettings(t, optedInUpdateSettings()) // matrix/hardened: explicit opt-in
 	f := &fakeUpdater{output: "Updated to v1.16.1\n"}
 	prev := runUnattendedUpdate
 	runUnattendedUpdate = f.run

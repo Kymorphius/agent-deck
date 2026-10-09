@@ -73,6 +73,8 @@ const (
 	ReasonConfigError  DisableReason = "config.toml could not be read, so telemetry is treated as disabled"
 	ReasonUndecided    DisableReason = "consent has not been given (default off)"
 	ReasonDeclined     DisableReason = "consent was declined"
+	// matrix/hardened: telemetry is removed from this build.
+	ReasonHardened DisableReason = "telemetry is removed in this build (matrix/hardened)"
 )
 
 // Configuration can only disable telemetry; unreadable config fails closed.
@@ -95,8 +97,14 @@ var testAllowed bool
 
 // HardDisableReason returns the first hard-disable that applies, or ReasonNone.
 func HardDisableReason() DisableReason {
-	if testing.Testing() && !testAllowed {
-		return ReasonTestBinary
+	// matrix/hardened: always hard-off outside tests. testAllowed is only
+	// settable via EnableForTest(testing.TB). Because Enabled/ShouldPrompt
+	// check this first, stored consent is ignored and no prompt is shown.
+	if !testAllowed {
+		if testing.Testing() {
+			return ReasonTestBinary
+		}
+		return ReasonHardened
 	}
 	if v, ok := os.LookupEnv(EnvTelemetry); ok && !isExplicitOn(v) {
 		return ReasonEnvTelemetry

@@ -2,7 +2,8 @@
 
 BINARY_NAME=agent-deck
 BUILD_DIR=./build
-VERSION=$(shell git describe --tags --always --dirty 2>/dev/null | sed 's/^v//' || echo "dev")
+# matrix/hardened: pin the hardened build's version (was git describe).
+VERSION ?= 1.16.26-matrix.1
 LDFLAGS=-ldflags "-X main.Version=$(VERSION)"
 
 # Tailwind v4 standalone CLI (PERF-01)

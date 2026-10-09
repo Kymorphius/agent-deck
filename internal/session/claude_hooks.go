@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"al.essio.dev/pkg/shellescape"
 	"github.com/asheshgoplani/agent-deck/internal/atomicfile"
@@ -383,8 +384,15 @@ func RemoveClaudeHooks(configDir string) (bool, error) {
 	}
 
 	removed := false
-	for _, cfg := range hookEventConfigs {
-		raw, ok := hooksObj.get(cfg.Event)
+	// matrix/hardened: scan every event in the hooks section, not only the
+	// ones this version installs, so agent-deck entries under legacy events
+	// are removed too. Non-agent-deck hooks are kept losslessly.
+	events := make([]string, 0, len(hooksObj))
+	for _, f := range hooksObj {
+		events = append(events, f.Key)
+	}
+	for _, event := range events {
+		raw, ok := hooksObj.get(event)
 		if !ok {
 			continue
 		}
@@ -394,13 +402,20 @@ func RemoveClaudeHooks(configDir string) (bool, error) {
 		}
 		removed = true
 		if cleaned == nil {
-			hooksObj.del(cfg.Event)
+			hooksObj.del(event)
 		} else {
-			hooksObj.set(cfg.Event, cleaned)
+			hooksObj.set(event, cleaned)
 		}
 	}
 	if !removed {
 		return false, nil
+	}
+
+	// matrix/hardened: keep a timestamped (UTC) backup of the original
+	// settings.json next to it before rewriting; abort if it can't be made.
+	backupPath := filepath.Join(configDir, "settings.json.bak-agentdeck-uninstall-"+time.Now().UTC().Format("20060102T150405Z"))
+	if err := os.WriteFile(backupPath, data, 0o600); err != nil {
+		return false, fmt.Errorf("backup settings.json: %w", err)
 	}
 
 	// If hooks map is empty, remove the key entirely

@@ -44,7 +44,8 @@ import (
 	"github.com/asheshgoplani/agent-deck/internal/web"
 )
 
-var Version = "1.16.26" // overridden at build time via -ldflags "-X main.Version=..."
+// matrix/hardened: identifies our hardened build.
+var Version = "1.16.26-matrix.1" // overridden at build time via -ldflags "-X main.Version=..."
 
 // Table column widths for list command output
 const (
@@ -1424,6 +1425,10 @@ func startHeadlessAutoInstall(ctx context.Context) {
 	go inst.Run(ctx)
 }
 
+// headlessUpdateSettings reads [updates] for newHeadlessAutoInstaller; a
+// seam for tests (matrix/hardened opt-in gate).
+var headlessUpdateSettings = session.GetUpdateSettings
+
 // newHeadlessAutoInstaller builds the daemon's installer, or nil when the
 // process must not install on its own.
 func newHeadlessAutoInstaller(exe string, homebrewManaged func() bool) *update.Installer {
@@ -1434,6 +1439,13 @@ func newHeadlessAutoInstaller(exe string, homebrewManaged func() bool) *update.I
 	}
 	if homebrewManaged() {
 		webLog.Debug("auto_install_disabled", slog.String("reason", "homebrew-managed install"))
+		return nil
+	}
+	// matrix/hardened: the headless installer (web --no-tui, notify daemon)
+	// polls GitHub every tick even when auto_install is off. Build none at
+	// all unless both check_enabled and auto_install were set explicitly.
+	if us := headlessUpdateSettings(); !us.GetCheckEnabled() || !us.GetAutoInstall() {
+		webLog.Info("auto_install_disabled", slog.String("reason", "check_enabled/auto_install off (matrix/hardened)"))
 		return nil
 	}
 	return &update.Installer{
@@ -4004,8 +4016,8 @@ func handleUpdate(args []string) {
 	unattended := fs.Bool("unattended", false, "Install without prompts (no changelog, no stdin); honours [updates] auto_install; exit 2 on Homebrew installs")
 	checkNow := fs.Bool("check-now", false, "Same as --unattended, but for a controller's nudge: checks GitHub right away and never nudges this host's own remotes")
 	trigger := fs.String("trigger", "", "Who started this run, for the debug log: tui, timer or manual (default: $AGENTDECK_UPDATE_TRIGGER or manual)")
-	installTimer := fs.Bool("install-timer", false, "Install the daily unattended update timer (launchd on macOS, systemd --user on Linux), rewrite a stale one, migrate a legacy agentdeck-autoupdate unit; an active current timer is left alone")
-	ensureTimer := fs.Bool("ensure-timer", false, "Install or heal the update timer only where none is active (what unattended runs, the daemon and remote update do); honours [updates] manage_timer")
+	installTimer := fs.Bool("install-timer", false, "(disabled in matrix/hardened build) Install the daily unattended update timer (launchd on macOS, systemd --user on Linux), rewrite a stale one, migrate a legacy agentdeck-autoupdate unit; an active current timer is left alone")
+	ensureTimer := fs.Bool("ensure-timer", false, "(disabled in matrix/hardened build; no-op) Install or heal the update timer only where none is active (what unattended runs, the daemon and remote update do); honours [updates] manage_timer")
 	uninstallTimer := fs.Bool("uninstall-timer", false, "Remove the daily unattended update timer")
 	timerStatus := fs.Bool("timer-status", false, "Show whether the daily update timer is installed and loaded (kinds: launchd, systemd, systemd-legacy, none)")
 	dryRun := fs.Bool("dry-run", false, "With --install-timer/--ensure-timer/--uninstall-timer: print the files and commands, execute nothing")
@@ -4025,9 +4037,7 @@ func handleUpdate(args []string) {
 		fmt.Println("  agent-deck update --version 1.7.3     # Install a specific version (may downgrade)")
 		fmt.Println("  agent-deck update --unattended        # No prompts; what the timer and the TUI run")
 		fmt.Println("  agent-deck update --check-now          # What a controller's nudge runs on this host")
-		fmt.Println("  agent-deck update --install-timer     # Daily unattended update at 07:MM (random minute)")
-		fmt.Println("  agent-deck update --install-timer --dry-run")
-		fmt.Println("  agent-deck update --ensure-timer      # Install/heal only where no timer is active")
+		// matrix/hardened: --install-timer / --ensure-timer are disabled in this build.
 		fmt.Println("  agent-deck update --uninstall-timer")
 		fmt.Println("  agent-deck update --timer-status [--json]")
 		fmt.Println()
@@ -4069,6 +4079,13 @@ func handleUpdate(args []string) {
 		effectiveTrigger := updateTrigger(*trigger)
 		if *checkNow && strings.TrimSpace(*trigger) == "" {
 			effectiveTrigger = "nudge"
+		}
+		// matrix/hardened: an unattended run (e.g. a leftover timer from a
+		// stock install, or a remote nudge) never contacts GitHub unless
+		// [updates] check_enabled = true was set explicitly.
+		if !session.GetUpdateSettings().GetCheckEnabled() {
+			fmt.Println("Unattended update skipped: [updates] check_enabled is off (matrix/hardened)")
+			exit(0)
 		}
 		deps, closeAudit := realUnattendedDeps(effectiveTrigger)
 		code := runUnattendedUpdate(deps)
@@ -4825,6 +4842,16 @@ func handleUninstall(args []string) {
 		}
 	}
 
+	// matrix/hardened: agent-deck's Claude hook entries in settings.json.
+	// Resolve the Claude config dir (and load config.toml for the profile
+	// usage-feed statusLines) now, while config.toml still exists.
+	uninstallUserCfg, _ := session.LoadUserConfig()
+	claudeSettings := filepath.Join(session.GetClaudeConfigDir(), "settings.json")
+	if data, err := os.ReadFile(claudeSettings); err == nil && strings.Contains(string(data), "agent-deck") {
+		foundItems = append(foundItems, uninstallFoundItem{"claude-hooks", claudeSettings, "agent-deck hooks in Claude settings.json"})
+		fmt.Printf("Found: agent-deck hooks in %s\n", claudeSettings)
+	}
+
 	fmt.Println()
 
 	// Nothing found?
@@ -4894,6 +4921,8 @@ func handleUninstall(args []string) {
 			} else {
 				fmt.Println("  • tmux config block in ~/.tmux.conf")
 			}
+		case "claude-hooks":
+			fmt.Printf("  • agent-deck hook entries in %s (other hooks kept, backup made)\n", item.path)
 		}
 	}
 
@@ -4917,8 +4946,8 @@ func handleUninstall(args []string) {
 		return
 	}
 
-	// Opt-in telemetry: the one synchronous send, only with consent.
-	maybeSendUninstallTelemetry(os.Stdin, os.Stdout, !*yes)
+	// matrix/hardened: no uninstall telemetry (no reason prompt, no send);
+	// upstream called maybeSendUninstallTelemetry here.
 
 	fmt.Println("Uninstalling...")
 	fmt.Println()
@@ -5033,6 +5062,33 @@ func handleUninstall(args []string) {
 					fmt.Printf("Warning: failed to update tmux config: %v\n", err)
 				} else {
 					fmt.Printf("✓ tmux configuration removed (backup: %s)\n", backupPath)
+				}
+			}
+		}
+	}
+
+	// 3b. matrix/hardened: remove agent-deck's Claude hook entries (only
+	// agent-deck commands; all other hooks kept; RemoveClaudeHooks writes a
+	// timestamped backup first) and restore profile usage-feed statusLines.
+	for _, item := range foundItems {
+		if item.itemType != "claude-hooks" {
+			continue
+		}
+		fmt.Println("Removing agent-deck Claude hooks...")
+		if removed, err := session.RemoveClaudeHooks(filepath.Dir(item.path)); err != nil {
+			fmt.Printf("Warning: failed to remove Claude hooks: %v\n", err)
+		} else if removed {
+			fmt.Printf("✓ agent-deck hooks removed from %s (backup: %s.bak-agentdeck-uninstall-*)\n", item.path, item.path)
+		} else {
+			fmt.Println("  No agent-deck hook entries found")
+		}
+		if uninstallUserCfg != nil {
+			for _, r := range session.RemoveUsageFeeds(uninstallUserCfg) {
+				switch {
+				case r.Err != nil:
+					fmt.Printf("Warning: usage feed %s: %v\n", r.Slot, r.Err)
+				case r.Changed:
+					fmt.Printf("✓ Usage feed %s: statusLine restored\n", r.Slot)
 				}
 			}
 		}

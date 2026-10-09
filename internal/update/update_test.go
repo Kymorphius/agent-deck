@@ -584,38 +584,30 @@ func TestHomebrewUpgradeHint(t *testing.T) {
 	}
 }
 
-// installFakeGh writes an executable `gh` shell script into a temp dir and
-// prepends that dir to PATH so resolveGitHubToken's fallback runs it.
-func installFakeGh(t *testing.T, script string) string {
-	t.Helper()
+// matrix/hardened: resolveGitHubToken was removed. Replace its tests with a
+// guard that release requests never carry an Authorization header, even when
+// GITHUB_TOKEN/GH_TOKEN are set and a `gh` on PATH would hand out a token.
+func TestGitHubAPIGet_NeverSendsAuthorization(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("fake gh shell script requires a POSIX shell")
 	}
 	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "gh"), []byte("#!/bin/sh\n"+script), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "gh"), []byte("#!/bin/sh\necho gh_fake_token\n"), 0o755))
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	t.Setenv("GITHUB_TOKEN", "")
-	t.Setenv("GH_TOKEN", "")
-	return dir
-}
+	t.Setenv("GITHUB_TOKEN", "env_fake_token")
+	t.Setenv("GH_TOKEN", "env_fake_token2")
 
-func TestResolveGitHubToken_OnlyUsesGithubComScopedGhToken(t *testing.T) {
-	t.Run("passes --hostname github.com", func(t *testing.T) {
-		dir := installFakeGh(t, `echo "$@" >> "$(dirname "$0")/args"; echo tok`)
-		assert.Equal(t, "tok", resolveGitHubToken())
-		argv, err := os.ReadFile(filepath.Join(dir, "args"))
-		require.NoError(t, err)
-		assert.Equal(t, "auth token --hostname github.com", strings.TrimSpace(string(argv)))
-	})
+	var gotAuth []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = append(gotAuth, r.Header.Get("Authorization"))
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
 
-	t.Run("GHE-only gh yields no token", func(t *testing.T) {
-		// Mimics gh on a machine whose hosts.yml only knows an enterprise
-		// host: the hostless form returns the enterprise token, the
-		// github.com-scoped form fails.
-		installFakeGh(t, `case " $* " in
-  *" --hostname github.com "*) echo "no oauth token found for github.com" >&2; exit 1 ;;
-  *) echo ghe_fake_token ;;
-esac`)
-		assert.Equal(t, "", resolveGitHubToken())
-	})
+	resp, authed, err := githubAPIGet(srv.URL + "/repos/x/y/releases/latest")
+	require.NoError(t, err)
+	resp.Body.Close()
+	assert.False(t, authed)
+	require.Len(t, gotAuth, 1)
+	assert.Equal(t, "", gotAuth[0])
 }

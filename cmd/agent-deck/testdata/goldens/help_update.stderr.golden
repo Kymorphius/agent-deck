@@ -5,9 +5,9 @@
   -dry-run
     	With --install-timer/--ensure-timer/--uninstall-timer: print the files and commands, execute nothing
   -ensure-timer
-    	Install or heal the update timer only where none is active (what unattended runs, the daemon and remote update do); honours [updates] manage_timer
+    	(disabled in matrix/hardened build; no-op) Install or heal the update timer only where none is active (what unattended runs, the daemon and remote update do); honours [updates] manage_timer
   -install-timer
-    	Install the daily unattended update timer (launchd on macOS, systemd --user on Linux), rewrite a stale one, migrate a legacy agentdeck-autoupdate unit; an active current timer is left alone
+    	(disabled in matrix/hardened build) Install the daily unattended update timer (launchd on macOS, systemd --user on Linux), rewrite a stale one, migrate a legacy agentdeck-autoupdate unit; an active current timer is left alone
   -json
     	With --check: print the result as JSON (current, latest, available, publishing, auto_install, auto_restart, timer, on_disk, running_tuis, pending_launch_agents, remote_nudges); with --timer-status/--install-timer/--ensure-timer: the timer state or what was done
   -timer-status

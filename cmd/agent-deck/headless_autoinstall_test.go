@@ -3,6 +3,7 @@ package main
 import (
 	"testing"
 
+	"github.com/asheshgoplani/agent-deck/internal/session"
 	"github.com/asheshgoplani/agent-deck/internal/update"
 )
 
@@ -12,8 +13,19 @@ import (
 // otherwise one that runs `<exe> update --unattended --trigger web` with
 // the update settings as its on/off switch.
 func TestHeadlessAutoInstall_Gates(t *testing.T) {
-	// The package TestMain already isolates HOME; GetUpdateSettings sees
-	// the defaults (auto_install on).
+	// matrix/hardened: with default settings (check_enabled and auto_install
+	// off) no installer is built at all, so nothing polls GitHub.
+	stubHeadlessSuppression(t, "")
+	if inst := newHeadlessAutoInstaller("/bin/agent-deck", func() bool { return false }); inst != nil {
+		t.Fatal("matrix/hardened: default settings must not build an installer")
+	}
+	on := true
+	prevSettings := headlessUpdateSettings
+	headlessUpdateSettings = func() session.UpdateSettings {
+		return session.UpdateSettings{CheckEnabled: &on, AutoInstall: &on}
+	}
+	t.Cleanup(func() { headlessUpdateSettings = prevSettings })
+
 	stubHeadlessSuppression(t, "CI=true")
 	if inst := newHeadlessAutoInstaller("/bin/agent-deck", func() bool { return false }); inst != nil {
 		t.Fatal("a suppressed daemon must not build an installer")
@@ -30,8 +42,10 @@ func TestHeadlessAutoInstall_Gates(t *testing.T) {
 	if inst.Exe != "/bin/agent-deck" || inst.Trigger != "web" || inst.RunningVersion != Version {
 		t.Fatalf("installer = %+v, want exe, trigger web and the running version", inst)
 	}
-	if inst.Enabled == nil || !inst.Enabled() {
-		t.Fatal("with default settings the installer must be enabled")
+	// matrix/hardened: Enabled reads the real config (auto_install default
+	// off), so it is not asserted to be on here.
+	if inst.Enabled == nil {
+		t.Fatal("the installer must carry its on/off switch")
 	}
 
 	headlessAutoUpdateSuppressed = update.AutoUpdateSuppressed

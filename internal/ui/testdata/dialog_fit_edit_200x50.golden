@@ -27,7 +27,7 @@
                                                                      │    cursor agent     hermes     deepseek     omp            │                                                                     
                                                                      │      Pin position:                                         │                                                                     
                                                                      │        Off     Top     Bottom                              │                                                                     
-                                                                     │      [x] Skip permissions (restart, claude)                │                                                                     
+                                                                     │      [ ] Skip permissions (restart, claude)                │                                                                     
                                                                      │      [ ] Auto mode (restart, claude)                       │                                                                     
                                                                      │      Extra args (restart, claude) — space-separated:       │                                                                     
                                                                      │      > --model opus                                        │                                                                     

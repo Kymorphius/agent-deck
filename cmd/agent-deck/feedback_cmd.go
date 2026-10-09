@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"runtime"
 	"strings"
 
@@ -21,18 +20,29 @@ import (
 //
 // Overridable for tests.
 var ghUserLogin = func() string {
-	out, err := exec.Command("gh", "api", "user", "-q", ".login").Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
+	return "" // matrix/hardened: never call gh/GitHub
 }
+
+// hardenedNoFeedback is the matrix/hardened kill switch for `agent-deck feedback`.
+const hardenedNoFeedback = true
 
 // handleFeedback is the public dispatch entry point for the "agent-deck feedback" subcommand.
 // It delegates to handleFeedbackWithSender wired to real stdin/stdout so prompts print
 // interactively as they are emitted (see #679 follow-up: a previous strings.Builder wrapper
 // hid every prompt until after the function returned, leaving users typing at a blank cursor).
 func handleFeedback(args []string) {
+	// matrix/hardened: feedback posts publicly to a GitHub Discussion via
+	// gh; disabled entirely in this build.
+	if hardenedNoFeedback {
+		for _, a := range args {
+			if a == "-h" || a == "--help" {
+				printFeedbackHelp(os.Stdout)
+				return
+			}
+		}
+		fmt.Println("Feedback is disabled in this build (matrix/hardened): nothing is ever sent to GitHub.")
+		return
+	}
 	if err := handleFeedbackWithSender(args, Version, feedback.NewSender(), os.Stdin, os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

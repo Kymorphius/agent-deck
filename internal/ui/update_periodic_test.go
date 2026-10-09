@@ -32,7 +32,7 @@ func stubUpdateCheck(t *testing.T, info *update.UpdateInfo, err error) *int {
 // to act on. A tick with no known update and a stale last check must
 // re-ask.
 func TestPeriodicUpdateCheck_RunsWithoutKnownUpdate(t *testing.T) {
-	stubUpdateSettings(t, session.UpdateSettings{})
+	stubUpdateSettings(t, optedInUpdateSettings()) // matrix/hardened: explicit opt-in
 	h := newRestartTestHome(t)
 	h.updateInfo = nil
 	h.lastUpdateCheck = time.Now().Add(-2 * update.RecheckInterval)
@@ -55,7 +55,7 @@ func TestPeriodicUpdateCheck_RunsWithoutKnownUpdate(t *testing.T) {
 // check, never while a check is in flight, and off with check_enabled =
 // false.
 func TestPeriodicUpdateCheck_Cadence(t *testing.T) {
-	stubUpdateSettings(t, session.UpdateSettings{})
+	stubUpdateSettings(t, optedInUpdateSettings()) // matrix/hardened: explicit opt-in
 	h := newRestartTestHome(t)
 	now := time.Now()
 
@@ -91,7 +91,7 @@ func TestPeriodicUpdateCheck_Cadence(t *testing.T) {
 // behind for the scheduler: a failed check marks the backoff, a good one
 // clears it, and both clear the in-flight flag.
 func TestUpdateCheckMsg_RecordsOutcome(t *testing.T) {
-	stubUpdateSettings(t, session.UpdateSettings{})
+	stubUpdateSettings(t, optedInUpdateSettings()) // matrix/hardened: explicit opt-in
 	h := newRestartTestHome(t)
 	h.updateCheckInFlight = true
 	h.Update(updateCheckMsg{info: &update.UpdateInfo{CurrentVersion: "1.16.0"}, err: errors.New("rate limited")})
@@ -112,7 +112,7 @@ func TestUpdateCheckMsg_RecordsOutcome(t *testing.T) {
 // re-exec with the same executable, all without a key press and without
 // a footer error.
 func TestPeriodicTick_InstallsAndReExecsWithoutKeypress(t *testing.T) {
-	stubUpdateSettings(t, session.UpdateSettings{})
+	stubUpdateSettings(t, optedInUpdateSettings()) // matrix/hardened: explicit opt-in
 	t.Setenv(update.SkipUpdateCheckEnv, "")
 	checks := stubUpdateCheck(t, &update.UpdateInfo{Available: true, CurrentVersion: "1.16.0", LatestVersion: "1.16.1"}, nil)
 	f := &fakeUpdater{output: "✓ Updated to v1.16.1 (unattended)\n"}
@@ -172,7 +172,7 @@ func TestPeriodicTick_InstallsAndReExecsWithoutKeypress(t *testing.T) {
 // and each one stamps lastUpdateCheck so the periodic schedule counts
 // from it.
 func TestUpdateCheck_SingleFlight(t *testing.T) {
-	stubUpdateSettings(t, session.UpdateSettings{})
+	stubUpdateSettings(t, optedInUpdateSettings()) // matrix/hardened: explicit opt-in
 	stubUpdateCheck(t, &update.UpdateInfo{CurrentVersion: "1.16.0", LatestVersion: "1.16.0"}, nil)
 	h := newRestartTestHome(t)
 
@@ -205,7 +205,7 @@ func TestUpdateCheck_SingleFlight(t *testing.T) {
 // (update.TUIAutoUpdateSuppressed: go test, CI, skip marker, no terminal)
 // does not start re-checking on its own.
 func TestPeriodicUpdateCheck_HonoursSuppression(t *testing.T) {
-	stubUpdateSettings(t, session.UpdateSettings{})
+	stubUpdateSettings(t, optedInUpdateSettings()) // matrix/hardened: explicit opt-in
 	h := newRestartTestHome(t)
 	h.lastUpdateCheck = time.Now().Add(-2 * update.RecheckInterval)
 	for _, reason := range []string{"running under go test", "CI=true", "AGENTDECK_TEST_ARGV_LOG set", "stdin is not a terminal"} {
@@ -280,7 +280,7 @@ func tickHome(t *testing.T) *Home {
 // executable. No key, no footer error. Unlike the unit tests above it goes
 // through Update(tickMsg), so removing the tick wiring fails it.
 func TestTick_InstallsAndReExecsWithoutKeypress(t *testing.T) {
-	stubUpdateSettings(t, session.UpdateSettings{})
+	stubUpdateSettings(t, optedInUpdateSettings()) // matrix/hardened: explicit opt-in
 	t.Setenv(update.SkipUpdateCheckEnv, "")
 	checks := stubUpdateCheck(t, &update.UpdateInfo{Available: true, CurrentVersion: "1.16.0", LatestVersion: "1.16.1"}, nil)
 	f := &fakeUpdater{output: "✓ Updated to v1.16.1 (unattended)\n"}

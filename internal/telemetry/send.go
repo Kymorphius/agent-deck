@@ -1,15 +1,12 @@
 package telemetry
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -81,6 +78,8 @@ func endpointUndeployed() bool {
 	return err != nil || strings.HasSuffix(parsed.Hostname(), ".invalid")
 }
 
+// matrix/hardened: httpClient is unused (post never sends); kept only so
+// tests that set its Transport still compile.
 // httpClient never follows redirects, ignores proxy env, keeps no cookies
 // and has a hard timeout.
 var httpClient = &http.Client{
@@ -102,30 +101,6 @@ type postResult struct {
 // sees the project key: body carries the redacted placeholder. The response
 // body is read up to 1 KiB and ignored.
 func post(ctx context.Context, body []byte, timeout time.Duration) postResult {
-	body, err := withAPIKey(body)
-	if err != nil {
-		return postResult{err: err}
-	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, batchURL(), bytes.NewReader(body))
-	if err != nil {
-		return postResult{err: err}
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "agent-deck/"+safeVersion(processVersion))
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return postResult{err: err}
-	}
-	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxResponseBytes))
-	r := postResult{status: resp.StatusCode}
-	if secs, err := strconv.Atoi(strings.TrimSpace(resp.Header.Get("Retry-After"))); err == nil && secs > 0 {
-		r.retryAfter = time.Duration(secs) * time.Second
-	}
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		r.err = fmt.Errorf("telemetry: endpoint returned %d", resp.StatusCode)
-	}
-	return r
+	// matrix/hardened: telemetry removed; never opens a network connection.
+	return postResult{err: errors.New("telemetry: disabled in matrix/hardened build")}
 }

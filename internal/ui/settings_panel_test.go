@@ -1151,12 +1151,13 @@ func TestSettingsPanel_AutoInstallRestartToggles(t *testing.T) {
 	t.Cleanup(session.ClearUserConfigCache)
 
 	panel := NewSettingsPanel()
-	if !panel.autoInstall || !panel.autoRestart {
-		t.Fatal("both toggles must default to on (nil == true in config)")
+	// matrix/hardened: auto_install defaults off; auto_restart stays on.
+	if panel.autoInstall || !panel.autoRestart {
+		t.Fatal("matrix/hardened: auto-install must default off, auto-restart on")
 	}
 	panel.cursor = int(SettingAutoInstall)
-	if !panel.toggleValue() || panel.autoInstall {
-		t.Fatal("Space on the auto-install row must turn it off")
+	if !panel.toggleValue() || !panel.autoInstall {
+		t.Fatal("Space on the auto-install row must turn it on")
 	}
 	panel.cursor = int(SettingAutoRestart)
 	if !panel.toggleValue() || panel.autoRestart {

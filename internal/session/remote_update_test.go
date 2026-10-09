@@ -182,7 +182,7 @@ func TestShouldAutoUpdateRemotes(t *testing.T) {
 		lastRun  time.Time
 		want     bool
 	}{
-		{"on by default", UpdateSettings{CheckIntervalHours: 24}, 2, time.Time{}, true},
+		{"matrix/hardened: off by default", UpdateSettings{CheckIntervalHours: 24}, 2, time.Time{}, false},
 		{"opted out", off, 2, time.Time{}, false},
 		{"on, never ran", on, 2, time.Time{}, true},
 		{"on, no remotes", on, 0, time.Time{}, false},
@@ -435,7 +435,7 @@ func TestDeployRemoteBinary_NoCurrentVersionDeploys(t *testing.T) {
 func TestClaimRemoteAutoUpdateRun(t *testing.T) {
 	setupSessionXDGPathEnv(t)
 	now := time.Date(2026, 9, 12, 12, 0, 0, 0, time.UTC)
-	on := UpdateSettings{CheckIntervalHours: 24}
+	on := UpdateSettings{AutoUpdateRemotes: boolPtr(true), CheckIntervalHours: 24} // matrix/hardened: explicit opt-in
 
 	var wg sync.WaitGroup
 	var claimed atomic.Int32
@@ -476,7 +476,7 @@ func TestClaimRemoteAutoUpdateRun(t *testing.T) {
 func TestClaimRemoteAutoUpdateRun_LockHeldAndStale(t *testing.T) {
 	setupSessionXDGPathEnv(t)
 	now := time.Date(2026, 9, 12, 12, 0, 0, 0, time.UTC)
-	on := UpdateSettings{CheckIntervalHours: 24}
+	on := UpdateSettings{AutoUpdateRemotes: boolPtr(true), CheckIntervalHours: 24} // matrix/hardened: explicit opt-in
 	lock := mustCachePath(t) + ".claim"
 	if err := os.MkdirAll(filepath.Dir(lock), 0o700); err != nil {
 		t.Fatal(err)
@@ -509,7 +509,7 @@ func TestClaimRemoteAutoUpdateRun_UnwritableCacheNeverClaims(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
-	if ClaimRemoteAutoUpdateRun(UpdateSettings{CheckIntervalHours: 24}, 2, "1.16.12", time.Now()) {
+	if ClaimRemoteAutoUpdateRun(UpdateSettings{AutoUpdateRemotes: boolPtr(true), CheckIntervalHours: 24}, 2, "1.16.12", time.Now()) { // matrix/hardened: opt in so the cache gate is what refuses
 		t.Fatal("a stamp that cannot be written must not grant a sweep")
 	}
 }

@@ -77,6 +77,7 @@ func TestInstallUpdate_CleanHomeRunsUpdater(t *testing.T) {
 // handler always schedules a recheck and only reports a footer error when
 // the updater exited non-zero.
 func TestInstallUpdate_FinishedRechecksBinary(t *testing.T) {
+	stubUpdateSettings(t, optedInUpdateSettings()) // matrix/hardened: explicit opt-in
 	h := newInstallTestHome(t)
 	if cmd := h.handleUpdateInstallFinished(updateInstallFinishedMsg{}); cmd == nil {
 		t.Fatal("expected a recheck command after a clean exit")

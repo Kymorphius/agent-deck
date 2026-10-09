@@ -87,60 +87,47 @@ func TestTimerStatusJSON_LegacyUnitIsReported(t *testing.T) {
 	assert.NotContains(t, out.String(), "not installed")
 }
 
-// --install-timer on a legacy host migrates and prints exactly one line;
-// run again it leaves the now-canonical timer alone.
+// matrix/hardened: --install-timer never migrates or installs; a legacy
+// host is left exactly as it was.
 func TestInstallTimer_MigratesLegacyWithOneLine(t *testing.T) {
 	cfg := linuxTestTimerConfig(t)
 	r := legacyHost(t, cfg)
 	var out bytes.Buffer
-	require.Equal(t, 0, runTimerCommandOpts(cfg, r, "install", timerCommandOptions{}, &out))
-	assert.Equal(t, "migrated legacy timer agentdeck-autoupdate.timer -> agent-deck-autoupdate.timer\n", out.String())
-	assert.Contains(t, r.calls, "systemctl --user disable --now "+update.LegacySystemdTimerTimer)
-	assert.FileExists(t, cfg.TimerPath())
-	assert.NoFileExists(t, filepath.Join(cfg.SystemdUserDir, update.LegacySystemdTimerTimer))
-	backups, _ := filepath.Glob(filepath.Join(cfg.SystemdUserDir, "agentdeck-autoupdate.*.bak-agentdeck-*"))
-	assert.Len(t, backups, 2, "both legacy units kept as backups")
-
-	out.Reset()
-	r.calls = nil
-	r.replies["systemctl --user cat "+update.LegacySystemdTimerTimer] = cannedReply{out: "No files found\n", err: exitStatus(1)}
-	require.Equal(t, 0, runTimerCommandOpts(cfg, r, "install", timerCommandOptions{JSON: true}, &out))
-	var doc timerEnsureJSON
-	require.NoError(t, json.Unmarshal(out.Bytes(), &doc))
-	assert.Equal(t, update.TimerActionNone, doc.Action)
+	require.Equal(t, 1, runTimerCommandOpts(cfg, r, "install", timerCommandOptions{}, &out))
+	assert.Contains(t, out.String(), "matrix/hardened")
 	for _, c := range r.calls {
-		assert.NotContains(t, c, "enable", "an active canonical timer is left alone")
+		assert.False(t, strings.Contains(c, "enable") || strings.Contains(c, "disable") || strings.Contains(c, "daemon-reload"), "ran %q", c)
+	}
+	assert.NoFileExists(t, cfg.TimerPath())
+	assert.FileExists(t, filepath.Join(cfg.SystemdUserDir, update.LegacySystemdTimerTimer))
+}
+
+// matrix/hardened: --ensure-timer is a quiet no-op (exit 0, so remote
+// callers treat it as a skip) and --install-timer fails, whatever
+// manage_timer says; neither touches the init system.
+func TestEnsureTimer_ManageTimerAndNoBus(t *testing.T) {
+	cfg := linuxTestTimerConfig(t)
+	for _, manage := range []bool{false, true} {
+		r := &cannedRunner{}
+		var out bytes.Buffer
+		require.Equal(t, 0, runTimerCommandOpts(cfg, r, "ensure", timerCommandOptions{ManageTimer: manage}, &out))
+		assert.Contains(t, out.String(), "matrix/hardened")
+		out.Reset()
+		require.Equal(t, 1, runTimerCommandOpts(cfg, r, "install", timerCommandOptions{ManageTimer: manage}, &out))
+		assert.Contains(t, out.String(), "Error: update timer not installed")
+		for _, c := range r.calls {
+			assert.False(t, strings.Contains(c, "enable") || strings.Contains(c, "daemon-reload"), "ran %q", c)
+		}
+		assert.NoFileExists(t, cfg.TimerPath())
 	}
 }
 
-// --ensure-timer honours manage_timer; --install-timer is explicit and does
-// not. A host without a user bus: ensure is a quiet skip, install fails.
-func TestEnsureTimer_ManageTimerAndNoBus(t *testing.T) {
-	cfg := linuxTestTimerConfig(t)
-	r := &cannedRunner{}
-	var out bytes.Buffer
-	require.Equal(t, 0, runTimerCommandOpts(cfg, r, "ensure", timerCommandOptions{ManageTimer: false}, &out))
-	assert.Contains(t, out.String(), "update timer not managed: [updates] manage_timer = false")
-	assert.Empty(t, r.calls)
-	assert.NoFileExists(t, cfg.TimerPath())
-
-	bus := cannedReply{out: "Failed to connect to bus: No medium found\n", err: exitStatus(1)}
-	r = &cannedRunner{replies: map[string]cannedReply{"systemctl --user is-system-running": bus, "systemctl --user cat " + update.LegacySystemdTimerTimer: bus}}
-	out.Reset()
-	require.Equal(t, 0, runTimerCommandOpts(cfg, r, "ensure", timerCommandOptions{ManageTimer: true}, &out))
-	assert.Contains(t, out.String(), "update timer not managed: no systemd user session")
-	out.Reset()
-	require.Equal(t, 1, runTimerCommandOpts(cfg, r, "install", timerCommandOptions{ManageTimer: true}, &out))
-	assert.Contains(t, out.String(), "Error: update timer not installed: no systemd user session")
-	assert.NoFileExists(t, cfg.TimerPath())
-}
-
+// matrix/hardened: a dry-run install is refused too and executes nothing.
 func TestInstallTimer_DryRunMigrationExecutesNothing(t *testing.T) {
 	cfg := linuxTestTimerConfig(t)
 	r := legacyHost(t, cfg)
 	var out bytes.Buffer
-	require.Equal(t, 0, runTimerCommandOpts(cfg, r, "install", timerCommandOptions{DryRun: true}, &out))
-	assert.Contains(t, out.String(), "Dry run: would migrate the update timer")
+	require.Equal(t, 1, runTimerCommandOpts(cfg, r, "install", timerCommandOptions{DryRun: true}, &out))
 	for _, c := range r.calls {
 		assert.False(t, strings.Contains(c, "enable") || strings.Contains(c, "disable") || strings.Contains(c, "daemon-reload"), "dry run ran %q", c)
 	}

@@ -13,6 +13,10 @@ import (
 // CI or script-driven process carries, and update.PlanEnsureTimer's own
 // (unpinnable build, no systemd user session or launchd domain).
 
+// hardenedNoAutoTimer is the matrix/hardened kill switch for every automatic
+// timer install/heal. It is a const so no config or env can flip it.
+const hardenedNoAutoTimer = true
+
 // Seams so tests never touch the host's init system or read its env.
 var (
 	// updateTimerSettings reads [updates] from config.toml.
@@ -34,6 +38,13 @@ var (
 // [updates] manage_timer allows it and nothing suppresses automatic update
 // work here. A skip is reported in the result, never as an error.
 func AutoEnsureUpdateTimer(log *slog.Logger) (update.TimerEnsureResult, error) {
+	// matrix/hardened: never auto-install/heal the update LaunchAgent/systemd
+	// timer from any path (TUI, notify daemon, unattended update), whatever
+	// manage_timer says. The rest of the body is kept (unreachable) so the
+	// seams and upstream merges stay simple.
+	if hardenedNoAutoTimer {
+		return update.TimerEnsureResult{Action: update.TimerActionSkipped, Reason: "disabled in matrix/hardened build"}, nil
+	}
 	if !updateTimerSettings().GetManageTimer() {
 		return update.TimerEnsureResult{Action: update.TimerActionSkipped, Reason: "[updates] manage_timer = false"}, nil
 	}

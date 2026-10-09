@@ -6,15 +6,16 @@ import "testing"
 // auto_update_remotes = false, and parses as a plain bool next to the
 // existing auto_update key.
 func TestUpdateSettings_AutoUpdateRemotes(t *testing.T) {
-	t.Run("default on", func(t *testing.T) {
+	// matrix/hardened: auto_update_remotes defaults to false.
+	t.Run("default off", func(t *testing.T) {
 		_, xdgConfigHome, _ := setupSessionXDGPathEnv(t)
 		writeUserConfig(t, xdgConfigHome, `
 [updates]
 auto_update = true
 `)
 		settings := GetUpdateSettings()
-		if !settings.GetAutoUpdateRemotes() {
-			t.Fatal("auto_update_remotes must default to true")
+		if settings.GetAutoUpdateRemotes() {
+			t.Fatal("matrix/hardened: auto_update_remotes must default to false")
 		}
 		if settings.AutoUpdateRemotes != nil {
 			t.Fatal("an unset key must stay nil so the default can change without rewriting configs")
@@ -29,8 +30,8 @@ auto_update = true
 
 	t.Run("no config at all", func(t *testing.T) {
 		setupSessionXDGPathEnv(t)
-		if !GetUpdateSettings().GetAutoUpdateRemotes() {
-			t.Fatal("auto_update_remotes must be on without a config file")
+		if GetUpdateSettings().GetAutoUpdateRemotes() {
+			t.Fatal("matrix/hardened: auto_update_remotes must be off without a config file")
 		}
 	})
 

@@ -65,7 +65,10 @@ func handleNotifyDaemon(args []string) {
 	// Review round 2 (P1-A/P1-B): the hook half of the spine must not stay
 	// broken until an operator runs `hooks install`. Repair a dangling,
 	// stale-version or marker-less install before the first sync pass.
-	healClaudeHooksAtDaemonStart()
+	// matrix/hardened: the daemon never heals (rewrites) Claude hooks or the
+	// profile statusLines in settings.json; hooks are only written by an
+	// explicit `agent-deck hooks install` or an accepted TUI prompt.
+	// healClaudeHooksAtDaemonStart is kept (uncalled) for upstream merges.
 
 	daemon := session.NewTransitionDaemon()
 	if *once {
@@ -219,9 +222,9 @@ func realNotifyDaemonStart() notifyDaemonStart {
 	return notifyDaemonStart{
 		watchVersion:        watchBinaryVersion,
 		headlessAutoInstall: startHeadlessAutoInstall,
-		healUpdateTimer: func() {
-			healUpdateTimerAtDaemonStart(logging.ForComponent(logging.CompNotif))
-		},
+		// matrix/hardened: the daemon never heals the update timer
+		// (AutoEnsureUpdateTimer is also a no-op in this build).
+		healUpdateTimer: func() {},
 	}
 }
 

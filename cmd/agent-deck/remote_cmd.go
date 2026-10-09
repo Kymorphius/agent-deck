@@ -833,9 +833,9 @@ func handleRemoteUpdate(args []string) {
 		fmt.Fprintln(os.Stderr, "Error: --install-timer takes only a remote name or --all (and --json)")
 		os.Exit(2)
 	}
-	// An explicit update also installs (or migrates) each updated remote's
-	// own timer, so it stops depending on this controller's nudge (#2472).
-	opts := remoteUpdateCLIOptions{JSON: *jsonOutput, Update: session.RemoteUpdateOptions{Force: *force, DryRun: *dryRun, EnsureTimer: !*dryRun}}
+	// Upstream: an explicit update also installs (or migrates) each updated
+	// remote's own timer (#2472). matrix/hardened: disabled.
+	opts := remoteUpdateCLIOptions{JSON: *jsonOutput, Update: session.RemoteUpdateOptions{Force: *force, DryRun: *dryRun, EnsureTimer: false}} // matrix/hardened: never install timers on remotes
 	if *fromBuild != "" {
 		build, err := session.LoadLocalBuild(*fromBuild)
 		if err != nil {
@@ -875,6 +875,11 @@ func handleRemoteUpdate(args []string) {
 	}
 
 	if *installTimer {
+		// matrix/hardened: installing the auto-update timer is disabled.
+		if hardenedTimerInstallDisabled {
+			fmt.Fprintln(os.Stderr, "Error: remote update --install-timer is disabled in this build (matrix/hardened)")
+			os.Exit(1)
+		}
 		results := runRemoteTimerInstall(context.Background(), remotes)
 		if printRemoteTimerInstall(os.Stdout, results, *jsonOutput) > 0 {
 			os.Exit(1)

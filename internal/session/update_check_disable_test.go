@@ -39,9 +39,9 @@ func TestUpdateCheckEnabled_FixtureConfigDisablesStartupCheck(t *testing.T) {
 		t.Fatal("check_enabled = false must disable the startup update check (fixture would still banner)")
 	}
 
-	// Without the stanza, the check defaults on — proving the line is load-bearing.
+	// matrix/hardened: without the stanza the check now defaults OFF too.
 	writeConfig(t, "[telemetry]\ndisabled = true\n[claude]\nhooks_enabled = false\n")
-	if !GetUpdateSettings().GetCheckEnabled() {
-		t.Fatal("update check defaults on; the fixture's [updates] check_enabled=false is what makes the acceptance deterministic")
+	if GetUpdateSettings().GetCheckEnabled() {
+		t.Fatal("matrix/hardened: update check must default off")
 	}
 }

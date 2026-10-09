@@ -1,10 +1,8 @@
 package feedback
 
 import (
-	"os/exec"
-	"runtime"
+	"errors"
 
-	"github.com/asheshgoplani/agent-deck/internal/clipboard"
 	"github.com/asheshgoplani/agent-deck/internal/platform"
 )
 
@@ -44,27 +42,22 @@ type Sender struct {
 	IsHeadlessFunc func() bool
 }
 
-// NewSender returns a *Sender with all four fields populated with real implementations.
+// NewSender returns a *Sender whose network/browser paths are disabled.
+//
+// matrix/hardened: feedback is never posted to GitHub (it used to run
+// `gh api graphql` addDiscussionComment, a public post) and no browser is
+// opened. GhCmd and BrowserCmd always fail without running anything.
 func NewSender() *Sender {
+	errDisabled := errors.New("feedback disabled in matrix/hardened build")
 	return &Sender{
 		GhCmd: func(args ...string) error {
-			_, err := exec.Command("gh", args...).CombinedOutput()
-			return err
+			return errDisabled
 		},
 		BrowserCmd: func(url string) error {
-			var cmd *exec.Cmd
-			switch runtime.GOOS {
-			case "darwin":
-				cmd = exec.Command("open", url)
-			default:
-				// Linux and other UNIX-like systems
-				cmd = exec.Command("xdg-open", url)
-			}
-			return cmd.Run()
+			return errDisabled
 		},
 		ClipboardCmd: func(text string) error {
-			_, err := clipboard.Copy(text, false)
-			return err
+			return errDisabled
 		},
 		IsHeadlessFunc: func() bool {
 			return platform.IsHeadless()
