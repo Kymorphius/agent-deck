@@ -23,8 +23,6 @@ const batchPath = "/batch/"
 // sendTimeout bounds the whole request: dial, TLS, write, response.
 const sendTimeout = 5 * time.Second
 
-const maxResponseBytes = 1024
-
 var endpoint = DefaultEndpoint
 
 // SetEndpoint overrides the endpoint (from config.toml).

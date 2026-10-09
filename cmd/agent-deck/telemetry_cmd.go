@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -414,30 +413,8 @@ func telemetryDoctorLine() string {
 	return fmt.Sprintf("on (%s); upload %s; %d event(s) spooled", st.Level, st.Upload, st.Spool.Events)
 }
 
-// maybeSendUninstallTelemetry asks one optional question and sends the
-// uninstall event, only when consent was granted. It is the one synchronous
-// send (2 s timeout); everything else is uploaded from the TUI.
-func maybeSendUninstallTelemetry(in io.Reader, out io.Writer, askReason bool) {
-	s := telemetry.LoadState()
-	if ok, _ := telemetry.Enabled(s); !ok || !telemetry.Interactive() {
-		return
-	}
-	reason := "skip"
-	if askReason {
-		fmt.Fprint(out, "Why are you uninstalling? (optional, anonymous) [1] not needed  [2] too complex  [3] bugs  [4] switching tool  [Enter] skip: ")
-		line, _ := bufio.NewReader(in).ReadString('\n')
-		reason = map[string]string{"1": "not_needed", "2": "too_complex", "3": "bugs", "4": "switching_tool"}[strings.TrimSpace(line)]
-		if reason == "" {
-			reason = "skip"
-		}
-	}
-	sum := session.TelemetrySummaryFromStorage()
-	lastTool := ""
-	if len(sum.Tools) > 0 {
-		lastTool = sum.Tools[len(sum.Tools)-1]
-	}
-	telemetry.SendUninstall(context.Background(), sum.Sessions, lastTool, reason)
-}
+// matrix/hardened: upstream maybeSendUninstallTelemetry (uninstall reason
+// prompt + send) is deleted; `agent-deck uninstall` sends nothing.
 
 func printTelemetryHelp(w io.Writer) {
 	fmt.Fprintf(w, `Usage: agent-deck telemetry <command> [--json]

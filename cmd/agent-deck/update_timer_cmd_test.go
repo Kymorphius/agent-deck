@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -39,11 +38,6 @@ func (r *cannedRunner) Run(argv ...string) (string, error) {
 	reply := r.replies[key]
 	return reply.out, reply.err
 }
-
-type exitStatus int
-
-func (e exitStatus) Error() string { return fmt.Sprintf("exit status %d", int(e)) }
-func (e exitStatus) ExitCode() int { return int(e) }
 
 func linuxTestTimerConfig(t *testing.T) update.TimerConfig {
 	t.Helper()

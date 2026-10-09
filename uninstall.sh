@@ -257,7 +257,17 @@ for item in "${FOUND_ITEMS[@]}"; do
                 | with_entries(select((.value | type) != "array" or (.value | length) > 0)))
               | if (.hooks | length) == 0 then del(.hooks) else . end
             else . end' "$CLAUDE_SETTINGS" > "$tmp"; then
-            mv "$tmp" "$CLAUDE_SETTINGS"
+            # matrix/hardened: write through (not mv) so a symlinked
+            # settings.json (dotfiles) stays a link and the file keeps its
+            # original mode/owner instead of mktemp's 0600.
+            if cat "$tmp" > "$CLAUDE_SETTINGS"; then
+                rm -f "$tmp"
+            else
+                rm -f "$tmp"
+                cat "$backup" > "$CLAUDE_SETTINGS" 2>/dev/null || true
+                echo -e "${YELLOW}Warning: failed to write $CLAUDE_SETTINGS; restored from backup: $backup${NC}"
+                continue
+            fi
             echo -e "${GREEN}✓${NC} agent-deck hooks removed (backup: $backup)"
         else
             rm -f "$tmp"

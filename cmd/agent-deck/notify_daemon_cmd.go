@@ -68,7 +68,7 @@ func handleNotifyDaemon(args []string) {
 	// matrix/hardened: the daemon never heals (rewrites) Claude hooks or the
 	// profile statusLines in settings.json; hooks are only written by an
 	// explicit `agent-deck hooks install` or an accepted TUI prompt.
-	// healClaudeHooksAtDaemonStart is kept (uncalled) for upstream merges.
+	// (upstream healClaudeHooksAtDaemonStart is deleted: it was its only caller.)
 
 	daemon := session.NewTransitionDaemon()
 	if *once {
@@ -267,38 +267,4 @@ func healUpdateTimerAtDaemonStart(log *slog.Logger) update.TimerEnsureResult {
 		log.Info("update_timer_heal_skipped", "action", res.Action, "reason", res.Reason)
 	}
 	return res
-}
-
-// healClaudeHooksAtDaemonStart runs session.HealClaudeHooks for the daemon's
-// Claude config dir when hooks are enabled. Best-effort: a failure is logged
-// and the daemon still runs.
-func healClaudeHooksAtDaemonStart() {
-	cfg, _ := session.LoadUserConfig()
-	if cfg != nil && !cfg.Claude.GetHooksEnabled() {
-		return
-	}
-	configDir := getClaudeConfigDirForHooks()
-	res, err := session.HealClaudeHooks(configDir, Version)
-	log := logging.ForComponent(logging.CompNotif)
-	// The accounts usage feed exists by construction: every configured slot's
-	// statusLine is wrapped with the ingester here too, so a remote whose
-	// binary was just updated starts feeding without an operator visit.
-	for _, r := range session.HealUsageFeeds(cfg) {
-		switch {
-		case r.Err != nil:
-			log.Warn("claude_usage_feed_heal_failed", "slot", r.Slot, "error", r.Err.Error())
-		case r.Changed:
-			log.Info("claude_usage_feed_wired", "slot", r.Slot, "command", r.Feed.Command)
-		}
-	}
-	switch {
-	case err != nil:
-		log.Warn("claude_hooks_heal_failed", "config_dir", configDir, "error", err.Error())
-	case res.Healed:
-		log.Info("claude_hooks_healed", "config_dir", configDir, "reasons", strings.Join(res.Reasons, "; "))
-	case res.Skipped != "":
-		// An unpinnable dev build, or a hook binary newer than this one:
-		// reported, never written (review round 3, finding 2).
-		log.Info("claude_hooks_heal_skipped", "config_dir", configDir, "reason", res.Skipped)
-	}
 }

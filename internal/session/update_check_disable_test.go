@@ -60,3 +60,32 @@ func TestUpdateSettings_StockWrittenValuesNeedMatrixOptIn(t *testing.T) {
 		t.Fatal("explicit opt-in in this build must enable check_enabled/auto_install")
 	}
 }
+
+// matrix/hardened: `config set updates.check_enabled true` must not also
+// activate a stale stock-written auto_install = true (and vice versa).
+func TestConfigSet_OptInDoesNotActivateOtherStockKey(t *testing.T) {
+	for _, tc := range []struct{ set, other string }{
+		{"updates.check_enabled", "updates.auto_install"},
+		{"updates.auto_install", "updates.check_enabled"},
+	} {
+		on := true
+		c := &UserConfig{Updates: UpdateSettings{CheckEnabled: &on, AutoInstall: &on}}
+		k, ok := LookupConfigKey(tc.set)
+		if !ok {
+			t.Fatalf("missing key %s", tc.set)
+		}
+		k.Set(c, true)
+		o, _ := LookupConfigKey(tc.other)
+		if k.Get(c) != true {
+			t.Errorf("%s: set key not enabled", tc.set)
+		}
+		if o.Get(c) != false {
+			t.Errorf("%s: opting in activated stale %s", tc.set, tc.other)
+		}
+		// Once opted in, setting the other key is independent.
+		o.Set(c, true)
+		if k.Get(c) != true || o.Get(c) != true {
+			t.Errorf("%s: second explicit opt-in lost a value", tc.set)
+		}
+	}
+}

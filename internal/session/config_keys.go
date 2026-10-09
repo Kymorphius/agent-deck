@@ -60,11 +60,12 @@ var configKeys = []ConfigKey{
 	{Key: "updates.check_enabled", Section: "Updates", Label: "Check for updates on startup", Help: "Check for a newer agent-deck on startup", Type: "bool",
 		get: func(c *UserConfig) any { return c.Updates.GetCheckEnabled() },
 		set: func(c *UserConfig, v any) {
-			c.Updates.CheckEnabled = boolRef(v.(bool))
-			// matrix/hardened: an explicit `config set ... true` is consent in this build.
+			// matrix/hardened: an explicit `config set ... true` is consent in
+			// this build, for this key only (see matrixUpdatesOptIn).
 			if v.(bool) {
-				c.Updates.MatrixOptIn = true
+				matrixUpdatesOptIn(c)
 			}
+			c.Updates.CheckEnabled = boolRef(v.(bool))
 		}},
 	{Key: "updates.auto_update", Section: "Updates", Label: "Offer to install on startup", Help: "Offer to install an available update on startup", Type: "bool",
 		get: func(c *UserConfig) any { return c.Updates.AutoUpdate },
@@ -72,11 +73,12 @@ var configKeys = []ConfigKey{
 	{Key: "updates.auto_install", Section: "Updates", Label: "Install updates automatically", Help: "Install updates without asking", Type: "bool",
 		get: func(c *UserConfig) any { return c.Updates.GetAutoInstall() },
 		set: func(c *UserConfig, v any) {
-			c.Updates.AutoInstall = boolRef(v.(bool))
-			// matrix/hardened: an explicit `config set ... true` is consent in this build.
+			// matrix/hardened: an explicit `config set ... true` is consent in
+			// this build, for this key only (see matrixUpdatesOptIn).
 			if v.(bool) {
-				c.Updates.MatrixOptIn = true
+				matrixUpdatesOptIn(c)
 			}
+			c.Updates.AutoInstall = boolRef(v.(bool))
 		}},
 	{Key: "updates.auto_restart", Section: "Updates", Label: "Restart automatically after update", Help: "Restart agent-deck after an update is installed", Type: "bool",
 		get: func(c *UserConfig) any { return c.Updates.GetAutoRestart() },
@@ -314,4 +316,18 @@ func SetConfigValue(name, raw string) (ConfigKey, any, error) {
 		return k, nil, err
 	}
 	return k, k.Get(fresh), nil
+}
+
+// matrixUpdatesOptIn records the hardened build's update consent marker.
+// matrix/hardened: on the first opt-in, check_enabled and auto_install are
+// pinned to false before the caller applies the key the user actually set,
+// so a stale value written by a stock binary (e.g. auto_install = true) is
+// not activated as a side effect of opting in to the other key.
+func matrixUpdatesOptIn(c *UserConfig) {
+	if c.Updates.MatrixOptIn {
+		return
+	}
+	c.Updates.CheckEnabled = boolRef(false)
+	c.Updates.AutoInstall = boolRef(false)
+	c.Updates.MatrixOptIn = true
 }
