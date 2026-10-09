@@ -10,6 +10,13 @@ package session
 // rollout is not under the home the session launches with (#756) and starts
 // a fresh conversation. So the rollout is located in exactly that home, and
 // a miss is an error rather than a new, empty conversation.
+//
+// A thread still open elsewhere is not refused (unlike Claude): with the
+// Codex app-server daemon every codex client of a thread goes through the
+// daemon, which is its only writer, so a resumed session attaches to the
+// live thread alongside the Codex app, provided the resume changes no
+// config (CodexOptions.SharedThread). Codex's own thread-writer lock decides
+// anything else.
 
 import (
 	"bufio"
@@ -29,12 +36,20 @@ type CodexResumeLocation struct {
 	ModTime time.Time // the rollout's last write
 }
 
-// LiveFor reports how long ago the rollout was written and whether that is
-// within ClaudeConversationLiveWindow of now: two Codex processes on one
-// thread both append to the same rollout.
-func (l CodexResumeLocation) LiveFor(now time.Time) (time.Duration, bool) {
-	age := now.Sub(l.ModTime)
-	return age, age < ClaudeConversationLiveWindow
+// MarkCodexSharedThread records on inst that its Codex thread may be open
+// elsewhere (CodexOptions.SharedThread), keeping its other Codex options.
+func MarkCodexSharedThread(inst *Instance) error {
+	opts := inst.GetCodexOptions()
+	if opts == nil {
+		opts = &CodexOptions{}
+	}
+	opts.SharedThread = true
+	return inst.SetCodexOptions(opts)
+}
+
+func (i *Instance) codexSharedThread() bool {
+	opts := i.GetCodexOptions()
+	return opts != nil && opts.SharedThread
 }
 
 // IsBareCodexThreadID reports whether s is a bare lowercase UUID, the form

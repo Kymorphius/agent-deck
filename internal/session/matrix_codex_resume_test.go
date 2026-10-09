@@ -89,3 +89,49 @@ func TestMatrixLocateCodexResume_Refusals(t *testing.T) {
 		t.Fatalf("vanished dir: %v", err)
 	}
 }
+
+// matrix/hardened: a shared thread (recall open, G, add --resume-session)
+// resumes with no config overrides, so codex attaches it alongside the Codex
+// app instead of showing "This conversation is open in another app"; an
+// unmarked session keeps its flags.
+func TestMatrixCodexSharedThreadResumesWithoutOverrides(t *testing.T) {
+	root := t.TempDir()
+	codexHome := filepath.Join(root, "codex")
+	t.Setenv("CODEX_HOME", codexHome)
+	proj := filepath.Join(root, "proj")
+	if err := os.MkdirAll(proj, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeMatrixRollout(t, codexHome, matrixCodexThread, "user", proj)
+
+	build := func(shared bool) string {
+		inst := NewInstanceWithTool("shared", proj, "codex")
+		inst.CodexSessionID = matrixCodexThread
+		yolo := true
+		if err := inst.SetCodexOptions(&CodexOptions{Model: "gpt-probe", ReasoningEffort: "low", YoloMode: &yolo}); err != nil {
+			t.Fatal(err)
+		}
+		if shared {
+			if err := MarkCodexSharedThread(inst); err != nil {
+				t.Fatal(err)
+			}
+			if opts := inst.GetCodexOptions(); opts == nil || opts.Model != "gpt-probe" || !opts.SharedThread {
+				t.Fatalf("MarkCodexSharedThread lost options: %+v", opts)
+			}
+		}
+		return inst.buildCodexCommand("codex")
+	}
+
+	shared := build(true)
+	if !strings.HasSuffix(shared, " codex resume "+matrixCodexThread) {
+		t.Fatalf("shared resume = %q, want it to end in a bare `codex resume <id>`", shared)
+	}
+	for _, flag := range []string{"--model", "--yolo", "--config", " -c "} {
+		if strings.Contains(shared, flag) {
+			t.Errorf("shared resume carries %q: %q", flag, shared)
+		}
+	}
+	if plain := build(false); !strings.Contains(plain, "--model") || !strings.Contains(plain, "resume "+matrixCodexThread) {
+		t.Fatalf("unmarked resume lost its flags: %q", plain)
+	}
+}

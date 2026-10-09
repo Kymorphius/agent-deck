@@ -2613,6 +2613,11 @@ func handleAddCommand(profile string, args []string, inspectFlags func(*flag.Fla
 			out.Error(fmt.Sprintf("no rollout of Codex thread %s under %s, this session's Codex home; nothing to resume", *resumeSession, session.CodexHomeDirForInstance(newInstance)), ErrCodeInvalidOperation)
 			os.Exit(1)
 		}
+		// The named thread may be open in the Codex app: resume it without
+		// config overrides so both share it (CodexOptions.SharedThread).
+		if err := session.MarkCodexSharedThread(newInstance); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to set codex options: %v\n", err)
+		}
 	}
 
 	// Handle --resume-session: set Claude session ID and resume mode

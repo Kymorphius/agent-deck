@@ -10411,16 +10411,14 @@ func (h *Home) handleGlobalSearchSelection(result *GlobalSearchResult) tea.Cmd {
 // The hit's profile names the account whose Codex home holds the rollout;
 // the session gets that account so it launches with the same CODEX_HOME,
 // and session.LocateCodexResume refuses a thread that is not there (it
-// would be dropped at launch and a fresh thread started), a subagent thread,
-// or one still being written by another codex process.
+// would be dropped at launch and a fresh thread started) or a subagent
+// thread. A thread still open in the Codex app is attached to, not refused:
+// the session is marked shared and resumes without config overrides.
 func (h *Home) createCodexSessionFromGlobalSearch(result *GlobalSearchResult) tea.Cmd {
 	return func() tea.Msg {
 		loc, err := session.LocateCodexResume(result.Profile, result.SessionID)
 		if err != nil {
 			return sessionCreatedMsg{err: err}
-		}
-		if age, live := loc.LiveFor(time.Now()); live {
-			return sessionCreatedMsg{err: fmt.Errorf("thread %s was written %s ago and is probably still open in another terminal; continue it there, or close it and pick it again", result.SessionID, age.Round(time.Second))}
 		}
 		projectPath := loc.Dir
 		if resolved, resErr := session.ResolveProjectPath(projectPath); resErr == nil {
@@ -10434,6 +10432,9 @@ func (h *Home) createCodexSessionFromGlobalSearch(result *GlobalSearchResult) te
 		inst.Account = result.Profile
 		inst.CodexSessionID = result.SessionID
 		inst.CodexDetectedAt = time.Now()
+		if err := session.MarkCodexSharedThread(inst); err != nil {
+			return sessionCreatedMsg{err: err}
+		}
 		if err := inst.Start(); err != nil {
 			return sessionCreatedMsg{err: fmt.Errorf("failed to start session: %w", err)}
 		}

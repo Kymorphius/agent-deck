@@ -151,6 +151,14 @@ type CodexOptions struct {
 	// YoloMode enables --yolo flag (bypass approvals and sandbox)
 	// nil = inherit from global config, true/false = explicit override
 	YoloMode *bool `json:"yolo_mode,omitempty"`
+	// matrix/hardened: SharedThread marks a session attached to an existing
+	// Codex thread (recall open, global search, add --resume-session) that may
+	// be open elsewhere, e.g. in the Codex app through the app-server daemon.
+	// Its resume carries no config overrides (identity -c, model, effort,
+	// --yolo): codex shares a thread between clients only when the resuming
+	// client changes nothing, and otherwise shows "This conversation is open in
+	// another app" until the other client closes it.
+	SharedThread bool `json:"shared_thread,omitempty"`
 }
 
 // ToolName returns "codex"
