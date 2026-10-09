@@ -474,6 +474,16 @@ body[data-rail="hidden"] .rightrail { display: none; }
 .tdots i:nth-child(2) { background: #e0af6888; }
 .tdots i:nth-child(3) { background: #73daca88; }
 .tpath { color: var(--text); font-weight: 500; }
+/* matrix/hardened: terminal strip action (image upload). Touch-sized on phones. */
+.term-strip-btn {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 3px 9px; border-radius: 6px;
+  border: 1px solid var(--border); background: transparent;
+  color: var(--text); font: inherit; cursor: pointer;
+}
+.term-strip-btn:hover { border-color: var(--border-hi); background: var(--card); }
+.term-strip-btn:disabled { opacity: 0.6; cursor: progress; }
+@media (pointer: coarse) { .term-strip-btn { padding: 6px 12px; font-size: 13px; } }
 .tmeta { font-family: var(--mono); font-size: 10.5px; color: var(--muted); }
 
 .term-body {

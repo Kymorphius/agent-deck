@@ -4,7 +4,10 @@ import { html } from 'htm/preact'
 import { useEffect, useRef, useCallback, useState } from 'preact/hooks'
 import { effect } from '@preact/signals'
 import { selectedIdSignal, sessionsSignal, authTokenSignal, wsStateSignal, readOnlySignal } from './state.js'
-import { apiFetch } from './api.js'
+import { apiFetch, uploadSessionImage } from './api.js'
+import { Icon, ICONS } from './icons.js'
+import { addToast } from './toasts.js'
+import { uploadImagesToPane } from './terminalImage.js'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebglAddon } from '@xterm/addon-webgl'
@@ -88,6 +91,9 @@ export function TerminalPanel() {
   // banner clears but ctx.wsReconnectEnabled is stuck at false from the
   // earlier TMUX_SESSION_NOT_FOUND, and the terminal never reattaches.
   const [reconnectKey, setReconnectKey] = useState(0)
+  // matrix/hardened: image upload button state (handleImagePick below).
+  const imageInputRef = useRef(null)
+  const [uploading, setUploading] = useState(false)
 
   // Signal vanilla app.js to suppress its terminal path while TerminalPanel is mounted
   useEffect(() => {
@@ -480,6 +486,32 @@ export function TerminalPanel() {
     }
   }
 
+  // matrix/hardened: image button -> upload to the host, paste the stored
+  // paths into the pane (terminalImage.js). Hidden in read-only mode.
+  async function handleImagePick(event) {
+    const input = event.currentTarget
+    const files = Array.from(input.files || [])
+    input.value = ''
+    if (!files.length) return
+    const ctx = ctxRef.current
+    if (!ctx || !ctx.terminalAttached || !ctx.ws || ctx.ws.readyState !== WebSocket.OPEN) {
+      addToast('Terminal is not connected; image not sent', 'error')
+      return
+    }
+    setUploading(true)
+    try {
+      const { errors } = await uploadImagesToPane(files, {
+        sessionId,
+        upload: uploadSessionImage,
+        paste: (text) => ctx.terminal.paste(text),
+      })
+      for (const msg of errors) addToast(msg, 'error')
+      ctx.terminal.focus()
+    } finally {
+      setUploading(false)
+    }
+  }
+
   // PR-B: outer chrome uses the bundle's `.term-frame` look.
   // The `.term-wrap` parent (provided by panes/TerminalPane.js) supplies
   // outer padding and flex sizing, so this component only renders the
@@ -490,6 +522,15 @@ export function TerminalPanel() {
         <span class="tdots"><i/><i/><i/></span>
         <span class="tpath">session · ${sessionId}</span>
         <span style="flex: 1;"/>
+        ${!readOnlySignal.value && html`
+          <button type="button" class="term-strip-btn" title="Send an image to this session"
+                  disabled=${uploading} onClick=${() => imageInputRef.current?.click()}>
+            <${Icon} d=${ICONS.image} size=${13}/>
+            <span>${uploading ? 'Uploading…' : 'Image'}</span>
+          </button>
+          <input ref=${imageInputRef} type="file" accept="image/png,image/jpeg,image/gif,image/webp"
+                 multiple hidden onChange=${handleImagePick}/>
+        `}
       </div>
       <div style="flex: 1; min-height: 0; min-width: 0; overflow: hidden; padding: 14px 16px;">
         <div ref=${containerRef} style="height: 100%; width: 100%; overflow: hidden;"/>

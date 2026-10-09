@@ -51,6 +51,8 @@ export const ICONS = {
   // merges the branch and cleans up. Replaces the ⎇✓ text glyph. Circles are
   // drawn as paired arcs because Icon renders a single <path>.
   merge:   'M15 18a3 3 0 106 0 3 3 0 10-6 0 M3 6a3 3 0 106 0 3 3 0 10-6 0 M6 21V9a9 9 0 009 9',
+  // matrix/hardened: image (frame + sun + hill) -- terminal strip upload button.
+  image:   'M3 5h18v14H3z M8.5 8.5a1.5 1.5 0 100 3 1.5 1.5 0 100-3 M21 15l-5-5L5 19',
 }
 
 export function Dot({ status, size = 7 }) {
