@@ -82,6 +82,8 @@ func handleSession(profile string, args []string) {
 		handleSessionShow(profile, args[1:])
 	case "viewers":
 		handleSessionViewers(profile, args[1:])
+	case "adopt": // matrix/hardened: take over a running Claude in tmux
+		handleSessionAdopt(profile, args[1:])
 	case "current":
 		handleSessionCurrent(profile, args[1:])
 	case "primer":
@@ -167,6 +169,7 @@ func printSessionHelp() {
 	fmt.Println("  recent [--limit N]      List sessions most-recently-used first (same last_accessed the TUI's alternate/MRU keys use)")
 	fmt.Println("  show [id]               Show session details (auto-detect current if no id)")
 	fmt.Println("  viewers [id]            List the terminals attached to a session (who is viewing it)")
+	fmt.Println("  adopt <tmux-session>    Take over a Claude already running in tmux, without interrupting it (--list)")
 	fmt.Println("  current                 Show current session and profile (auto-detect)")
 	fmt.Println("  primer [id]             Show the resolved context-level and rendered primer/identity text (#2260; auto-detect current if no id)")
 	fmt.Println("  set <id> <field> <value>  Update session property")
