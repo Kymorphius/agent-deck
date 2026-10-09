@@ -8,8 +8,10 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/asheshgoplani/agent-deck/internal/recall/testcorpus"
+	"github.com/asheshgoplani/agent-deck/internal/session"
 	"github.com/asheshgoplani/agent-deck/internal/statedb"
 )
 
@@ -349,15 +351,28 @@ func TestRecall_OpenPlansResumeOrStart(t *testing.T) {
 		t.Fatal(err)
 	}
 	const sid = "12345678-1234-4123-8123-123456789abc"
-	proj := filepath.Join(home, ".claude", "projects", "-app")
+	// matrix/hardened: the project dir is named after the launch cwd, as
+	// Claude names it, and the conversation ends in a subdirectory: recall
+	// open must resume from the launch dir (session.LocateClaudeResumeDir),
+	// and the transcript is aged past the "still open elsewhere" window.
+	sub := filepath.Join(cwd, "pkg")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	proj := filepath.Join(home, ".claude", "projects", session.ConvertToClaudeDirName(cwd))
 	if err := os.MkdirAll(proj, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	transcript := fmt.Sprintf(`{"type":"custom-title","customTitle":"clock skew fix","sessionId":%q}
 {"type":"user","message":{"role":"user","content":"fix the clock skew"},"uuid":"u1","timestamp":"2026-09-19T10:00:00Z","sessionId":%q,"cwd":%q}
 {"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"done"}],"usage":{"input_tokens":1,"output_tokens":1}},"uuid":"a1","timestamp":"2026-09-19T10:00:01Z","sessionId":%q,"cwd":%q}
-`, sid, sid, cwd, sid, cwd)
-	if err := os.WriteFile(filepath.Join(proj, sid+".jsonl"), []byte(transcript), 0o644); err != nil {
+`, sid, sid, cwd, sid, sub)
+	transcriptPath := filepath.Join(proj, sid+".jsonl")
+	if err := os.WriteFile(transcriptPath, []byte(transcript), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(transcriptPath, old, old); err != nil {
 		t.Fatal(err)
 	}
 	if _, stderr, code := runAgentDeck(t, home, "recall", "backfill", "--quiet"); code != 0 {

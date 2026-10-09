@@ -968,14 +968,17 @@ func recallOpenPlan(env *recallEnv, sess query.SessionRow, title string) ([]stri
 	if sess.Missing {
 		return nil, "", errors.New("the transcript file is gone; nothing to resume (the index still has its text: recall show)")
 	}
-	if sess.CWD == "" {
-		return nil, "", errors.New("the conversation recorded no working directory")
+	// matrix/hardened: resume from the directory the conversation was started
+	// in, found from its transcript. sess.CWD is the LAST cwd it recorded, and
+	// `add --resume-session` there started a new, empty conversation under the
+	// same id (see session.LocateClaudeResumeDir). A conversation still being
+	// written by another Claude process is refused.
+	loc, err := session.LocateClaudeResumeDir(env.cfg, sess.NativeID)
+	if err != nil {
+		return nil, "", err
 	}
-	if info, err := os.Stat(sess.CWD); err != nil || !info.IsDir() {
-		return nil, "", fmt.Errorf("working directory %s no longer exists", sess.CWD)
-	}
-	if !session.IsBareClaudeSessionUUID(sess.NativeID) {
-		return nil, "", fmt.Errorf("conversation id %q is not a bare Claude session uuid", sess.NativeID)
+	if age, live := loc.LiveFor(time.Now()); live {
+		return nil, "", fmt.Errorf("conversation %s was written %s ago and is probably still open in another terminal; continue it there, or close it and run recall open again", sess.NativeID, age.Round(time.Second))
 	}
 	if title == "" {
 		title = sess.Title
@@ -990,7 +993,7 @@ func recallOpenPlan(env *recallEnv, sess query.SessionRow, title string) ([]stri
 			break
 		}
 	}
-	args = append(args, sess.CWD)
+	args = append(args, loc.Dir)
 	return args, "add", nil
 }
 
