@@ -1,0 +1,16 @@
+#!/bin/bash
+# matrix/hardened: build this fork and install it to ~/.local/bin/agent-deck.
+#   scripts/matrix-install.sh [N]     N = our build number (default 1) -> <upstream tag>+matrix.N
+# Upgrade flow: git fetch upstream --tags && git merge <new tag> (resolve conflicts keeping the
+# matrix/hardened changes), run the changed-package tests with an isolated HOME, then this script.
+# Never install the Homebrew tap again (token-bearing update checks, auto-update timer, telemetry).
+set -euo pipefail
+cd "$(dirname "$0")/.."
+tag=$(git describe --tags --abbrev=0 --match 'v*' | sed 's/^v//')
+ver="${tag}+matrix.${1:-1}"
+out=$(mktemp -d)
+GOTOOLCHAIN=${GOTOOLCHAIN:-go1.25.13} go build -trimpath -ldflags "-s -w -X main.Version=$ver" -o "$out/agent-deck" ./cmd/agent-deck
+if strings "$out/agent-deck" | grep -qE 'phc_[A-Za-z0-9]{20}'; then echo "refusing: a PostHog key is compiled in" >&2; exit 1; fi
+install -m 755 "$out/agent-deck" "$HOME/.local/bin/agent-deck"; rm -rf "$out"
+echo "installed: $("$HOME/.local/bin/agent-deck" --version)"
+"$HOME/.local/bin/agent-deck" hooks status | head -3
