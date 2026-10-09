@@ -211,3 +211,62 @@ func TestMatrixLineNumbers_RenderedAndToggle(t *testing.T) {
 		t.Fatal(":set nonu was lost after 3j")
 	}
 }
+
+// ---------- "''" jump back ----------
+
+func TestMatrixJumpBack_AfterGroupJumpToggles(t *testing.T) {
+	home, idx := buildTwoGroupHome(t)
+	home.cursor = idx["a2"]
+
+	h := matrixPressKeys(t, home, '\'', '2')
+	group := h.cursor
+	h = matrixPressKeys(t, h, '\'', '\'')
+	if h.cursor != idx["a2"] {
+		t.Fatalf("'2 then '': cursor = %d (%s), want back on a2", h.cursor, describeCursor(h))
+	}
+	h = matrixPressKeys(t, h, '\'', '\'')
+	if h.cursor != group {
+		t.Fatalf("second '': cursor = %d (%s), want group 2 at %d again", h.cursor, describeCursor(h), group)
+	}
+}
+
+func TestMatrixJumpBack_AfterLineJump(t *testing.T) {
+	home, idx := buildTwoGroupHome(t)
+	home.cursor = idx["a1"]
+	nums, _ := home.matrixRowNumbers()
+
+	h := matrixTypeCmd(t, home, strconv.Itoa(nums[idx["b2"]]))
+	h = matrixPressKeys(t, h, 'k') // plain moves don't set the mark
+	h = matrixPressKeys(t, h, '\'', '\'')
+
+	if h.cursor != idx["a1"] {
+		t.Fatalf(":N, k, '': cursor = %d (%s), want a1", h.cursor, describeCursor(h))
+	}
+}
+
+func TestMatrixJumpBack_FollowsTheRowNotTheIndex(t *testing.T) {
+	home, idx := buildTwoGroupHome(t)
+	home.cursor = idx["b1"]
+
+	h := matrixPressKeys(t, home, '\'', '1')
+	// Collapse alpha: b1 moves up in flatItems, the mark must follow it.
+	h.groupTree.ToggleGroup("alpha")
+	h.rebuildFlatItems()
+	h = matrixPressKeys(t, h, '\'', '\'')
+
+	if it := h.flatItems[h.cursor]; it.Type != session.ItemTypeSession || it.Session.Title != "b1" {
+		t.Fatalf("'' after collapsing alpha: cursor on %s, want b1", describeCursor(h))
+	}
+}
+
+func TestMatrixJumpBack_NoMarkIsANoop(t *testing.T) {
+	home, idx := buildTwoGroupHome(t)
+	home.cursor = idx["a2"]
+
+	h := matrixPressKeys(t, home, '\'', '9') // no group 9: no move, no mark
+	h = matrixPressKeys(t, h, '\'', '\'')
+
+	if h.cursor != idx["a2"] {
+		t.Fatalf("'' with no mark: cursor = %d (%s), want a2", h.cursor, describeCursor(h))
+	}
+}

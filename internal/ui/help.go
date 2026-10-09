@@ -295,6 +295,7 @@ func (h *HelpOverlay) View() string {
 		{"'1-'9", "Jump to root group"},
 		{"3j / 3k", "Move 3 rows (any count)"},
 		{":12 Enter", "Jump to line 12 (:set nonu hides numbers)"},
+		{"''", "Back to the row before the last 'N / :N jump"},
 		{"Space", "Jump mode"},
 		{altSessionKey, "Alternate session (swap with the previous one, vim-style)"},
 		{mruBackKey, "Walk back through recently used sessions"},
@@ -325,7 +326,7 @@ func (h *HelpOverlay) View() string {
 			items: [][2]string{
 				{"Enter", quickStartEnter},
 				{restartKey, "Restart selected session"},
-				{detachKey, "Detach from session"},
+				{detachKey + " / Alt+Q", "Detach from session"}, // matrix/hardened: Alt+Q too
 				{helpKey, "Open this help"},
 			},
 		},
