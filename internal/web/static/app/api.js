@@ -44,3 +44,25 @@ export async function apiFetch(method, path, body) {
   }
   return data
 }
+
+// matrix/hardened: uploadSessionImage posts one image file as the raw request
+// body to /api/sessions/{id}/image and resolves to the absolute path the host
+// stored it under (see terminalImage.js). The server sniffs the type from the
+// bytes; Content-Type here is informational only.
+export async function uploadSessionImage(sessionId, file) {
+  let res
+  try {
+    res = await fetch('/api/sessions/' + encodeURIComponent(sessionId) + '/image', {
+      method: 'POST',
+      headers: authHeaders({ 'Content-Type': file.type || 'application/octet-stream' }),
+      body: file,
+    })
+  } catch (err) {
+    throw new Error('Network error: ' + (err.message || 'upload failed'))
+  }
+  const data = await res.json().catch(() => null)
+  if (!res.ok || !data?.path) {
+    throw new Error(data?.error?.message || res.statusText || 'upload failed')
+  }
+  return data.path
+}
