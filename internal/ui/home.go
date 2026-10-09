@@ -314,6 +314,7 @@ type Home struct {
 	feedbackSender       *feedback.Sender      // Sender constructed once in NewHome (Phase 3, per D-05)
 	watcherPanel         *WatcherPanel         // For showing watcher status and events
 	agentsPanel          *AgentsPanel          // Agents tab: adopted agents, grouped by machine
+	kanbanPanel          *KanbanPanel          // matrix/hardened: World Store task board (alt+t)
 	deadLetterPanel      *DeadLetterPanel      // Inspect, retry, and explicitly purge delivery failures
 	// agentsView is the last built fleet view; agentBySession indexes its
 	// rows by adopted session id so the session list can mark agent-owned
@@ -7412,6 +7413,11 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 	h.consumeHealthWarning()
 	var cmds []tea.Cmd
 
+	// matrix/hardened: World Store task board results (kanban_home.go).
+	if cmd, ok := h.handleKanbanMsg(msg); ok {
+		return h, cmd
+	}
+
 	switch msg := msg.(type) {
 	case quitMsg:
 		// Execute final shutdown logic after splash delay
@@ -7438,6 +7444,7 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		h.settingsPanel.SetSize(msg.Width, msg.Height)
 		h.watcherPanel.SetSize(msg.Width, msg.Height)
 		h.agentsPanel.SetSize(msg.Width, msg.Height)
+		h.kanbanPanel.SetSize(msg.Width, msg.Height) // matrix/hardened
 		if h.deadLetterPanel != nil {
 			h.deadLetterPanel.SetSize(msg.Width, msg.Height)
 		}
@@ -10065,6 +10072,11 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			h.agentsPanel, cmd = h.agentsPanel.Update(msg)
 			return h, cmd
 		}
+		if h.kanbanPanel.IsVisible() { // matrix/hardened
+			var cmd tea.Cmd
+			h.kanbanPanel, cmd = h.kanbanPanel.Update(msg)
+			return h, cmd
+		}
 		if h.watcherPanel.IsVisible() {
 			var cmd tea.Cmd
 			h.watcherPanel, cmd = h.watcherPanel.Update(msg)
@@ -11113,6 +11125,7 @@ func (h *Home) hasModalVisible() bool {
 		(h.toolVisibilityPanel != nil && h.toolVisibilityPanel.IsVisible()) ||
 		h.watcherPanel.IsVisible() || // hotkeyWatcherPanel overlay
 		h.agentsPanel.IsVisible() || // hotkeyAgentsPanel overlay
+		h.kanbanPanel.IsVisible() || // matrix/hardened: hotkeyTaskBoard overlay
 		(h.deadLetterPanel != nil && h.deadLetterPanel.IsVisible()) || // hotkeyDeadLetters overlay
 		h.helpOverlay.IsVisible() || h.search.IsVisible() || h.globalSearch.IsVisible() ||
 		h.newDialog.IsVisible() || h.groupDialog.IsVisible() || h.forkDialog.IsVisible() ||
@@ -12328,6 +12341,9 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		h.agentsPanel.Show()
 		h.agentsPanel.SetSize(h.width, h.height)
 		return h, nil
+
+	case defaultHotkeyBindings[hotkeyTaskBoard]: // matrix/hardened: World Store task board
+		return h, h.openKanbanPanel()
 
 	case "E":
 		// Exec an interactive shell inside the sandbox container.
@@ -18872,6 +18888,9 @@ func (h *Home) renderFrame() string {
 	}
 	if h.agentsPanel.IsVisible() {
 		return h.agentsPanel.View()
+	}
+	if h.kanbanPanel.IsVisible() { // matrix/hardened
+		return h.kanbanPanel.View()
 	}
 	if h.watcherPanel.IsVisible() {
 		return h.watcherPanel.View()

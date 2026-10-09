@@ -463,6 +463,9 @@ func main() {
 		case "fleet":
 			handleFleet(profile, args[1:])
 			return
+		case "tasks": // matrix/hardened: World Store task board
+			handleTasks(profile, args[1:])
+			return
 		case "mcp":
 			handleMCP(profile, args[1:])
 			return
@@ -1488,6 +1491,7 @@ var commandRegistry = map[string]bool{
 	"session": true, "fleet": true, "mcp": true, "plugin": true, "skill": true, "mcp-proxy": true,
 	"group": true, "try": true, "launch": true, "conductor": true,
 	"agents": true, "agent": true,
+	"tasks":           true, // matrix/hardened: World Store task board
 	"telegram-doctor": true, "watcher": true, "openclaw": true, "oc": true,
 	"remote": true, "remote-agent": true, "system": true, "worktree": true, "wt": true, "costs": true, "events": true, "daemon": true, "usage": true, "web": true, "config": true, "recall": true,
 	"uninstall": true, "migrate-paths": true, "hook-handler": true,
