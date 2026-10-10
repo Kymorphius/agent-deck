@@ -21,7 +21,11 @@ import (
 // at 2 cells by the width library and rendered at 2 by the terminals the
 // deck runs in; the bare U+1F441 is measured at 1 and rendered at 2 by some,
 // which would push the row's trailing badges off the pane.
-const viewersEye = "👁️"
+//
+// matrix/hardened: some terminals still advance one cell for the VS16 eye,
+// so the next character is drawn under it ("👁no viewers"). A plain geometric glyph has one width
+// everywhere.
+const viewersEye = "◉"
 
 // viewersBadge is the row badge: " 👁️ 2" for two attached terminals, nothing
 // when nobody is attached or the count is unknown (a row has no room to say
