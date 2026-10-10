@@ -202,6 +202,16 @@ func (b *tmuxPTYBridge) Resize(cols, rows int) error {
 		return fmt.Errorf("resize pty: %w", err)
 	}
 
+	// matrix/hardened: take the window's `latest` slot even when the size did
+	// not change. The kernel raises SIGWINCH only on a real change, so a phone
+	// coming back to the page (same viewport) never took the window back from a
+	// desktop client and kept showing a cropped pane until the user typed.
+	// Signalling the attach client is what tmux.HandLatestToViewer does: on
+	// SIGWINCH it sends tmux a resize, which makes it the latest client.
+	if b.cmd != nil && b.cmd.Process != nil {
+		_ = b.cmd.Process.Signal(syscall.SIGWINCH)
+	}
+
 	return nil
 }
 

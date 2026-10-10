@@ -27,11 +27,12 @@ import {
   profilesSignal, systemStatsSignal,
   toolFilterSignal, visibleToolsSignal, toolFilterFallbackSignal,
   hiddenToolsSignal, pickerToolsSignal, modelCatalogSignal,
-  trustedDomainsSignal, confirmLinkOpenSignal,
+  trustedDomainsSignal, confirmLinkOpenSignal, readOnlySignal,
 } from './state.js'
+import { openImagePicker, imageUploadingSignal } from './terminalImage.js'
 import {
   activeTabSignal, paletteOpenSignal, tweaksOpenSignal,
-  railSignal, profileSignal, groupExpandedSignal,
+  railSignal, profileSignal, groupExpandedSignal, sessionDrawerOpenSignal,
 } from './uiState.js'
 import { ConfirmDialog } from './ConfirmDialog.js'
 import { GroupNameDialog } from './GroupNameDialog.js'
@@ -91,12 +92,19 @@ function WorkHead() {
         ${profile && html`<span class="seg">${profile} /</span>`}
         <span class="seg">${session.group || 'default'} /</span>
         <span class="cur">${session.title}</span>
+        <span class="sid" title=${session.id}>${session.id.slice(0, 8)}</span>
       </div>
       <span class=${`status-chip ${session.status}`}><span class="d"/>${session.status}</span>
       ${modelLabel && html`<span class="status-chip model" title=${session.modelId || modelLabel}>${modelLabel}</span>`}
       <span class="spacer"/>
       ${canMutate && html`
         <div class="actions">
+          ${activeTabSignal.value === 'terminal' && !readOnlySignal.value && html`
+            <button class="btn ghost wh-image" title="Send an image to this session"
+                    disabled=${imageUploadingSignal.value} onClick=${openImagePicker}>
+              <${Icon} d=${ICONS.image} size=${12}/><span class="lbl">${imageUploadingSignal.value ? 'Uploading…' : 'Image'}</span>
+            </button>
+          `}
           ${(session.status === 'running' || session.status === 'waiting')
             ? html`<button class="btn ghost" onClick=${() => action('stop')}><${Icon} d=${ICONS.stop} size=${12}/>Stop</button>`
             : html`<button class="btn ghost" onClick=${() => action('start')}><${Icon} d=${ICONS.play} size=${12}/>Start</button>`}
@@ -469,6 +477,11 @@ export function AppShell() {
     return () => window.removeEventListener('keydown', onKey)
   }, [])
 
+  // matrix/hardened: picking a session or a tab closes the touch-tablet
+  // session drawer, so the terminal comes back at full width.
+  const selectedId = selectedIdSignal.value
+  useEffect(() => { sessionDrawerOpenSignal.value = false }, [selectedId, activeTab])
+
   // Esc closes info drawer (preserved from old AppShell).
   useEffect(() => {
     if (!drawerOpen) return
@@ -481,6 +494,7 @@ export function AppShell() {
     <div id="app-root-grid" class="app">
       <${Topbar}/>
       <${Sidebar}/>
+      <div class="sdrawer-scrim" onClick=${() => (sessionDrawerOpenSignal.value = false)}/>
       <div class="main">
         <${WorkHead}/>
         <div class="work-body">

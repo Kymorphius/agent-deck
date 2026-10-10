@@ -1421,3 +1421,94 @@ body[data-rail="hidden"] .rightrail { display: none; }
 .fleet-stats .stat.tone-ok .num   { color: var(--tn-green); }
 .fleet-stats .stat.tone-muted .num { color: var(--text-dim); }
 .kb-col.muted { border-top-color: var(--muted); }
+
+/* ==================== matrix/hardened: TOUCH TABLET ==================== */
+/* An unfolded foldable (724px) or a small tablet: too wide for the phone
+   layout above (<=720px), too narrow for a fixed 300px sidebar plus a usable
+   terminal. The sidebar becomes a drawer behind the topbar's menu button
+   (sessionDrawerOpenSignal), the right rail is dropped, and the topbar,
+   session head and footer stop overflowing. */
+.sdrawer-btn, .sdrawer-scrim { display: none; }
+@media (pointer: coarse) and (min-width: 721px) and (max-width: 1100px) {
+  .app, body[data-rail="visible"] .app, body[data-rail="hidden"] .app {
+    grid-template-columns: 0 1fr 0;
+  }
+  .rightrail, .rail-toggle { display: none; }
+
+  .sidebar {
+    position: fixed; top: var(--topbar-h); bottom: 0; left: 0;
+    width: min(340px, 85vw); z-index: 35;
+    transform: translateX(-100%); transition: transform 160ms ease;
+  }
+  body[data-sdrawer="open"] .sidebar { transform: none; box-shadow: 0 0 60px rgba(0,0,0,0.6); }
+  /* the filter input's intrinsic width pushed the last status chip past the
+     sidebar edge, where it poked out of the closed drawer */
+  .side-filter input { min-width: 0; }
+  .sidebar { overflow: hidden; }
+  body[data-sdrawer="open"] .sdrawer-scrim {
+    display: block; position: fixed; inset: var(--topbar-h) 0 0 0;
+    z-index: 34; background: rgba(0,0,0,0.45);
+  }
+  .sdrawer-btn { display: inline-grid; width: 36px; height: 36px; }
+
+  .top-brand { min-width: 0; padding: 0 8px; gap: 8px; }
+  .top-brand .brand-text { display: none; }
+  .top-search { display: none; }
+  /* tabs scroll sideways instead of clipping the last one */
+  .top-mid { overflow-x: auto; scrollbar-width: none; }
+  .top-mid::-webkit-scrollbar { display: none; }
+  .top-tab { white-space: nowrap; }
+
+  .work-head { flex-wrap: wrap; gap: 6px; padding: 8px 10px; min-height: 0; }
+  .work-head .actions .btn .kbd { display: none; }
+
+  .term-wrap { padding: 8px; }
+
+  .footer { gap: 10px; overflow: hidden; }
+  .footer .fseg { white-space: nowrap; }
+  .footer .fkbd { display: none; }
+}
+
+/* ==================== matrix/hardened: COMPACT TERMINAL HEAD ==================== */
+/* Phones and touch tablets: the terminal strip (dots, session id, Image) costs
+   a row the terminal needs. Hide it; the work head carries the short session
+   id and the Image button instead. Desktop keeps the strip. */
+.wh-image, .work-head .path .sid { display: none; }
+@media (max-width: 720px), (pointer: coarse) and (max-width: 1100px) {
+  .term-strip { display: none; }
+  .wh-image { display: inline-flex; }
+  .work-head .path .sid {
+    display: inline; flex: 0 1 auto; min-width: 0; overflow: hidden;
+    font-family: var(--mono); font-size: 10.5px; color: var(--muted);
+  }
+}
+@media (max-width: 720px) {
+  .wh-image .lbl { display: none; }
+  /* keep the head at two rows on a phone: no id. The brand wrapped onto two
+     lines (its logo is already 0 wide here), so the topbar drops it. */
+  .work-head .path .sid { display: none; }
+  .top-brand { display: none; }
+  .top-right { border-left: 0; }
+}
+
+/* ==================== matrix/hardened: NO STICKY HOVER ON TOUCH ==================== */
+/* A touch screen keeps :hover on the last tapped element, so a button tapped
+   once (the work head's Image) stayed highlighted and looked unlike its
+   neighbours. Where there is no real hover, put every hover rule back to its
+   resting look and show the press with :active instead. */
+@media (hover: none) {
+  .btn:hover { border-color: var(--border); background: var(--card); }
+  .btn.ghost:hover { background: transparent; }
+  .btn.primary:hover { filter: none; background: var(--accent); border-color: var(--accent); }
+  .btn.danger:hover { border-color: rgba(247,118,142,0.3); }
+  .btn.warn:hover { border-color: rgba(224,175,104,0.3); }
+  .btn:active { border-color: var(--border-hi); background: var(--card-hi); }
+  .btn.ghost:active { background: var(--card); }
+  .btn.primary:active { filter: brightness(1.08); }
+
+  .icon-btn:not(.active):hover { background: transparent; color: var(--text-dim); border-color: transparent; }
+  .icon-btn:active { background: var(--card); color: var(--text); }
+  .top-tab:not(.active):hover { color: var(--text-dim); background: transparent; }
+  .term-strip-btn:hover { border-color: var(--border); background: transparent; }
+  .term-strip-btn:active { border-color: var(--border-hi); background: var(--card); }
+}

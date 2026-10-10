@@ -10,7 +10,7 @@ import { menuModelSignal } from './dataModel.js'
 import { connectionSignal, profilesSignal, commandCenterSignal } from './state.js'
 import {
   activeTabSignal, paletteOpenSignal, tweaksOpenSignal,
-  railSignal, profileSignal,
+  railSignal, profileSignal, sessionDrawerOpenSignal,
 } from './uiState.js'
 import { ToastHistoryDrawerToggle } from './ToastHistoryDrawer.js'
 import { tabStrip } from './paneRegistry.js'
@@ -36,6 +36,10 @@ export function Topbar() {
   return html`
     <header class="topbar">
       <div class="top-brand">
+        <button class="icon-btn sdrawer-btn" title="Sessions" aria-label="Sessions"
+                onClick=${() => (sessionDrawerOpenSignal.value = !sessionDrawerOpenSignal.value)}>
+          <${Icon} d=${ICONS.menu} size=${18}/>
+        </button>
         <${Logo}/>
         <div class="brand-text">agent-deck<span class="dim">web</span></div>
       </div>
@@ -85,7 +89,7 @@ export function Topbar() {
         })()}
         <${ToastHistoryDrawerToggle}/>
         <button
-          class=${`icon-btn ${rail === 'visible' ? 'active' : ''}`}
+          class=${`icon-btn rail-toggle ${rail === 'visible' ? 'active' : ''}`}
           onClick=${() => (railSignal.value = rail === 'visible' ? 'hidden' : 'visible')}
           title=${rail === 'visible' ? 'Hide right rail (])' : 'Show right rail (])'}
           aria-label="Toggle right rail">
