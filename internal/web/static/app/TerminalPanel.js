@@ -7,13 +7,14 @@ import { selectedIdSignal, sessionsSignal, authTokenSignal, wsStateSignal, readO
 import { apiFetch, uploadSessionImage } from './api.js'
 import { Icon, ICONS } from './icons.js'
 import { addToast } from './toasts.js'
-import { uploadImagesToPane } from './terminalImage.js'
+import { uploadImagesToPane, imageUploadingSignal, registerImagePicker } from './terminalImage.js'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebglAddon } from '@xterm/addon-webgl'
 import { EmptyStateDashboard } from './EmptyStateDashboard.js'
 import { terminalKeymap } from './terminalKeys.js'
 import { createPasteHandler } from './terminalPaste.js'
+import { installTouchScroll } from './terminalTouchScroll.js'
 import { registerOsc52Handler } from './terminalClipboard.js'
 import { createTerminalLinkHandler } from './terminalLinks.js'
 import { observeSession, shouldReattach, sessionStartedSignal, noteSessionStarted } from './terminalReconnect.js'
@@ -34,48 +35,6 @@ function wsURLForSession(sessionId, token) {
   return url.toString()
 }
 
-// Install touch-to-scroll on the terminal container.
-// PERF-E: takes the shared AbortController so every listener registered here
-// is torn down by the single controller.abort() in the useEffect cleanup. No
-// local dispose() return value is needed.
-function installTouchScroll(container, xtermEl, controller) {
-  if (!container || !xtermEl) return
-
-  let active = false
-  let lastY = 0
-
-  function onTouchStart(event) {
-    if (!event.touches || event.touches.length !== 1) return
-    active = true
-    lastY = event.touches[0].clientY
-  }
-
-  function onTouchMove(event) {
-    if (!active || !event.touches || event.touches.length !== 1) return
-    event.preventDefault()
-    const y = event.touches[0].clientY
-    const delta = lastY - y
-    lastY = y
-    if (xtermEl && delta !== 0) {
-      xtermEl.dispatchEvent(
-        new WheelEvent('wheel', {
-          deltaY: delta,
-          deltaMode: 0,
-          bubbles: true,
-          cancelable: true,
-        })
-      )
-    }
-  }
-
-  function onTouchEnd() { active = false }
-
-  container.addEventListener('touchstart', onTouchStart, { capture: true, passive: true, signal: controller.signal })
-  container.addEventListener('touchmove', onTouchMove, { capture: true, passive: false, signal: controller.signal })
-  container.addEventListener('touchend', onTouchEnd, { capture: true, passive: true, signal: controller.signal })
-  container.addEventListener('touchcancel', onTouchEnd, { capture: true, passive: true, signal: controller.signal })
-}
-
 export function TerminalPanel() {
   const containerRef = useRef(null)
   const ctxRef = useRef(null)  // { terminal, fitAddon, ws, resizeObserver, controller, decoder, reconnectTimer, reconnectAttempt, wsReconnectEnabled, terminalAttached }
@@ -93,7 +52,8 @@ export function TerminalPanel() {
   const [reconnectKey, setReconnectKey] = useState(0)
   // matrix/hardened: image upload button state (handleImagePick below).
   const imageInputRef = useRef(null)
-  const [uploading, setUploading] = useState(false)
+  const uploading = imageUploadingSignal.value
+  useEffect(() => registerImagePicker(() => imageInputRef.current?.click()), [])
 
   // Signal vanilla app.js to suppress its terminal path while TerminalPanel is mounted
   useEffect(() => {
@@ -283,7 +243,34 @@ export function TerminalPanel() {
 
     // Touch scrolling for mobile -- listeners attach via the shared
     // AbortController (PERF-E). No local dispose handle is needed.
-    installTouchScroll(container, terminal.element, controller)
+    // matrix/hardened: finger-tracking + momentum (terminalTouchScroll.js);
+    // it needs the row height to turn finger travel into whole lines.
+    installTouchScroll(container, terminal.element, controller, () => {
+      const screen = terminal.element?.querySelector('.xterm-screen')
+      return screen && terminal.rows ? screen.clientHeight / terminal.rows : 0
+    })
+
+    // matrix/hardened: tmux sizes a shared window to its latest client
+    // (window-size=latest), and only typing or a real resize makes a client
+    // the latest. A phone coming back to this page, or tapping the terminal,
+    // still showed the pane cropped to the desktop's width until it typed.
+    // A resize at the current size is enough: the bridge signals its tmux
+    // client, which takes the slot (terminal_bridge.go Resize). Throttled,
+    // since pointerdown also fires for every touch-scroll gesture.
+    let lastClaim = 0
+    const claimWindow = () => {
+      const now = Date.now()
+      if (now - lastClaim < 2000 || readOnlySignal.value) return
+      if (!ctx.ws || ctx.ws.readyState !== WebSocket.OPEN || !ctx.terminalAttached) return
+      const { cols, rows } = terminal
+      if (cols < 10 || rows < 3) return
+      lastClaim = now
+      ctx.ws.send(JSON.stringify({ type: 'resize', cols, rows }))
+    }
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') claimWindow()
+    }, { signal: controller.signal })
+    container.addEventListener('pointerdown', claimWindow, { capture: true, signal: controller.signal })
 
     // Keyboard input forwarding (desktop + mobile; server gates on ReadOnly).
     // sendInput is the single guarded path to the pane -- every producer
@@ -498,7 +485,7 @@ export function TerminalPanel() {
       addToast('Terminal is not connected; image not sent', 'error')
       return
     }
-    setUploading(true)
+    imageUploadingSignal.value = true
     try {
       const { errors } = await uploadImagesToPane(files, {
         sessionId,
@@ -508,7 +495,7 @@ export function TerminalPanel() {
       for (const msg of errors) addToast(msg, 'error')
       ctx.terminal.focus()
     } finally {
-      setUploading(false)
+      imageUploadingSignal.value = false
     }
   }
 

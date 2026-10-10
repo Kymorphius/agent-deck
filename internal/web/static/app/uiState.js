@@ -56,6 +56,16 @@ persist(densitySignal, 'agentdeck.density')
 export const railSignal = signal(loadJSON('agentdeck.rail', 'visible'))
 persist(railSignal, 'agentdeck.rail')
 
+// matrix/hardened: session drawer for touch tablets / an unfolded foldable
+// (coarse pointer, 721-1100px), where the fixed 300px sidebar left the terminal
+// ~45 columns. Drives body[data-sdrawer]; the CSS ignores it at other sizes.
+// Not persisted: every load starts with the terminal at full width.
+export const sessionDrawerOpenSignal = signal(false)
+effect(() => {
+  if (typeof document === 'undefined') return
+  document.body.dataset.sdrawer = sessionDrawerOpenSignal.value ? 'open' : 'closed'
+})
+
 // Right rail panel toggles (which cards are shown).
 export const rightRailPanelsSignal = signal(loadJSON('agentdeck.rightRailPanels', {
   overview: true, usage: true, mcps: true, skills: true, children: true, events: true,

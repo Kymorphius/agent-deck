@@ -11,6 +11,28 @@
 // terminalPaste.js), so it reaches the pane over the single guarded input path
 // and arrives bracketed. No DOM or xterm import here: upload and paste are
 // passed in, which keeps this module unit-testable on its own.
+//
+// On phones the terminal strip is hidden and the button sits in the work head
+// instead (AppShell.js). The file input stays in TerminalPanel, which owns the
+// pane; it registers its picker here and the work head opens it.
+import { signal } from '@preact/signals'
+
+export const imageUploadingSignal = signal(false)
+
+let picker = null
+
+// registerImagePicker installs the function that opens the file chooser and
+// returns the matching unregister, for a useEffect cleanup.
+export function registerImagePicker(open) {
+  picker = open
+  return () => { if (picker === open) picker = null }
+}
+
+// openImagePicker must run inside the click handler: browsers only open a
+// file chooser from a user gesture.
+export function openImagePicker() {
+  if (picker) picker()
+}
 
 // imagePastePath escapes a path the way a terminal escapes a dropped file, so
 // a space or quote in it cannot split it into two arguments.
