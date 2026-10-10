@@ -38,8 +38,8 @@ func TestMatrixAdoptPanel_ConfirmsThenAdopts(t *testing.T) {
 	}
 	p := NewAdoptPanel()
 	p.SetSize(120, 30)
-	p.handleLoaded(p.Open("k02", run)().(adoptLoadedMsg))
-	if len(p.cands) != 2 || !strings.Contains(p.View(), "remote k02") || !strings.Contains(p.View(), "gd") {
+	p.handleLoaded(p.Open("lab", run)().(adoptLoadedMsg))
+	if len(p.cands) != 2 || !strings.Contains(p.View(), "remote lab") || !strings.Contains(p.View(), "gd") {
 		t.Fatalf("list not shown: %d\n%s", len(p.cands), p.View())
 	}
 
@@ -70,7 +70,7 @@ func TestMatrixAdoptPanel_ConfirmsThenAdopts(t *testing.T) {
 	if got := calls[len(calls)-1]; strings.Join(got, " ") != strings.Join(want, " ") {
 		t.Fatalf("adopt ran %v, want %v", got, want)
 	}
-	if done.err != nil || done.target != "k02" || !strings.Contains(done.notice, "agentdeck_gd_1") {
+	if done.err != nil || done.target != "lab" || !strings.Contains(done.notice, "agentdeck_gd_1") {
 		t.Fatalf("done: %+v", done)
 	}
 	if reload := p.handleDone(done); reload == nil || !strings.Contains(p.View(), "Adopted") {

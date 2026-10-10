@@ -119,8 +119,8 @@ func TestWebServicePanel_ShowsFailureAndRemoteTarget(t *testing.T) {
 	}
 	p := NewWebServicePanel()
 	p.SetSize(100, 30)
-	drivePanel(t, p, p.Open("k02", cli.run))
-	if !strings.Contains(p.View(), "remote k02") {
+	drivePanel(t, p, p.Open("lab", cli.run))
+	if !strings.Contains(p.View(), "remote lab") {
 		t.Fatalf("target not shown:\n%s", p.View())
 	}
 	_, _ = p.Update(wsKey("R"))

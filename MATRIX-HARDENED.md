@@ -73,7 +73,7 @@
 ## 4. 编译、测试、安装
 
 ```sh
-cd ~/333.dev/agent-deck
+cd /path/to/agent-deck
 # 编译安装（版本号取最近的上游标签加 +matrix.N；产物里如果有 PostHog 密钥会拒绝安装）
 scripts/matrix-install.sh 1
 ```
