@@ -27,7 +27,7 @@ func (f *kanbanFakeEntry) env() *kanbanEnv {
 		f.ops = append(f.ops, req)
 		return []byte(f.answer(req)), nil
 	}
-	return &kanbanEnv{client: worldstore.NewWithRunner(run), device: "host", execCategory: "AI 执行"}
+	return &kanbanEnv{client: worldstore.NewWithRunner(run), device: "host", execCategory: "AI"}
 }
 
 func (f *kanbanFakeEntry) last() map[string]any { return f.ops[len(f.ops)-1] }
@@ -36,7 +36,7 @@ func (f *kanbanFakeEntry) last() map[string]any { return f.ops[len(f.ops)-1] }
 const kanbanSnapshot = `{"ok":true,"result":{"accountId":"a","spaceId":"s","pending":false,"tuiCanWrite":true,
  "availableFields":["任务｜agent-deck 会话关联","任务｜执行分类"],
  "groups":{"tasks":[
-  {"id":"t1","name":"写周报","fields":{"任务｜状态":"待办","任务｜执行分类":"AI 执行"}},
+  {"id":"t1","name":"写周报","fields":{"任务｜状态":"待办","任务｜执行分类":"AI"}},
   {"id":"t2","name":"修复登录","fields":{"任务｜状态":"待办","任务｜agent-deck 会话关联":"{\"version\":1,\"links\":[{\"source\":\"agent-deck\",\"deviceId\":\"host\",\"sessionId\":\"sess-1\",\"linkedAt\":1}]}"}},
   {"id":"t3","name":"历史导入","imported":true,"fields":{"任务｜状态":"待办"}},
   {"id":"t4","name":"整理行李","fields":{"任务｜状态":"待办"}}
@@ -304,11 +304,11 @@ func TestKanbanDefaultViewShowsAITasksAndLinkedOnes(t *testing.T) {
 			ids[task.ID] = true
 		}
 	}
-	// t1 is marked AI 执行, t2 has a linked session; t3/t4 are neither.
+	// t1 is marked AI, t2 has a linked session; t3/t4 are neither.
 	if !ids["t1"] || !ids["t2"] || ids["t3"] || ids["t4"] {
 		t.Fatalf("default view = %v", ids)
 	}
-	if v := p.View(); !strings.Contains(v, "AI 执行 (2 of 4)") {
+	if v := p.View(); !strings.Contains(v, "AI (2 of 4)") {
 		t.Fatalf("header:\n%s", v)
 	}
 	p.Update(kanbanKey("a"))
@@ -320,14 +320,14 @@ func TestKanbanDefaultViewShowsAITasksAndLinkedOnes(t *testing.T) {
 func TestKanbanEmptyAIViewExplainsHowToAdd(t *testing.T) {
 	f := kanbanEntry()
 	f.answer = func(map[string]any) string {
-		s := strings.Replace(kanbanSnapshot, `,"任务｜执行分类":"AI 执行"`, "", 1)
+		s := strings.Replace(kanbanSnapshot, `,"任务｜执行分类":"AI"`, "", 1)
 		return strings.Replace(s, `"任务｜agent-deck 会话关联":"{`, `"x":"{`, 1)
 	}
 	p := NewKanbanPanel()
 	p.SetSize(120, 24)
 	p.handleLoaded(p.Open(f.env(), "", nil, nil)().(kanbanLoadedMsg))
 	v := p.View()
-	if !strings.Contains(v, "No tasks have 执行分类 = AI 执行 yet") || strings.Count(v, "\n") != 23 {
+	if !strings.Contains(v, "No tasks have 执行分类 = AI yet") || strings.Count(v, "\n") != 23 {
 		t.Fatalf("empty view:\n%s", v)
 	}
 }
@@ -344,7 +344,7 @@ func TestKanbanMarkAndUnmarkQuoteTheReadValue(t *testing.T) {
 	p.handleWritten(cmd().(kanbanWrittenMsg))
 	req := f.last()
 	patch, expected := req["patch"].(map[string]any), req["expected"].(map[string]any)
-	if req["op"] != "task.update" || req["id"] != "t4" || patch["任务｜执行分类"] != "AI 执行" || expected["任务｜执行分类"] != "" {
+	if req["op"] != "task.update" || req["id"] != "t4" || patch["任务｜执行分类"] != "AI" || expected["任务｜执行分类"] != "" {
 		t.Fatalf("mark request = %v", req)
 	}
 	p.loading = false
@@ -356,7 +356,7 @@ func TestKanbanMarkAndUnmarkQuoteTheReadValue(t *testing.T) {
 	_, cmd = p.Update(kanbanKey("enter"))
 	cmd()
 	req = f.last()
-	if req["patch"].(map[string]any)["任务｜执行分类"] != "" || req["expected"].(map[string]any)["任务｜执行分类"] != "AI 执行" {
+	if req["patch"].(map[string]any)["任务｜执行分类"] != "" || req["expected"].(map[string]any)["任务｜执行分类"] != "AI" {
 		t.Fatalf("unmark request = %v", req)
 	}
 }

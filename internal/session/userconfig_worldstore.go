@@ -18,7 +18,7 @@ type WorldStoreSettings struct {
 	Node string `toml:"node,omitempty"`
 
 	// ExecutionCategory is the 任务｜执行分类 value the board shows by default
-	// (default "AI 执行"); the "all tasks" view shows everything.
+	// (default "AI"); the "all tasks" view shows everything.
 	ExecutionCategory string `toml:"execution_category,omitempty"`
 
 	// DeviceID names this machine in task ↔ session links (default: hostname
@@ -26,10 +26,10 @@ type WorldStoreSettings struct {
 	DeviceID string `toml:"device_id,omitempty"`
 }
 
-// GetExecutionCategory returns the board's execution category, defaulting to "AI 执行".
+// GetExecutionCategory returns the board's execution category, defaulting to "AI".
 func (w WorldStoreSettings) GetExecutionCategory() string {
 	if v := strings.TrimSpace(w.ExecutionCategory); v != "" {
 		return v
 	}
-	return "AI 执行"
+	return "AI"
 }

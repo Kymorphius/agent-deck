@@ -38,11 +38,11 @@ const Source = "agent-deck"
 const LinkField = "任务｜agent-deck 会话关联"
 
 // ExecCategoryField says who does a task, separate from the single-valued
-// scene category (任务｜分类): a task can be both 上班 and AI 执行.
+// scene category (任务｜分类): a task can be both 上班 and AI. Values: AI, 我, 世界.
 const ExecCategoryField = "任务｜执行分类"
 
 // DefaultExecCategory is the execution category the board shows by default.
-const DefaultExecCategory = "AI 执行"
+const DefaultExecCategory = "AI"
 
 // Native field names read from the snapshot.
 const (
