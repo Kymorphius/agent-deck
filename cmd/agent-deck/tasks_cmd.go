@@ -33,8 +33,10 @@ func handleTasks(profile string, args []string) {
 		handleTasksLink(profile, args[0] == "link", args[1:])
 	case "launch":
 		handleTasksLaunch(profile, args[1:])
-	case "init-links":
-		handleTasksInitLinks(args[1:])
+	case "mark", "unmark":
+		handleTasksMark(args[0] == "mark", args[1:])
+	case "init", "init-links":
+		handleTasksInit(args[1:])
 	case "help", "--help", "-h":
 		printTasksHelp()
 	default:
@@ -60,7 +62,12 @@ func printTasksHelp() {
 	fmt.Println("In the TUI the board opens with alt+t.")
 	fmt.Println()
 	fmt.Println("Commands:")
-	fmt.Println("  list [--all] [--filter s]   Board by column (default command)")
+	fmt.Println("  list [--all] [--done] [--filter s]")
+	fmt.Println("                              Board by column (default command): tasks whose")
+	fmt.Println("                              执行分类 is the board category (default AI 执行) or")
+	fmt.Println("                              that have a linked session; --all shows every task")
+	fmt.Println("  mark <task>                 Put a task on the board (set 执行分类)")
+	fmt.Println("  unmark <task>               Take it off the board (clear 执行分类)")
 	fmt.Println("  show <task>                 One task with plan, result and linked sessions")
 	fmt.Println("  start <task>                Start work (World Store creates a running execution)")
 	fmt.Println("  pause <task>                Pause the task's running execution")
@@ -69,7 +76,7 @@ func printTasksHelp() {
 	fmt.Println("  link <task> [session]       Link a session (default: current session)")
 	fmt.Println("  unlink <task> [session]     Remove a session link")
 	fmt.Println("  launch <task> [path]        Start a session on the task and link it")
-	fmt.Println("  init-links --yes            Create the agent-deck link field in World Store")
+	fmt.Println("  init --yes                  Create the 执行分类 and session-link fields in World Store")
 	fmt.Println()
 	fmt.Println("<task> is a task ID, a unique ID prefix (6+ chars), or an exact task name.")
 }
@@ -162,19 +169,30 @@ func formatPlanDate(ms *int64) string { // Unix seconds
 func handleTasksList(args []string) {
 	fs := flag.NewFlagSet("tasks list", flag.ExitOnError)
 	jsonOut := fs.Bool("json", false, "Output as JSON")
-	all := fs.Bool("all", false, "Include the done column")
+	all := fs.Bool("all", false, "Show every task, not only the board category")
+	done := fs.Bool("done", false, "List the done column")
 	filter := fs.String("filter", "", "Only tasks whose name, category or status contains this text")
-	out, _, _, board := tasksSetup(fs, args, jsonOut)
+	out, _, ws, board := tasksSetup(fs, args, jsonOut)
+	category := ws.GetExecutionCategory()
+	tasks := board.Tasks
+	if !*all {
+		tasks = nil
+		for _, t := range board.Tasks {
+			if worldstore.OnBoard(t, category) {
+				tasks = append(tasks, t)
+			}
+		}
+	}
 
-	cols := worldstore.Columns(board.Tasks, *filter)
+	cols := worldstore.Columns(tasks, *filter)
 	if *jsonOut {
-		out.Success("", map[string]any{"success": true, "owner": board.Owner, "updatedAt": board.UpdatedAt, "columns": cols})
+		out.Success("", map[string]any{"success": true, "owner": board.Owner, "updatedAt": board.UpdatedAt, "category": category, "allTasks": *all, "execReady": board.ExecReady, "linksReady": board.LinksReady, "columns": cols})
 		return
 	}
 	var sb strings.Builder
 	for _, c := range cols {
-		if c.Lane == "done" && !*all {
-			fmt.Fprintf(&sb, "%s (%d, --all to show)\n\n", c.Title, len(c.Tasks)+c.Hidden)
+		if c.Lane == "done" && !*done {
+			fmt.Fprintf(&sb, "%s (%d, --done to show)\n\n", c.Title, len(c.Tasks)+c.Hidden)
 			continue
 		}
 		fmt.Fprintf(&sb, "%s (%d)\n", c.Title, len(c.Tasks)+c.Hidden)
@@ -205,6 +223,9 @@ func handleTasksList(args []string) {
 			fmt.Fprintf(&sb, "  … %d older\n", c.Hidden)
 		}
 		sb.WriteString("\n")
+	}
+	if len(tasks) == 0 && !*all {
+		fmt.Fprintf(&sb, "No tasks have 执行分类 = %s yet. See every task with --all, then: agent-deck tasks mark <task>\n", category)
 	}
 	fmt.Print(sb.String())
 }
@@ -377,7 +398,7 @@ func handleTasksLaunch(profile string, args []string) {
 		os.Exit(1)
 	}
 	if !board.LinksReady {
-		out.Success(fmt.Sprintf("session %s started on %s (not linked: run `agent-deck tasks init-links --yes` first)", sessionID, t.Name), map[string]any{"success": true, "taskId": t.ID, "sessionId": sessionID, "linked": false})
+		out.Success(fmt.Sprintf("session %s started on %s (not linked: run `agent-deck tasks init --yes` first)", sessionID, t.Name), map[string]any{"success": true, "taskId": t.ID, "sessionId": sessionID, "linked": false})
 		return
 	}
 	links, err := client.Link(context.Background(), board.Owner, *t, worldstore.DeviceID(ws.DeviceID), sessionID)
@@ -388,10 +409,44 @@ func handleTasksLaunch(profile string, args []string) {
 	out.Success(fmt.Sprintf("session %s started on %s and linked", sessionID, t.Name), map[string]any{"success": true, "taskId": t.ID, "sessionId": sessionID, "links": links})
 }
 
-func handleTasksInitLinks(args []string) {
-	fs := flag.NewFlagSet("tasks init-links", flag.ExitOnError)
+func handleTasksMark(mark bool, args []string) {
+	name := "tasks unmark"
+	if mark {
+		name = "tasks mark"
+	}
+	fs := flag.NewFlagSet(name, flag.ExitOnError)
 	jsonOut := fs.Bool("json", false, "Output as JSON")
-	yes := fs.Bool("yes", false, "Really create the field (changes the World Store schema)")
+	out, client, ws, board := tasksSetup(fs, args, jsonOut)
+	t, err := resolveTask(board, fs.Arg(0))
+	if err != nil {
+		out.Error(err.Error(), ErrCodeNotFound)
+		os.Exit(1)
+	}
+	if !board.ExecReady {
+		out.Error("the 执行分类 field does not exist in World Store yet; run `agent-deck tasks init --yes` once", ErrCodeInvalidOperation)
+		os.Exit(1)
+	}
+	value := ""
+	if mark {
+		value = ws.GetExecutionCategory()
+	}
+	if t.ExecCategory == value {
+		out.Success(fmt.Sprintf("%s: 执行分类 already %q", t.Name, value), map[string]any{"success": true, "taskId": t.ID, "changed": false})
+		return
+	}
+	if err := client.SetExecCategory(context.Background(), board.Owner, *t, value); err != nil {
+		out.Error(tasksErrorText(err), tasksErrorCode(err))
+		os.Exit(1)
+	}
+	out.Success(fmt.Sprintf("%s: 执行分类 %q → %q", t.Name, t.ExecCategory, value), map[string]any{"success": true, "taskId": t.ID, "changed": true, "execCategory": value})
+}
+
+// handleTasksInit sets up the two World Store task fields the board uses.
+// Both change the World Store schema, so nothing is created without --yes.
+func handleTasksInit(args []string) {
+	fs := flag.NewFlagSet("tasks init", flag.ExitOnError)
+	jsonOut := fs.Bool("json", false, "Output as JSON")
+	yes := fs.Bool("yes", false, "Really create the fields (changes the World Store schema)")
 	if err := fs.Parse(normalizeArgs(fs, args)); err != nil {
 		os.Exit(1)
 	}
@@ -401,27 +456,49 @@ func handleTasksInitLinks(args []string) {
 		out.Error(err.Error(), ErrCodeInvalidOperation)
 		os.Exit(1)
 	}
-	schema, err := client.InspectLinks(context.Background())
+	ctx := context.Background()
+	exec, err := client.InspectExecCategory(ctx)
 	if err != nil {
 		out.Error(tasksErrorText(err), tasksErrorCode(err))
 		os.Exit(1)
 	}
-	if schema.Ready {
-		out.Success("agent-deck link field is ready", map[string]any{"success": true, "ready": true})
+	links, err := client.InspectLinks(ctx)
+	if err != nil {
+		out.Error(tasksErrorText(err), tasksErrorCode(err))
+		os.Exit(1)
+	}
+	var missing []string
+	if !exec.Ready {
+		missing = append(missing, worldstore.ExecCategoryField)
+	}
+	if !links.Ready {
+		missing = append(missing, worldstore.LinkField)
+	}
+	if len(missing) == 0 {
+		out.Success("World Store task fields are ready", map[string]any{"success": true, "ready": true})
 		return
 	}
 	if !*yes {
-		out.Error("the agent-deck link field (任务｜agent-deck 会话关联) does not exist yet; creating it adds a relation to the 任务 type in World Store. Re-run with --yes to create it", ErrCodeInvalidOperation)
+		out.Error(fmt.Sprintf("not set up yet: %s. Creating them adds relations to the 任务 type in World Store; re-run with --yes", strings.Join(missing, ", ")), ErrCodeInvalidOperation)
 		os.Exit(1)
 	}
-	board, err := client.Board(context.Background())
+	board, err := client.Board(ctx)
 	if err != nil {
 		out.Error(tasksErrorText(err), tasksErrorCode(err))
 		os.Exit(1)
 	}
-	if err := client.InitializeLinks(context.Background(), board.Owner); err != nil {
-		out.Error(tasksErrorText(err), tasksErrorCode(err))
-		os.Exit(1)
+	// One at a time: each takes World Store's exclusive schema lease.
+	if !exec.Ready {
+		if err := client.InitializeExecCategory(ctx, board.Owner); err != nil {
+			out.Error(worldstore.ExecCategoryField+": "+tasksErrorText(err), tasksErrorCode(err))
+			os.Exit(1)
+		}
 	}
-	out.Success("agent-deck link field created", map[string]any{"success": true, "ready": true})
+	if !links.Ready {
+		if err := client.InitializeLinks(ctx, board.Owner); err != nil {
+			out.Error(worldstore.LinkField+": "+tasksErrorText(err), tasksErrorCode(err))
+			os.Exit(1)
+		}
+	}
+	out.Success("created: "+strings.Join(missing, ", "), map[string]any{"success": true, "ready": true, "created": missing})
 }

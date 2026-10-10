@@ -28,7 +28,7 @@ func (h *Home) openKanbanPanel() tea.Cmd {
 		setupErr = cerr.Error() + "\nExample:\n  [worldstore]\n  bridge = \"/Users/you/333.dev/personal-panel/scripts/worldstore-ai.cjs\""
 	} else {
 		exe, _ := os.Executable()
-		env = &kanbanEnv{client: client, device: worldstore.DeviceID(cfg.WorldStore.DeviceID), exe: exe, profile: h.profile}
+		env = &kanbanEnv{client: client, device: worldstore.DeviceID(cfg.WorldStore.DeviceID), exe: exe, profile: h.profile, execCategory: cfg.WorldStore.GetExecutionCategory()}
 	}
 
 	var ctx *kanbanSession

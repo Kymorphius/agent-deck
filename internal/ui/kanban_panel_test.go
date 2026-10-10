@@ -27,16 +27,16 @@ func (f *kanbanFakeEntry) env() *kanbanEnv {
 		f.ops = append(f.ops, req)
 		return []byte(f.answer(req)), nil
 	}
-	return &kanbanEnv{client: worldstore.NewWithRunner(run), device: "host"}
+	return &kanbanEnv{client: worldstore.NewWithRunner(run), device: "host", execCategory: "AI 执行"}
 }
 
 func (f *kanbanFakeEntry) last() map[string]any { return f.ops[len(f.ops)-1] }
 
 // t2 is running (linked to sess-1), t4 is paused, t1/t3 are to-do.
 const kanbanSnapshot = `{"ok":true,"result":{"accountId":"a","spaceId":"s","pending":false,"tuiCanWrite":true,
- "availableFields":["任务｜agent-deck 会话关联"],
+ "availableFields":["任务｜agent-deck 会话关联","任务｜执行分类"],
  "groups":{"tasks":[
-  {"id":"t1","name":"写周报","fields":{"任务｜状态":"待办"}},
+  {"id":"t1","name":"写周报","fields":{"任务｜状态":"待办","任务｜执行分类":"AI 执行"}},
   {"id":"t2","name":"修复登录","fields":{"任务｜状态":"待办","任务｜agent-deck 会话关联":"{\"version\":1,\"links\":[{\"source\":\"agent-deck\",\"deviceId\":\"host\",\"sessionId\":\"sess-1\",\"linkedAt\":1}]}"}},
   {"id":"t3","name":"历史导入","imported":true,"fields":{"任务｜状态":"待办"}},
   {"id":"t4","name":"整理行李","fields":{"任务｜状态":"待办"}}
@@ -64,10 +64,12 @@ func kanbanKey(s string) tea.KeyMsg {
 	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
 }
 
-// openKanban opens a panel on the fake entry and delivers the first read.
+// openKanban opens a panel on the fake entry in the all-tasks view and
+// delivers the first read.
 func openKanban(t *testing.T, f *kanbanFakeEntry, ctx *kanbanSession) *KanbanPanel {
 	t.Helper()
 	p := NewKanbanPanel()
+	p.showAll = true
 	p.SetSize(140, 30)
 	lookup := func(id string) (kanbanSession, bool) {
 		if id == "sess-1" {
@@ -227,7 +229,7 @@ func TestKanbanUncertainWriteLocksUntilReread(t *testing.T) {
 func TestKanbanRefusesReadOnlyAndUnreadyLinksWithoutSending(t *testing.T) {
 	f := kanbanEntry()
 	f.answer = func(req map[string]any) string {
-		return strings.Replace(kanbanSnapshot, `"availableFields":["任务｜agent-deck 会话关联"]`, `"availableFields":[]`, 1)
+		return strings.Replace(kanbanSnapshot, `"availableFields":["任务｜agent-deck 会话关联","任务｜执行分类"]`, `"availableFields":["任务｜执行分类"]`, 1)
 	}
 	p := openKanban(t, f, &kanbanSession{ID: "sess-9", Title: "other"})
 	selectTask(t, p, "t3")
@@ -237,7 +239,7 @@ func TestKanbanRefusesReadOnlyAndUnreadyLinksWithoutSending(t *testing.T) {
 	}
 	selectTask(t, p, "t1")
 	p.Update(kanbanKey("L"))
-	if p.confirm != nil || !strings.Contains(p.notice, "init-links") {
+	if p.confirm != nil || !strings.Contains(p.notice, "tasks init --yes") {
 		t.Fatalf("link without the relation allowed: %q", p.notice)
 	}
 	if len(f.ops) != 1 {
@@ -288,5 +290,86 @@ func TestKanbanUnconfiguredShowsSetupHelp(t *testing.T) {
 	}
 	if v := p.View(); !strings.Contains(v, "not configured") {
 		t.Fatalf("view:\n%s", v)
+	}
+}
+
+func TestKanbanDefaultViewShowsAITasksAndLinkedOnes(t *testing.T) {
+	f := kanbanEntry()
+	p := NewKanbanPanel()
+	p.SetSize(140, 30)
+	p.handleLoaded(p.Open(f.env(), "", nil, nil)().(kanbanLoadedMsg))
+	ids := map[string]bool{}
+	for _, c := range p.cols {
+		for _, task := range c.Tasks {
+			ids[task.ID] = true
+		}
+	}
+	// t1 is marked AI 执行, t2 has a linked session; t3/t4 are neither.
+	if !ids["t1"] || !ids["t2"] || ids["t3"] || ids["t4"] {
+		t.Fatalf("default view = %v", ids)
+	}
+	if v := p.View(); !strings.Contains(v, "AI 执行 (2 of 4)") {
+		t.Fatalf("header:\n%s", v)
+	}
+	p.Update(kanbanKey("a"))
+	if v := p.View(); !strings.Contains(v, "all tasks (4)") {
+		t.Fatalf("a must switch to all tasks:\n%s", v)
+	}
+}
+
+func TestKanbanEmptyAIViewExplainsHowToAdd(t *testing.T) {
+	f := kanbanEntry()
+	f.answer = func(map[string]any) string {
+		s := strings.Replace(kanbanSnapshot, `,"任务｜执行分类":"AI 执行"`, "", 1)
+		return strings.Replace(s, `"任务｜agent-deck 会话关联":"{`, `"x":"{`, 1)
+	}
+	p := NewKanbanPanel()
+	p.SetSize(120, 24)
+	p.handleLoaded(p.Open(f.env(), "", nil, nil)().(kanbanLoadedMsg))
+	v := p.View()
+	if !strings.Contains(v, "No tasks have 执行分类 = AI 执行 yet") || strings.Count(v, "\n") != 23 {
+		t.Fatalf("empty view:\n%s", v)
+	}
+}
+
+func TestKanbanMarkAndUnmarkQuoteTheReadValue(t *testing.T) {
+	f := kanbanEntry()
+	p := openKanban(t, f, nil)
+	selectTask(t, p, "t4")
+	p.Update(kanbanKey("e"))
+	if p.confirm == nil || p.confirm.kind != "mark" {
+		t.Fatalf("e on an unmarked task must offer mark: %+v %q", p.confirm, p.notice)
+	}
+	_, cmd := p.Update(kanbanKey("enter"))
+	p.handleWritten(cmd().(kanbanWrittenMsg))
+	req := f.last()
+	patch, expected := req["patch"].(map[string]any), req["expected"].(map[string]any)
+	if req["op"] != "task.update" || req["id"] != "t4" || patch["任务｜执行分类"] != "AI 执行" || expected["任务｜执行分类"] != "" {
+		t.Fatalf("mark request = %v", req)
+	}
+	p.loading = false
+	selectTask(t, p, "t1")
+	p.Update(kanbanKey("e"))
+	if p.confirm == nil || p.confirm.kind != "unmark" {
+		t.Fatalf("e on a marked task must offer unmark: %+v", p.confirm)
+	}
+	_, cmd = p.Update(kanbanKey("enter"))
+	cmd()
+	req = f.last()
+	if req["patch"].(map[string]any)["任务｜执行分类"] != "" || req["expected"].(map[string]any)["任务｜执行分类"] != "AI 执行" {
+		t.Fatalf("unmark request = %v", req)
+	}
+}
+
+func TestKanbanMarkNeedsTheField(t *testing.T) {
+	f := kanbanEntry()
+	f.answer = func(map[string]any) string {
+		return strings.Replace(kanbanSnapshot, `,"任务｜执行分类"]`, `]`, 1)
+	}
+	p := openKanban(t, f, nil)
+	selectTask(t, p, "t4")
+	p.Update(kanbanKey("e"))
+	if p.confirm != nil || !strings.Contains(p.notice, "tasks init --yes") {
+		t.Fatalf("mark without the field allowed: %q", p.notice)
 	}
 }

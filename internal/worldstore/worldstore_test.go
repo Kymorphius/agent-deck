@@ -33,10 +33,10 @@ func (f *fakeEntry) client() *Client {
 func ok(result string) string { return `{"ok":true,"result":` + result + `}` }
 
 const snapshotJSON = `{"accountId":"acc","spaceId":"space","updatedAt":"u","pending":false,"tuiCanWrite":true,
- "availableFields":["任务｜状态","任务｜agent-deck 会话关联"],
+ "availableFields":["任务｜状态","任务｜agent-deck 会话关联","任务｜执行分类"],
  "groups":{
   "tasks":[
-   {"id":"t1","name":"写周报","imported":false,"fields":{"任务｜状态":"待办","任务｜计划日期":1790784000}},
+   {"id":"t1","name":"写周报","imported":false,"fields":{"任务｜状态":"待办","任务｜计划日期":1790784000,"任务｜执行分类":"AI 执行"}},
    {"id":"t2","name":"修复登录","imported":false,"fields":{"任务｜状态":"待办","任务｜agent-deck 会话关联":"{\"version\":1,\"links\":[{\"source\":\"agent-deck\",\"deviceId\":\"host\",\"sessionId\":\"s1\",\"linkedAt\":1}]}"}},
    {"id":"t3","name":"整理行李","imported":false,"fields":{"任务｜状态":"待办"}},
    {"id":"t4","name":"理发","imported":false,"fields":{"任务｜状态":"周期进行中","任务｜agent-deck 会话关联":"free text"}},
@@ -310,5 +310,36 @@ func TestLaunchArgsPutFlagsBeforePath(t *testing.T) {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("args missing %q: %v", want, args)
 		}
+	}
+}
+
+func TestExecCategoryProjectionFilterAndUpdate(t *testing.T) {
+	f := boardEntry()
+	c := f.client()
+	board, err := c.Board(context.Background())
+	if err != nil || !board.ExecReady {
+		t.Fatalf("board=%+v err=%v", board, err)
+	}
+	on := map[string]bool{}
+	for _, task := range board.Tasks {
+		on[task.ID] = OnBoard(task, DefaultExecCategory)
+	}
+	// t1 carries the category, t2 has a linked session; the rest are neither.
+	if !on["t1"] || !on["t2"] || on["t3"] || on["t4"] || on["t5"] {
+		t.Fatalf("on board = %v", on)
+	}
+	if OnBoard(Task{ExecCategory: ""}, "") {
+		t.Fatal("an empty category must not match every uncategorised task")
+	}
+	if err := c.SetExecCategory(context.Background(), board.Owner, *board.Find("t3"), DefaultExecCategory); err != nil {
+		t.Fatal(err)
+	}
+	req := f.requests[len(f.requests)-1]
+	if req["op"] != "task.update" || req["confirm"] != true || req["id"] != "t3" ||
+		req["patch"].(map[string]any)[ExecCategoryField] != DefaultExecCategory || req["expected"].(map[string]any)[ExecCategoryField] != "" {
+		t.Fatalf("request = %v", req)
+	}
+	if err := c.SetExecCategory(context.Background(), board.Owner, *board.Find("t5"), DefaultExecCategory); CodeOf(err) != CodeBadInput {
+		t.Fatalf("read-only task: %v", err)
 	}
 }

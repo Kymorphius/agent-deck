@@ -1,5 +1,7 @@
 package session
 
+import "strings"
+
 // matrix/hardened: settings for the World Store task board integration
 // (internal/worldstore). Nothing here is enabled by default and nothing in it
 // talks to the network: the bridge is personal-panel's local node entry
@@ -15,7 +17,19 @@ type WorldStoreSettings struct {
 	// Node is the node binary used to run the bridge (default: "node" on PATH).
 	Node string `toml:"node,omitempty"`
 
+	// ExecutionCategory is the 任务｜执行分类 value the board shows by default
+	// (default "AI 执行"); the "all tasks" view shows everything.
+	ExecutionCategory string `toml:"execution_category,omitempty"`
+
 	// DeviceID names this machine in task ↔ session links (default: hostname
 	// without ".local"). Changing it orphans links recorded under the old name.
 	DeviceID string `toml:"device_id,omitempty"`
+}
+
+// GetExecutionCategory returns the board's execution category, defaulting to "AI 执行".
+func (w WorldStoreSettings) GetExecutionCategory() string {
+	if v := strings.TrimSpace(w.ExecutionCategory); v != "" {
+		return v
+	}
+	return "AI 执行"
 }

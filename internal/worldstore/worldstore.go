@@ -37,6 +37,13 @@ const Source = "agent-deck"
 // LinkField is the native relation holding agent-deck links.
 const LinkField = "任务｜agent-deck 会话关联"
 
+// ExecCategoryField says who does a task, separate from the single-valued
+// scene category (任务｜分类): a task can be both 上班 and AI 执行.
+const ExecCategoryField = "任务｜执行分类"
+
+// DefaultExecCategory is the execution category the board shows by default.
+const DefaultExecCategory = "AI 执行"
+
 // Native field names read from the snapshot.
 const (
 	fieldStatus      = "任务｜状态"
@@ -145,6 +152,7 @@ type Task struct {
 	PlanText     string     `json:"planText,omitempty"`
 	ResultText   string     `json:"resultText,omitempty"`
 	Execution    *Execution `json:"execution,omitempty"`
+	ExecCategory string     `json:"execCategory,omitempty"`
 	// LinksRaw is the stored link value exactly as read: the baseline a
 	// link/unlink write must quote.
 	LinksRaw       string `json:"-"`
@@ -169,6 +177,8 @@ type Board struct {
 	Tasks     []Task `json:"tasks"`
 	// LinksReady is true once the agent-deck link relation exists.
 	LinksReady bool `json:"linksReady"`
+	// ExecReady is true once the execution category relation exists.
+	ExecReady bool `json:"execReady"`
 	// CanWrite is World Store's own check of write permission on the space.
 	CanWrite bool `json:"canWrite"`
 	// Running is the execution currently running anywhere in the space
@@ -426,6 +436,7 @@ func projectTask(r nativeRow, open *Execution) Task {
 		ID: r.ID, Name: r.Name, Status: r.str(fieldStatus), Category: r.str(fieldCategory),
 		PlanDate: r.date(fieldPlanDate), SelectedDate: r.date(fieldSelected), CompletedAt: r.date(fieldCompletedAt),
 		ReadOnly: r.Imported, PlanText: r.str(fieldPlanText), ResultText: r.str(fieldResult), Execution: open,
+		ExecCategory: r.str(ExecCategoryField),
 	}
 	t.Lane = laneOf(t.Status, open)
 	t.LinksRaw = r.str(LinkField)
@@ -462,6 +473,7 @@ func (c *Client) Board(ctx context.Context) (*Board, error) {
 	board := &Board{Owner: Owner{snap.AccountID, snap.SpaceID}, UpdatedAt: snap.UpdatedAt, CanWrite: snap.CanWrite}
 	for _, f := range snap.AvailableFields {
 		board.LinksReady = board.LinksReady || f == LinkField
+		board.ExecReady = board.ExecReady || f == ExecCategoryField
 	}
 	open := map[string]*Execution{}
 	for _, e := range *snap.Groups.Executions {
@@ -557,6 +569,57 @@ func (c *Client) Complete(ctx context.Context, owner Owner, t Task, resultText s
 		payload["result"], payload["expectedResult"] = resultText, t.ResultText
 	}
 	return c.action(ctx, owner, payload)
+}
+
+// OnBoard reports whether a task belongs on the board's default view: it
+// carries the execution category, or a session is already working on it.
+func OnBoard(t Task, category string) bool {
+	return (category != "" && t.ExecCategory == category) || len(t.AgentDeckLinks) > 0
+}
+
+// SetExecCategory sets (or with "" clears) the task's execution category,
+// quoting the value it was read with.
+func (c *Client) SetExecCategory(ctx context.Context, owner Owner, t Task, value string) error {
+	if t.ReadOnly {
+		return &Error{Code: CodeBadInput, Message: "imported task is read-only"}
+	}
+	if len([]rune(value)) > 40 {
+		return &Error{Code: CodeBadInput, Message: "execution category is limited to 40 characters"}
+	}
+	return c.call(ctx, true, map[string]any{
+		"op": "task.update", "owner": owner, "confirm": true, "id": t.ID,
+		"patch": map[string]any{ExecCategoryField: value}, "expected": map[string]any{ExecCategoryField: t.ExecCategory},
+	}, nil)
+}
+
+// FieldSchema is the state of a World Store task relation agent-deck uses.
+type FieldSchema struct {
+	Field    string `json:"field"`
+	Exists   bool   `json:"exists"`
+	Attached bool   `json:"attached"`
+	Ready    bool   `json:"ready"`
+}
+
+func fieldUnsupported(err error) error {
+	if CodeOf(err) == CodeInvalidRequest {
+		return &Error{Code: CodeInvalidRequest, Message: "this World Store does not support task.fields yet; update personal-panel"}
+	}
+	return err
+}
+
+// InspectExecCategory reports whether the execution category relation is ready.
+func (c *Client) InspectExecCategory(ctx context.Context) (*FieldSchema, error) {
+	var s FieldSchema
+	if err := c.call(ctx, false, map[string]any{"op": "task.fields.inspect", "field": ExecCategoryField}, &s); err != nil {
+		return nil, fieldUnsupported(err)
+	}
+	return &s, nil
+}
+
+// InitializeExecCategory creates and attaches the execution category
+// relation. It changes the World Store schema: callers need an explicit yes.
+func (c *Client) InitializeExecCategory(ctx context.Context, owner Owner) error {
+	return fieldUnsupported(c.call(ctx, true, map[string]any{"op": "task.fields.initialize", "field": ExecCategoryField, "owner": owner, "confirm": true}, nil))
 }
 
 // linkUnsupported turns "this World Store does not know the op" into a
