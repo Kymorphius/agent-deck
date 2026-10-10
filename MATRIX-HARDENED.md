@@ -137,14 +137,17 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
   bridge = "/path/to/personal-panel/scripts/worldstore-ai.cjs"
   # node = "node"          # 默认 PATH 中的 node
   # device_id = "..."      # 链接里本机的名字，默认主机名去掉 .local；改了会让旧链接失配
+  # execution_category = "AI 执行"   # 看板默认视图显示的「任务｜执行分类」值
   ```
-- **一次性初始化**：`agent-deck tasks init-links --yes`，在 World Store 的「任务」类型上建 `任务｜agent-deck 会话关联` 属性（改 World Store 结构，所以必须显式 `--yes`）。不初始化也能看板和改状态，只是不能关联会话。
+- **只看交给 AI 的任务**：`任务｜分类` 是单值的场景分类（上班、生活），所以另有独立属性 `任务｜执行分类` 表示由谁来做，两者互不影响。看板默认只显示执行分类为 `AI 执行`（可配置）或已关联 agent-deck 会话的任务；`a` 切到全部任务，`e` 把选中任务归入/移出（`task.update` 带原值基线）。CLI：`tasks list` 同样默认过滤，`--all` 显示全部，`--done` 显示已完成栏；`tasks mark|unmark <task>`。
+- **一次性初始化**：`agent-deck tasks init --yes`（`init-links` 是别名），依次建 `任务｜执行分类` 和 `任务｜agent-deck 会话关联` 两个属性（改 World Store 结构，所以必须显式 `--yes`；每个都取空间独占租约）。没建执行分类时不能归入看板，没建关联属性时不能关联会话。
+- **踩过的坑（2026-10-10）**：独立服务的引擎未实现 `ObjectTypeRelationAdd`（协议目录却标可用），搜索索引也滞后于写入。第一次建关联属性时属性建出但没附加，回执未确认，把空间独占租约固定成 uncertain，挡住该空间所有写入约 5 分钟。处理：只读核对后按既有流程把保护记录移到 `~/Library/Application Support/World Store/write-reconciliation/`；personal-panel 改为写任务类型的 `recommendedRelations` 附加、用 `ObjectShow` 读回。以后再遇到 `UNCONFIRMED`，先只读核对（`native.script` 的 inspect 模式），不要重试。
 - **读取**：用 `snapshot`（任务加执行记录）。栏由任务状态和执行记录一起决定：已完成、已取消优先；有“进行中”的执行记录就在进行中栏，有“暂停”的就在暂停栏；否则按任务状态（待办/待处理→待办，进行中，暂停）；其他状态（已调整、周期进行中等）放待核对栏。日期都是 Unix 秒。
 - **状态改动跟随 World Store 流程**（和它自己的终端界面同一套按键）：`s` 开始做（新建一条进行中的执行记录，任务状态本身不变；每次确认生成一个固定的 operationId），`p` 暂停、`c` 继续（作用在该任务的执行记录上），`x` 完成（记完成时间，并结束它的执行记录）。改回待办、取消不在看板里做。同一时间只允许一条执行在进行中，看板会先拦下。World Store 要求先核对红线时返回 `REDLINE_REVIEW_REQUIRED`，看板提示到 World Store 里开始；agent-deck 不做红线核对。
 - **其它按键**：`alt+t` 打开（打开时光标所在的会话就是“当前会话”），`h/l j/k` 移动，`L/U` 关联/解除当前会话，`n` 在当前会话的目录和分组里新建 claude 会话、把任务作为首条消息并自动关联，`Enter` 跳到已关联会话，`/` 筛选，`r` 重新读取。CLI：`agent-deck tasks [list|show|start|pause|resume|done|link|unlink|launch|init-links] --help`。
 - **写入安全**：每次写都带读取时的 owner 和基线（行动带预期状态，关联带该属性读到的原值），不符就不写。`UNCONFIRMED` / `WRITE_UNCERTAIN`（超时、中断、回读不符）表示可能已写入，看板锁住所有写操作直到重新读取，绝不自动重试；进程在写入途中被杀也按“可能已写入”处理。`BUSY` 表示同一记录正在别处保存，什么也没写。导入对象只读。
 - **改动地图**：`internal/worldstore/`（客户端、分栏、launch）、`internal/ui/kanban_panel.go`、`internal/ui/kanban_home.go`、`cmd/agent-deck/tasks_cmd.go`、`internal/session/userconfig_worldstore.go`（新文件）；对上游文件只加了钩子行：`internal/session/userconfig.go`（`WorldStore` 字段，必须在结构体里，否则 SaveUserConfig 重写 config.toml 时会丢掉这一节）、`internal/ui/home.go`（字段、SetSize、按键路由、View、hasModalVisible、热键分支、updateInner 开头的消息分发，共 7 处）、`internal/ui/hotkeys.go`（`task_board` = `alt+t`）、`cmd/agent-deck/main.go`（`tasks` 分发和 commandRegistry）。合并上游时这些钩子行都带 `matrix/hardened` 注释。
-- **personal-panel 侧**：AI 接口的 `task.links.inspect` / `task.links.initialize` / `task.link` / `task.unlink`（`src/headless/ai-session-links.cjs`、`src/headless/client.cjs`），复用 `src/native-task-execution-links.cjs` 写独立属性，与 Codex 关联互不影响；`src/native-game-snapshot.cjs` 读取该属性。协议见该仓库 `docs/ai-interface.md` 的「agent-deck 会话关联」。
+- **personal-panel 侧**：AI 接口的 `task.links.inspect` / `task.links.initialize` / `task.link` / `task.unlink`（`src/headless/ai-session-links.cjs`、`src/headless/client.cjs`），复用 `src/native-task-execution-links.cjs` 写独立属性，与 Codex 关联互不影响；`task.fields.inspect` / `task.fields.initialize`（`src/native-task-relation-setup.cjs`，只开放 `任务｜执行分类`），`task.update` 允许改执行分类；`src/native-game-snapshot.cjs` 读取这两个属性。协议见该仓库 `docs/ai-interface.md` 的「执行分类」「agent-deck 会话关联」。
 - **测试**：`go test ./internal/worldstore/ ./internal/ui/ -run Kanban`；personal-panel 里 `npm test`（含经真实原生适配层的关联端到端测试）。真实空间上只做过读取；真实写入（开始、暂停、完成、关联、新建会话）没有在真实空间上测试过。
 
 ## 9. 修过的上游 bug

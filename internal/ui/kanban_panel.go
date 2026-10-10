@@ -36,6 +36,8 @@ type kanbanEnv struct {
 	device  string
 	exe     string
 	profile string
+	// execCategory is the 任务｜执行分类 value the default view shows.
+	execCategory string
 }
 
 type kanbanConfirm struct {
@@ -88,6 +90,8 @@ type KanbanPanel struct {
 
 	filter        string
 	filterEditing bool
+	// showAll switches from the execution-category view to every task.
+	showAll bool
 }
 
 // NewKanbanPanel creates a hidden board.
@@ -193,7 +197,16 @@ func (p *KanbanPanel) rebuild(selectedID string) {
 		p.cols = nil
 		return
 	}
-	p.cols = worldstore.Columns(p.board.Tasks, p.filter)
+	tasks := p.board.Tasks
+	if !p.showAll && p.env != nil {
+		tasks = nil
+		for _, t := range p.board.Tasks {
+			if worldstore.OnBoard(t, p.env.execCategory) {
+				tasks = append(tasks, t)
+			}
+		}
+	}
+	p.cols = worldstore.Columns(tasks, p.filter)
 	if len(p.rows) != len(p.cols) {
 		p.rows, p.scroll = make([]int, len(p.cols)), make([]int, len(p.cols))
 	}
@@ -317,7 +330,11 @@ func (p *KanbanPanel) Update(msg tea.Msg) (*KanbanPanel, tea.Cmd) {
 		return p, p.reload()
 	case "/":
 		p.filterEditing = true
-	case "s", "p", "c", "x", "L", "U", "n":
+	case "a":
+		selected := p.selectedID()
+		p.showAll = !p.showAll
+		p.rebuild(selected)
+	case "s", "p", "c", "x", "e", "L", "U", "n":
 		p.startConfirm(k)
 	case "enter":
 		return p, p.jump()
@@ -396,6 +413,15 @@ func (p *KanbanPanel) startConfirm(k string) {
 			return
 		}
 		c.kind = "resume"
+	case "e":
+		if !p.board.ExecReady {
+			fail("Execution category field not set up in World Store: run `agent-deck tasks init --yes` once.")
+			return
+		}
+		c.kind = "mark"
+		if t.ExecCategory == p.env.execCategory {
+			c.kind = "unmark"
+		}
 	case "x":
 		if closed || t.Status == worldstore.StatusCycle {
 			fail("Finish " + t.Status + " tasks in World Store.")
@@ -404,7 +430,7 @@ func (p *KanbanPanel) startConfirm(k string) {
 		c.kind = "done"
 	case "L", "U":
 		if !p.board.LinksReady {
-			fail("agent-deck link field not set up in World Store: run `agent-deck tasks init-links --yes` once.")
+			fail("agent-deck link field not set up in World Store: run `agent-deck tasks init --yes` once.")
 			return
 		}
 		if p.context == nil {
@@ -441,6 +467,13 @@ func (p *KanbanPanel) confirmText() string {
 	switch c.kind {
 	case "start":
 		return fmt.Sprintf("Start %q (World Store creates a running execution)", name)
+	case "mark":
+		if c.task.ExecCategory != "" {
+			return fmt.Sprintf("Set execution category of %q: %s → %s", name, c.task.ExecCategory, p.env.execCategory)
+		}
+		return fmt.Sprintf("Put %q on the board (执行分类 = %s)", name, p.env.execCategory)
+	case "unmark":
+		return fmt.Sprintf("Take %q off the board (clear 执行分类 %s)", name, p.env.execCategory)
 	case "pause":
 		return fmt.Sprintf("Pause the running execution of %q", name)
 	case "resume":
@@ -487,6 +520,10 @@ func (p *KanbanPanel) execute() tea.Cmd {
 		switch c.kind {
 		case "start":
 			return done(env.client.Start(bg, owner, task, c.operationID), "Started "+name)
+		case "mark":
+			return done(env.client.SetExecCategory(bg, owner, task, env.execCategory), name+" → "+env.execCategory)
+		case "unmark":
+			return done(env.client.SetExecCategory(bg, owner, task, ""), name+" taken off the board")
 		case "pause":
 			return done(env.client.Pause(bg, owner, task), "Paused "+name)
 		case "resume":
@@ -518,7 +555,7 @@ func (p *KanbanPanel) execute() tea.Cmd {
 				return kanbanWrittenMsg{err: err}
 			}
 			if !linksReady {
-				return kanbanWrittenMsg{notice: "Started session " + id + " (not linked: run `agent-deck tasks init-links --yes` first)"}
+				return kanbanWrittenMsg{notice: "Started session " + id + " (not linked: run `agent-deck tasks init --yes` first)"}
 			}
 			if _, err := env.client.Link(bg, owner, task, env.device, id); err != nil {
 				return kanbanWrittenMsg{err: fmt.Errorf("session %s started but not linked: %w", id, err)}
@@ -629,7 +666,15 @@ func (p *KanbanPanel) View() string {
 	var sb strings.Builder
 	head := "World Store"
 	if p.board != nil {
-		head += fmt.Sprintf(" · %d tasks", len(p.board.Tasks))
+		shown := 0
+		for _, c := range p.cols {
+			shown += len(c.Tasks) + c.Hidden
+		}
+		if p.showAll {
+			head += fmt.Sprintf(" · all tasks (%d)", shown)
+		} else if p.env != nil {
+			head += fmt.Sprintf(" · %s (%d of %d)", p.env.execCategory, shown, len(p.board.Tasks))
+		}
 	}
 	if p.context != nil {
 		head += " · session: " + kanbanClean(p.context.Title)
@@ -653,13 +698,23 @@ func (p *KanbanPanel) View() string {
 
 	// Rows: border 2, header 2, column titles 1, rule 1, detail 3, rule 1, footer 2.
 	bodyH := max(3, p.height-12)
-	if len(p.cols) == 0 {
+	empty := true
+	for _, c := range p.cols {
+		empty = empty && len(c.Tasks) == 0
+	}
+	switch {
+	case len(p.cols) == 0:
 		msg := "Reading World Store…"
 		if !p.loading {
 			msg = "No board loaded. Press r to read."
 		}
 		sb.WriteString(dim.Render(msg) + "\n" + strings.Repeat("\n", bodyH))
-	} else {
+	case empty && !p.showAll && p.filter == "":
+		// One header row plus bodyH rows, like the columns it replaces.
+		sb.WriteString(dim.Render(kanbanFit("No tasks have 执行分类 = "+p.env.execCategory+" yet.", inner)) + "\n")
+		sb.WriteString(dim.Render(kanbanFit("Press a to see all tasks, pick one, press e to put it on the board.", inner)) + "\n")
+		sb.WriteString(strings.Repeat("\n", bodyH-1))
+	default:
 		sb.WriteString(p.renderColumns(inner, bodyH))
 	}
 	sb.WriteString(rule + "\n")
@@ -774,6 +829,9 @@ func (p *KanbanPanel) renderDetail(inner int) string {
 		}
 		meta = append(meta, label)
 	}
+	if t.ExecCategory != "" {
+		meta = append(meta, "执行分类 "+t.ExecCategory)
+	}
 	if t.ReadOnly {
 		meta = append(meta, "read-only")
 	}
@@ -824,7 +882,7 @@ func (p *KanbanPanel) renderFooter(inner int) string {
 	default:
 		status = ""
 	}
-	keys := "[h/l j/k] Move  [s] Start  [p] Pause  [c] Resume  [x] Done  [L/U] Link/unlink  [n] New session  [Enter] Go to session  [/] Filter  [r] Reload  [Esc] Close"
+	keys := "[a] All/AI  [e] On/off board  [s] Start  [p] Pause  [c] Resume  [x] Done  [L/U] Link  [n] New session  [Enter] Go to session  [/] Filter  [r] Reload  [Esc] Close"
 	if p.confirm != nil {
 		keys = "[Enter] Confirm  [Esc] Cancel"
 	} else if p.filterEditing {
