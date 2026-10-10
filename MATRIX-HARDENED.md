@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.18`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.20`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -66,7 +66,7 @@
 - `internal/session/claude_hooks.go`：`isAgentDeckHookCommand` 的判断规则：先去掉开头的 `VAR=值`，再要求第二个词是 `hook-handler`、程序名的文件名部分是 `agent-deck`。`RemoveClaudeHooks` 会扫描全部事件，并做 UTC 时间戳备份（约 387–414 行）。
 - `cmd/agent-deck/main.go`（约 4845、5070 行）：`agent-deck uninstall` 会移除这些钩子。`uninstall.sh` 第 253 行附近的 jq 过滤用的是同一套规则（正则），写回时用 `cat >` 保持软链接和权限。
 
-**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.18`。
+**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.20`。
 
 **测试**：以 `_hardened_test.go` 结尾的文件、`update_check_disable_test.go`、`update_timer_wiring_test.go` 等是新增或调整过的测试；`testdata/goldens/*` 里的快照已经按加固后的输出更新。
 
@@ -173,7 +173,7 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 
 2026-10-09 新增。会话列表里数字只当 vim 计数（另见下面的行号和 `:N`）：`3j` / `3k`（也可用 ↑/↓、`ctrl+n/p`）一次移动 3 行，计数可多位（`12j`、`10k`，上限 999），没有超时，按其它键作废。
 
-- **跳根分组改成 `'` 加数字**（`'3` 跳到第 3 个根分组）。原来单按 `1`–`9` 跳分组，和计数冲突，用户选了纯 vim。`'` 后面不是 1–9 时，`'` 作废，那个键照常生效。分组标题上显示的数字不变，含义变成 `'N`。
+- **跳根分组改成 `'` 加数字**（`'3` 跳到第 3 个根分组）。原来单按 `1`–`9` 跳分组，和计数冲突，用户选了纯 vim。`'` 后面不是 1–9 时，`'` 作废，那个键照常生效。分组行左侧原来的 `N·` 已去掉（它标的是一个已经不跳分组的键，而且和行号、展开箭头挤成 `5 2·▾`），改为在分组名和数量后面暗色显示真正的按键 `'N`（如 `▾ Tools (4) '2`），选中的分组也显示。
 - **`0`**：有计数时追加一位（`10j`）；没有计数时照旧清除状态筛选。`!@#$` 等筛选键不受影响。
 - **行号和 `:N`**：列表每一行左边显示行号（vim 的 `:set number`），分组标题也编号，视图模式的分隔线不编号。按 `:` 在底部帮助栏位置打开命令行，`:12` 回车跳到第 12 行（行号超出范围时报错、光标不动），`:set nonu` / `:set nu` 隐藏或显示行号（只在本次运行有效，不写配置），`Esc` 或空命令行上的退格取消。行号只在普通列表里画；内嵌侧栏（embedded layout）的卡片高度随宽度变，为了不影响鼠标点击和滚动，那里不画行号，但 `:N` 照样能用。各行渲染时宽度减去行号列，再在前面补行号。
 - **`''` 跳回**：回到上一次 `'N` 或 `:N` 跳转之前所在的行，再按一次又跳回去（和 vim 一样来回切）。只有这两种跳转会记位置，`j/k`、翻页不记；跳转没让光标动（比如 `'9` 而没有第 9 组）也不记。记的是那一行的会话或分组，列表折叠、刷新后照样找得到；窗口行和远程行按位置找。和上游的 `` ` ``（直接进入上一个会话）不同，`''` 只移光标。
