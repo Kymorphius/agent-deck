@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.13`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.18`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -66,7 +66,7 @@
 - `internal/session/claude_hooks.go`：`isAgentDeckHookCommand` 的判断规则：先去掉开头的 `VAR=值`，再要求第二个词是 `hook-handler`、程序名的文件名部分是 `agent-deck`。`RemoveClaudeHooks` 会扫描全部事件，并做 UTC 时间戳备份（约 387–414 行）。
 - `cmd/agent-deck/main.go`（约 4845、5070 行）：`agent-deck uninstall` 会移除这些钩子。`uninstall.sh` 第 253 行附近的 jq 过滤用的是同一套规则（正则），写回时用 `cat >` 保持软链接和权限。
 
-**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.13`。
+**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.18`。
 
 **测试**：以 `_hardened_test.go` 结尾的文件、`update_check_disable_test.go`、`update_timer_wiring_test.go` 等是新增或调整过的测试；`testdata/goldens/*` 里的快照已经按加固后的输出更新。
 
@@ -223,3 +223,35 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 - **顶栏标记**：本机配了 `[webservice]` 时，顶栏多一个 `web ●`（绿：在跑且 healthz 应答）、`web ◐ no reply`（黄：进程在但不应答）、`web ○ stopped`（红）、`web ? unknown`（读不到状态）。后台每 30 秒读一次（在进程内直接调用，不起子进程跑 agent-deck），面板里的操作结果会立即更新它；顶栏太窄时它最先被省略。改了配置要重启 TUI 才会出现。
 - **测试**：`internal/session/matrix_webservice_test.go`（假的 launchctl/systemctl，覆盖解析、bootstrap/bootout/kickstart、sudo、失败信息、探测不带 Authorization）、`internal/ui/matrix_webservice_panel_test.go`（面板确认流程、远程目标、未配置、顶栏标记）。
 - **改动地图**：`internal/session/matrix_webservice.go`、`cmd/agent-deck/matrix_webservice_cmd.go`、`internal/ui/matrix_webservice_panel.go`、`internal/ui/matrix_webservice_home.go`（新文件）；`cmd/agent-deck/main.go`（分发和 commandRegistry）、`cmd/agent-deck/remote_exec.go`、`internal/session/userconfig.go`（`WebService` 字段，必须在结构体里，否则 SaveUserConfig 会丢掉这一节）、`internal/ui/hotkeys.go`（`web_service` = `alt+w`）、`internal/ui/help.go`、`internal/ui/home.go`（字段、消息分发、SetSize、按键路由、hasModalVisible、热键分支、View、Init 启动和退出时停止后台读取、顶栏 optionalSegments，共 10 处）。
+
+## 15. 异常中断的分类（我们自己加的功能）
+
+2026-10-09 新增。Claude 的回合因 API 错误中途结束时（`API Error: Connection lost mid-response`、`Connection dropped (ECONNRESET)`、`Can't reach the API server (ENOTFOUND)`、过载、账号被暂停等），Claude Code 不触发 `Stop`，只重画一个空输入框。agent-deck 原来把它当成正常做完：灯变 waiting，子状态是 `idle-at-empty-prompt`，看不出活只干了一半、需要说"继续"。窗格上的那行横幅也认不出来：它是普通的 `⏺` 回复行，没有 #1400 要求的 ` · ` 分隔符，而且措辞和普通文字重合。
+
+- **判断依据**：读 Claude 的对话记录，和上游判断用量超限（#1802，`usagelimit.go`）用的是同一个来源。主对话（不含子代理）里最新一条用户或助手记录，如果是 `isApiErrorMessage: true` 的助手消息，就是异常中断；之后只要出现任何用户记录（手打的"继续"、用量重置后自动续跑的提示），就算已经过去了。2026-10-09 用本机全部对话记录核对过：83 条 API 错误记录，每条后面紧跟的都是用户记录；每个错误点都能识别；完整文件里只有 2 段早已放下的旧对话仍停在错误上。
+- **新子状态** `api-interrupted`，粗状态（running/waiting/idle…）不变。`substate_detail` 是错误种类加信息，例如 `server_error: Connection lost mid-response.`、`rate_limit: You've hit your session limit · resets 11:30pm (Asia/Shanghai)`。错误种类就是记录里的 `error` 字段（Claude Code 2.1.295 的枚举：authentication_failed、oauth_org_not_allowed、account_on_hold、verification_required、billing_error、rate_limit、overloaded、invalid_request、model_not_found、server_error、unknown、max_output_tokens、cloud_credential_error）。
+- **优先级**：只在窗格没有更具体结论时套用（窗格是 none、`idle-at-empty-prompt` 或 `hook-lag`）。窗格显示正在运行、打开的菜单、后台任务、401 或模型不可用横幅时，保留窗格的结论。实时的 `Substate()` 里上游的 `usage-limit`（5 小时内的 429）仍然优先。
+- **显示**：TUI 列表里 waiting/idle 的行显示红色 `↯`（running 行不显示：判断结果每几秒才刷新一次，新回合可能已经开始）；内嵌侧栏显示子状态名；`agent-deck status -v` 显示 `[interrupted by API error: <详情>]`；`list --json`、`session show --json`、web 接口带 `substate`/`substateDetail`；web 指挥中心面板显示 `interrupted (API error)`。
+- **开销**：`updateStatus` 释放锁之后（defer）刷新，每个会话最多 5 秒读一次，从文件末尾往回读，碰到第一条用户或助手记录就停（最多回读 8 MiB，超过 1 MiB 的行不读，直接当作"无法判断"）。TUI 渲染路径（`CachedSubstate`）只读内存里的结果。只对本地 Claude 会话做；SSH 会话和其它工具跳过。
+- **已知局限**：错误之后在 Claude 里执行本地斜杠命令（`/cost`、`/model`）也会写一条用户记录，会把标记清掉，尽管任务并没有继续。没有改通知：父会话收到的"子会话完成"事件里带着 `substate`，但投递逻辑没有因此改变。
+- **改动地图**：`internal/session/matrix_turn_interrupt.go`（新文件：扫描、缓存、`SubstateAPIInterrupted`）；`internal/session/instance.go`（`matrixInterrupt` 字段、`updateStatus` 的 defer、`Substate`/`CachedSubstate` 套用、`SubstateDetail`，共 4 处）；`internal/ui/connection_status.go`（`↯`）；`cmd/agent-deck/cli_utils.go`（`SubstateLabel`）；`cmd/agent-deck/main.go`（`status -v` 附详情）；`internal/web/static/app/panes/CommandCenterPane.js`（标签）。
+- **测试**：`internal/session/matrix_turn_interrupt_test.go`（真实记录的形状：错误后跟 `turn_duration`、之后有用户记录、子代理错误、超长行、跨多个读取块、改名后缓存失效、非本地 Claude 跳过）、`internal/ui/matrix_turn_interrupt_glyph_test.go`。
+
+## 16. 网页终端的图片按钮（我们自己加的功能）
+
+`1.16.26+matrix.5`（提交 2d7128dc）新增。手机没法把截图放进会话。终端顶栏（手机上是会话标题行）有 Image 按钮：浏览器把图片原样 POST 到 `/api/sessions/{id}/image`，服务端存到 `<profile 目录>/uploads/<会话 id>/`（0600）并返回绝对路径，前端用 `terminal.paste()` 把路径贴进窗格，Claude Code 把它变成 `[Image #n]` 附件。
+
+- **限制**：只收 PNG/JPEG/GIF/WebP（按内容判断类型，不信 Content-Type），最大 20 MB；上传时顺手清掉该会话 7 天前的图片。门槛和终端输入一样：令牌、CSRF、只读模式、web mutations、限速。只支持本地会话。
+- **改动地图**：`internal/web/handlers_matrix_image.go`（新文件，路由 `POST /api/sessions/{id}/image`）、`internal/web/static/app/terminalImage.js`（新文件）、`api.js`（`uploadSessionImage`）、`TerminalPanel.js`、`icons.js`（image）、`app.css`（`.term-strip-btn`）。
+- **测试**：`internal/web/handlers_matrix_image_test.go`、`tests/web/unit/terminalImage.test.js`。
+
+## 17. 手机和折叠屏展开屏的网页布局（我们自己加的功能）
+
+`1.16.26+matrix.17`（提交 a9f997ba）新增。
+
+- **触屏平板模式**（coarse pointer，宽 721–1100px）：折叠屏展开是 724px，刚超过 720px 的手机断点，原来拿到的是固定 300px 侧栏的桌面布局，终端只有约 45 列。现在侧栏变成抽屉（顶栏 ☰ 按钮，选会话或换标签后自动收起），右栏隐藏，顶栏标签可横向滑动，底栏只占一行且不显示键盘提示。
+- **手机和触屏平板**：隐藏终端小横条，会话短 id 和 Image 按钮放到会话标题行；触屏上取消残留的 `:hover` 高亮，改用 `:active`。
+- **触摸滚动**（`terminalTouchScroll.js`）：开着鼠标上报时，xterm 把小于 50px 的滚轮量乘 0.3，手机上内容只跟手指三分之一的速度移动，而且松手即停。现在按行高换算手指位移，每行发一个 line 模式的滚轮事件，松手后有惯性。
+- **tmux latest**：`Resize` 额外给 attach 客户端发 SIGWINCH（同 `tmux.HandLatestToViewer`）；页面切回前台或点终端时发一次同尺寸 resize（2 秒节流）。手机切回来不再看到按桌面宽度截断的窗格。
+- **改动地图**：`internal/web/static/app/app.css`（TOUCH TABLET、COMPACT TERMINAL HEAD、NO STICKY HOVER 三段）、`uiState.js`（`sessionDrawerOpenSignal`）、`Topbar.js`（`.sdrawer-btn`、`.rail-toggle`）、`AppShell.js`（遮罩、选中即收起、标题行 `.sid` 和 `.wh-image`）、`terminalImage.js`（picker 注册、`imageUploadingSignal`）、`terminalTouchScroll.js`（新文件）、`TerminalPanel.js`（触摸滚动、抢 latest）、`icons.js`（menu）、`internal/web/terminal_bridge.go`（Resize 发 SIGWINCH）。
+- **测试**：`internal/web/terminal_bridge_matrix_claim_test.go`、`tests/web/unit/terminalTouchScroll.test.js`。

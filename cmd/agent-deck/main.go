@@ -45,7 +45,7 @@ import (
 )
 
 // matrix/hardened: identifies our hardened build.
-var Version = "1.16.26+matrix.16" // overridden at build time via -ldflags "-X main.Version=..."
+var Version = "1.16.26+matrix.18" // overridden at build time via -ldflags "-X main.Version=..."
 
 // Table column widths for list command output
 const (
@@ -3769,6 +3769,8 @@ func handleStatus(profile string, args []string) {
 				if lbl := SubstateLabel(inst.Substate()); lbl != "" {
 					if work := inst.BackgroundWork(); work.InFlight() {
 						lbl += ": " + work.Summary() // issue #2473
+					} else if detail := inst.SubstateDetail(); detail != "" && inst.CachedSubstate() == session.SubstateAPIInterrupted {
+						lbl += ": " + detail // matrix/hardened: which API error
 					}
 					suffix = "  [" + lbl + "]"
 				}
