@@ -5974,6 +5974,11 @@ func sessionDisplayLabelsFromState(state sessionRenderState) (title, subtitle st
 	if state.autoName && subtitle == "" {
 		subtitle = cleanPaneTitle(state.autoNameDesc)
 	}
+	// matrix/hardened: a pane title that only repeats the session name adds
+	// nothing; drop it so the row doesn't read "name … name".
+	if strings.EqualFold(strings.TrimSpace(subtitle), strings.TrimSpace(title)) {
+		subtitle = ""
+	}
 	return title, subtitle
 }
 
@@ -19226,6 +19231,9 @@ func (h *Home) renderFrame() string {
 	if headerWantsHostStats && h.sysStatsCollector != nil {
 		sysStats := h.sysStatsCollector.Get()
 		if formatted := sysinfo.Format(sysStats, h.sysStatsConfig.GetFormat(), h.sysStatsConfig.GetShow()); formatted != "" {
+			// matrix/hardened: sysinfo joins with " │ " for the tmux status
+			// bar; in the header use the same " • " as every other segment.
+			formatted = strings.ReplaceAll(formatted, " │ ", " • ")
 			sysStatsSegment = lipgloss.NewStyle().Foreground(ColorComment).Render(formatted)
 		}
 	}
@@ -22221,8 +22229,10 @@ func (h *Home) renderSessionItem(
 	worktreeBadge := ""
 	if inst.IsWorktree() && inst.WorktreeBranch != "" {
 		branch := inst.WorktreeBranch
-		if len(branch) > 15 {
-			branch = branch[:12] + "..."
+		// matrix/hardened: cut by cells, not bytes; byte slicing split CJK
+		// branch names mid-rune and rendered "�".
+		if cellWidth(branch) > 15 {
+			branch = cellTruncate(branch, 15, "…")
 		}
 		wtStyle := lipgloss.NewStyle().Foreground(ColorCyan)
 		if selected {
@@ -22256,8 +22266,8 @@ func (h *Home) renderSessionItem(
 	sshBadge := ""
 	if inst.IsSSH() {
 		host := inst.SSHHost
-		if len(host) > 20 {
-			host = host[:17] + "..."
+		if cellWidth(host) > 20 { // matrix/hardened: cell-safe, see worktree badge
+			host = cellTruncate(host, 20, "…")
 		}
 		sshStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("3")) // yellow
 		if selected {
