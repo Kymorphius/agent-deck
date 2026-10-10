@@ -1580,10 +1580,17 @@ func (i *Instance) buildClaudeCommandWithMessage(baseCommand, message string) st
 
 			// The background subshell runs independently; exec replaces
 			// the current shell with claude for proper job control.
+			//
+			// matrix/hardened: `tmux -u` like every other tmux spawn (#1867).
+			// These run inside the pane, whose environment is the tmux
+			// server's: started from launchd or the web service it has no
+			// UTF-8 locale, and a non-ASCII first message (Chinese task
+			// titles from the task board, `launch --message`) must not be
+			// treated as non-UTF-8 by the client.
 			baseCmd = fmt.Sprintf(
-				`(sleep 2; SESSION_NAME=$(tmux display-message -p '#S'); `+
-					`while ! tmux capture-pane -p -t "$SESSION_NAME" | tail -5 | grep -qE "^>"; do sleep 0.2; done; `+
-					`tmux send-keys -l -t "$SESSION_NAME" -- '%s' \; send-keys -t "$SESSION_NAME" Enter) & `+
+				`(sleep 2; SESSION_NAME=$(tmux -u display-message -p '#S'); `+
+					`while ! tmux -u capture-pane -p -t "$SESSION_NAME" | tail -5 | grep -qE "^>"; do sleep 0.2; done; `+
+					`tmux -u send-keys -l -t "$SESSION_NAME" -- '%s' \; send-keys -t "$SESSION_NAME" Enter) & `+
 					`%sexec %s%s --session-id "%s"%s`,
 				escapedMsg,
 				bashExportPrefix, execEnvPrefix, claudeCmd, sessionUUID, extraFlags)
