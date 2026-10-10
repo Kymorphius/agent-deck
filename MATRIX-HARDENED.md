@@ -137,9 +137,9 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
   bridge = "/path/to/personal-panel/scripts/worldstore-ai.cjs"
   # node = "node"          # 默认 PATH 中的 node
   # device_id = "..."      # 链接里本机的名字，默认主机名去掉 .local；改了会让旧链接失配
-  # execution_category = "AI 执行"   # 看板默认视图显示的「任务｜执行分类」值
+  # execution_category = "AI"   # 看板默认视图显示的「任务｜执行分类」值
   ```
-- **只看交给 AI 的任务**：`任务｜分类` 是单值的场景分类（上班、生活），所以另有独立属性 `任务｜执行分类` 表示由谁来做，两者互不影响。看板默认只显示执行分类为 `AI 执行`（可配置）或已关联 agent-deck 会话的任务；`a` 切到全部任务，`e` 把选中任务归入/移出（`task.update` 带原值基线）。CLI：`tasks list` 同样默认过滤，`--all` 显示全部，`--done` 显示已完成栏；`tasks mark|unmark <task>`。
+- **只看交给 AI 的任务**：`任务｜分类` 是单值的场景分类（上班、生活），所以另有独立属性 `任务｜执行分类` 表示由谁来做，两者互不影响。看板默认只显示执行分类为 `AI`（取值 AI、我、世界；默认值可配置）或已关联 agent-deck 会话的任务；`a` 切到全部任务，`e` 把选中任务归入/移出（`task.update` 带原值基线）。CLI：`tasks list` 同样默认过滤，`--all` 显示全部，`--done` 显示已完成栏；`tasks mark|unmark <task>`。
 - **一次性初始化**：`agent-deck tasks init --yes`（`init-links` 是别名），依次建 `任务｜执行分类` 和 `任务｜agent-deck 会话关联` 两个属性（改 World Store 结构，所以必须显式 `--yes`；每个都取空间独占租约）。没建执行分类时不能归入看板，没建关联属性时不能关联会话。
 - **踩过的坑（2026-10-10）**：独立服务的引擎未实现 `ObjectTypeRelationAdd`（协议目录却标可用），搜索索引也滞后于写入。第一次建关联属性时属性建出但没附加，回执未确认，把空间独占租约固定成 uncertain，挡住该空间所有写入约 5 分钟。处理：只读核对后按既有流程把保护记录移到 `~/Library/Application Support/World Store/write-reconciliation/`；personal-panel 改为写任务类型的 `recommendedRelations` 附加、用 `ObjectShow` 读回。以后再遇到 `UNCONFIRMED`，先只读核对（`native.script` 的 inspect 模式），不要重试。
 - **读取**：用 `snapshot`（任务加执行记录）。栏由任务状态和执行记录一起决定：已完成、已取消优先；有“进行中”的执行记录就在进行中栏，有“暂停”的就在暂停栏；否则按任务状态（待办/待处理→待办，进行中，暂停）；其他状态（已调整、周期进行中等）放待核对栏。日期都是 Unix 秒。

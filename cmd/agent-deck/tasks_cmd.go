@@ -64,7 +64,7 @@ func printTasksHelp() {
 	fmt.Println("Commands:")
 	fmt.Println("  list [--all] [--done] [--filter s]")
 	fmt.Println("                              Board by column (default command): tasks whose")
-	fmt.Println("                              执行分类 is the board category (default AI 执行) or")
+	fmt.Println("                              执行分类 is the board category (default AI) or")
 	fmt.Println("                              that have a linked session; --all shows every task")
 	fmt.Println("  mark <task>                 Put a task on the board (set 执行分类)")
 	fmt.Println("  unmark <task>               Take it off the board (clear 执行分类)")

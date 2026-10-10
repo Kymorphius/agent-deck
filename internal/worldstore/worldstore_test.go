@@ -36,7 +36,7 @@ const snapshotJSON = `{"accountId":"acc","spaceId":"space","updatedAt":"u","pend
  "availableFields":["任务｜状态","任务｜agent-deck 会话关联","任务｜执行分类"],
  "groups":{
   "tasks":[
-   {"id":"t1","name":"写周报","imported":false,"fields":{"任务｜状态":"待办","任务｜计划日期":1790784000,"任务｜执行分类":"AI 执行"}},
+   {"id":"t1","name":"写周报","imported":false,"fields":{"任务｜状态":"待办","任务｜计划日期":1790784000,"任务｜执行分类":"AI"}},
    {"id":"t2","name":"修复登录","imported":false,"fields":{"任务｜状态":"待办","任务｜agent-deck 会话关联":"{\"version\":1,\"links\":[{\"source\":\"agent-deck\",\"deviceId\":\"host\",\"sessionId\":\"s1\",\"linkedAt\":1}]}"}},
    {"id":"t3","name":"整理行李","imported":false,"fields":{"任务｜状态":"待办"}},
    {"id":"t4","name":"理发","imported":false,"fields":{"任务｜状态":"周期进行中","任务｜agent-deck 会话关联":"free text"}},
