@@ -241,7 +241,7 @@ func (p *WebServicePanel) View() string {
 		return ""
 	}
 	width := min(max(40, p.width-2), 96)
-	inner := width - 4
+	inner := width - 2
 	box := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(ColorBorder).Padding(0, 1).Width(width)
 	title := lipgloss.NewStyle().Bold(true).Foreground(ColorAccent)
 	dim := lipgloss.NewStyle().Foreground(ColorTextDim)
