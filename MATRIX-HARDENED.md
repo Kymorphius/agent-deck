@@ -128,22 +128,24 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 
 ## 8. World Store 任务看板（我们自己加的功能）
 
-2026-10-09 新增。任务只存在 World Store（personal-panel 仓库），agent-deck 不存副本，只在打开看板或按 `r` 时读取，用户逐项确认后才写入。
+2026-10-09 新增，2026-10-10 改接独立资料服务。任务只存在 World Store（personal-panel 仓库），agent-deck 不存副本，只在打开看板或按 `r` 时读取，用户逐项确认后才写入。
 
-- **连接方式**：运行 personal-panel 的 `scripts/multica-task-bridge.cjs`（`node`，stdin 一个 JSON 请求），它经 World Store 的本用户私有 Unix socket 访问原生资料。不联网、不带令牌、不后台轮询，不影响 R1–R8。World Store 没运行时看板显示不可用。
+- **连接方式**：运行 personal-panel 的 `scripts/worldstore-ai.cjs`（`node`，stdin 一个 JSON 请求，stdout 一行 `{ok,result|error}`），它连本机的官方独立 Anytype 服务（没在跑时会自动启动），不需要 World Store 桌面应用。不联网、不带令牌、不后台轮询，不影响 R1–R8。旧的桌面维护 socket 和 `multica-task-bridge.cjs` 已经停用，配置指向它会直接报错并提示新路径。
 - **配置**（默认关闭，`bridge` 为空即不启用）：
   ```toml
   [worldstore]
-  bridge = "/path/to/personal-panel/scripts/multica-task-bridge.cjs"
+  bridge = "/path/to/personal-panel/scripts/worldstore-ai.cjs"
   # node = "node"          # 默认 PATH 中的 node
   # device_id = "..."      # 链接里本机的名字，默认主机名去掉 .local；改了会让旧链接失配
   ```
 - **一次性初始化**：`agent-deck tasks init-links --yes`，在 World Store 的「任务」类型上建 `任务｜agent-deck 会话关联` 属性（改 World Store 结构，所以必须显式 `--yes`）。不初始化也能看板和改状态，只是不能关联会话。
-- **用法**：TUI 里 `alt+t` 打开看板（打开时光标所在的会话就是“当前会话”）：`h/l j/k` 移动，`m` 改状态（待办/进行中/暂停/已取消），`x` 完成，`L/U` 关联/解除当前会话，`n` 在当前会话的目录和分组里新建 claude 会话并把任务作为首条消息、自动关联，`Enter` 跳到已关联会话，`/` 筛选，`r` 重新读取。CLI：`agent-deck tasks [list|show|move|done|link|unlink|launch|init-links] --help`。
-- **写入安全**：每次写都带读取时的 owner 和 revision，过期返回 CONFLICT；`WRITE_UNCERTAIN`（超时、中断、回读不符）表示可能已写入，看板锁住所有写操作直到重新读取，绝不自动重试。导入对象只读；“已调整、周期进行中”等非标准状态只展示，状态改动回 World Store 做。
+- **读取**：用 `snapshot`（任务加执行记录）。栏由任务状态和执行记录一起决定：已完成、已取消优先；有“进行中”的执行记录就在进行中栏，有“暂停”的就在暂停栏；否则按任务状态（待办/待处理→待办，进行中，暂停）；其他状态（已调整、周期进行中等）放待核对栏。日期都是 Unix 秒。
+- **状态改动跟随 World Store 流程**（和它自己的终端界面同一套按键）：`s` 开始做（新建一条进行中的执行记录，任务状态本身不变；每次确认生成一个固定的 operationId），`p` 暂停、`c` 继续（作用在该任务的执行记录上），`x` 完成（记完成时间，并结束它的执行记录）。改回待办、取消不在看板里做。同一时间只允许一条执行在进行中，看板会先拦下。World Store 要求先核对红线时返回 `REDLINE_REVIEW_REQUIRED`，看板提示到 World Store 里开始；agent-deck 不做红线核对。
+- **其它按键**：`alt+t` 打开（打开时光标所在的会话就是“当前会话”），`h/l j/k` 移动，`L/U` 关联/解除当前会话，`n` 在当前会话的目录和分组里新建 claude 会话、把任务作为首条消息并自动关联，`Enter` 跳到已关联会话，`/` 筛选，`r` 重新读取。CLI：`agent-deck tasks [list|show|start|pause|resume|done|link|unlink|launch|init-links] --help`。
+- **写入安全**：每次写都带读取时的 owner 和基线（行动带预期状态，关联带该属性读到的原值），不符就不写。`UNCONFIRMED` / `WRITE_UNCERTAIN`（超时、中断、回读不符）表示可能已写入，看板锁住所有写操作直到重新读取，绝不自动重试；进程在写入途中被杀也按“可能已写入”处理。`BUSY` 表示同一记录正在别处保存，什么也没写。导入对象只读。
 - **改动地图**：`internal/worldstore/`（客户端、分栏、launch）、`internal/ui/kanban_panel.go`、`internal/ui/kanban_home.go`、`cmd/agent-deck/tasks_cmd.go`、`internal/session/userconfig_worldstore.go`（新文件）；对上游文件只加了钩子行：`internal/session/userconfig.go`（`WorldStore` 字段，必须在结构体里，否则 SaveUserConfig 重写 config.toml 时会丢掉这一节）、`internal/ui/home.go`（字段、SetSize、按键路由、View、hasModalVisible、热键分支、updateInner 开头的消息分发，共 7 处）、`internal/ui/hotkeys.go`（`task_board` = `alt+t`）、`cmd/agent-deck/main.go`（`tasks` 分发和 commandRegistry）。合并上游时这些钩子行都带 `matrix/hardened` 注释。
-- **personal-panel 侧**：`src/native-task-execution-links.cjs`、`src/multica-task-bridge.cjs` 接受 `source: "agent-deck"`，存进独立属性，与 Codex 关联互不影响；`src/native-game-snapshot.cjs` 读取该属性。说明见该仓库 `docs/multica-task-bridge.md`。
-- **测试**：`go test ./internal/worldstore/ ./internal/ui/ -run Kanban`；personal-panel 里 `npm test`。真实写入（改状态、关联、新建会话）没有在真实空间上做过自动化测试。
+- **personal-panel 侧**：AI 接口的 `task.links.inspect` / `task.links.initialize` / `task.link` / `task.unlink`（`src/headless/ai-session-links.cjs`、`src/headless/client.cjs`），复用 `src/native-task-execution-links.cjs` 写独立属性，与 Codex 关联互不影响；`src/native-game-snapshot.cjs` 读取该属性。协议见该仓库 `docs/ai-interface.md` 的「agent-deck 会话关联」。
+- **测试**：`go test ./internal/worldstore/ ./internal/ui/ -run Kanban`；personal-panel 里 `npm test`（含经真实原生适配层的关联端到端测试）。真实空间上只做过读取；真实写入（开始、暂停、完成、关联、新建会话）没有在真实空间上测试过。
 
 ## 9. 修过的上游 bug
 

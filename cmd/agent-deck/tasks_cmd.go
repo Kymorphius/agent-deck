@@ -2,7 +2,7 @@ package main
 
 // matrix/hardened: `agent-deck tasks` — the World Store task board from the
 // CLI. World Store (personal-panel) owns the tasks; this only reads them and
-// sends the user's explicit edits through the local task bridge. See
+// sends the user's explicit edits through World Store's local data entry. See
 // internal/worldstore.
 
 import (
@@ -27,10 +27,8 @@ func handleTasks(profile string, args []string) {
 		handleTasksList(args[1:])
 	case "show":
 		handleTasksShow(args[1:])
-	case "move":
-		handleTasksMove(args[1:])
-	case "done":
-		handleTasksDone(args[1:])
+	case "start", "pause", "resume", "done":
+		handleTasksAction(args[0], args[1:])
 	case "link", "unlink":
 		handleTasksLink(profile, args[0] == "link", args[1:])
 	case "launch":
@@ -54,16 +52,20 @@ func printTasksHelp() {
 	fmt.Println("Usage: agent-deck tasks <command> [options]")
 	fmt.Println()
 	fmt.Println("World Store task board. Tasks live only in World Store (personal-panel);")
-	fmt.Println("agent-deck reads them through the local task bridge and writes only what")
-	fmt.Println("you ask for. Configure with [worldstore] bridge = \"/abs/path/to/")
-	fmt.Println("personal-panel/scripts/multica-task-bridge.cjs\" in config.toml.")
+	fmt.Println("agent-deck reads them through World Store's local data entry and writes")
+	fmt.Println("only what you ask for. Configure with [worldstore] bridge = \"/abs/path/to/")
+	fmt.Println("personal-panel/scripts/worldstore-ai.cjs\" in config.toml.")
+	fmt.Println("Status changes follow World Store's flow: start creates a running")
+	fmt.Println("execution, pause/resume act on it, done completes the task.")
 	fmt.Println("In the TUI the board opens with alt+t.")
 	fmt.Println()
 	fmt.Println("Commands:")
 	fmt.Println("  list [--all] [--filter s]   Board by column (default command)")
 	fmt.Println("  show <task>                 One task with plan, result and linked sessions")
-	fmt.Println("  move <task> <status>        Set status: 待办, 进行中, 暂停, 已取消")
-	fmt.Println("  done <task> [--result s]    Mark complete (records completion time)")
+	fmt.Println("  start <task>                Start work (World Store creates a running execution)")
+	fmt.Println("  pause <task>                Pause the task's running execution")
+	fmt.Println("  resume <task>               Resume the task's paused execution")
+	fmt.Println("  done <task> [--result s]    Mark complete (also closes its executions)")
 	fmt.Println("  link <task> [session]       Link a session (default: current session)")
 	fmt.Println("  unlink <task> [session]     Remove a session link")
 	fmt.Println("  launch <task> [path]        Start a session on the task and link it")
@@ -110,12 +112,14 @@ func tasksErrorCode(err error) string {
 
 func tasksErrorText(err error) string {
 	switch worldstore.CodeOf(err) {
-	case worldstore.CodeWriteUncertain:
+	case worldstore.CodeUnconfirmed, worldstore.CodeWriteUncertain:
 		return err.Error() + "\nThe write may have been applied. Run `agent-deck tasks show <task>` to check; do not repeat it blindly."
-	case worldstore.CodeConflict:
-		return err.Error() + "\nThe task changed since it was read; review it and try again."
+	case worldstore.CodeRedlineReview, worldstore.CodeRedlineUnavailable:
+		return err.Error() + "\nRed lines must be reviewed before starting; start this task in World Store."
+	case worldstore.CodeBusy:
+		return err.Error() + "\nNothing was written; re-read and try again."
 	case worldstore.CodeUnavailable:
-		return err.Error() + "\nIs World Store running? (one window open, socket at ~/Library/Application Support/Personal Panel/maintenance/api.sock)"
+		return err.Error() + "\nIs World Store's data service set up? (personal-panel: npm run setup:headless)"
 	}
 	return err.Error()
 }
@@ -148,11 +152,11 @@ func resolveTask(board *worldstore.Board, ref string) (*worldstore.Task, error) 
 	return nil, fmt.Errorf("%q matches %d tasks; use the ID:\n  %s", ref, len(matches), strings.Join(ids, "\n  "))
 }
 
-func formatPlanDate(ms *int64) string {
+func formatPlanDate(ms *int64) string { // Unix seconds
 	if ms == nil {
 		return ""
 	}
-	return time.UnixMilli(*ms).Local().Format("2006-01-02")
+	return time.Unix(*ms, 0).Local().Format("2006-01-02")
 }
 
 func handleTasksList(args []string) {
@@ -179,6 +183,9 @@ func handleTasksList(args []string) {
 			var tags []string
 			if c.Lane == "review" {
 				tags = append(tags, t.Status)
+			}
+			if t.Execution != nil {
+				tags = append(tags, "执行"+t.Execution.Status)
 			}
 			if t.Category != "" {
 				tags = append(tags, t.Category)
@@ -216,8 +223,8 @@ func handleTasksShow(args []string) {
 		out.Error(tasksErrorText(err), tasksErrorCode(err))
 		os.Exit(1)
 	}
-	// task.get omits links; the list read already has them.
-	full.AgentDeckLinks, full.LinksUnknown = t.AgentDeckLinks, t.LinksUnknown
+	// task.get carries no execution state; the board read does.
+	full.Execution, full.Lane = t.Execution, t.Lane
 	if *jsonOut {
 		out.Success("", map[string]any{"success": true, "owner": board.Owner, "task": full})
 		return
@@ -228,6 +235,13 @@ func handleTasksShow(args []string) {
 	}
 	if d := formatPlanDate(full.PlanDate); d != "" {
 		fmt.Printf("  plan date: %s\n", d)
+	}
+	if e := full.Execution; e != nil {
+		fmt.Printf("  execution: %s", e.Status)
+		if e.StartedAt > 0 {
+			fmt.Printf(" since %s", time.Unix(e.StartedAt, 0).Local().Format("2006-01-02 15:04"))
+		}
+		fmt.Println()
 	}
 	if full.ReadOnly {
 		fmt.Println("  read-only (imported record)")
@@ -249,44 +263,36 @@ func handleTasksShow(args []string) {
 	}
 }
 
-func handleTasksMove(args []string) {
-	fs := flag.NewFlagSet("tasks move", flag.ExitOnError)
+func handleTasksAction(kind string, args []string) {
+	fs := flag.NewFlagSet("tasks "+kind, flag.ExitOnError)
 	jsonOut := fs.Bool("json", false, "Output as JSON")
+	result := fs.String("result", "", "Completion note for done (optional; empty keeps the stored result)")
 	out, client, _, board := tasksSetup(fs, args, jsonOut)
 	t, err := resolveTask(board, fs.Arg(0))
 	if err != nil {
 		out.Error(err.Error(), ErrCodeNotFound)
 		os.Exit(1)
 	}
-	status := strings.TrimSpace(fs.Arg(1))
-	if status == worldstore.StatusDone {
-		out.Error("use `agent-deck tasks done` to complete a task", ErrCodeInvalidOperation)
+	if t.ReadOnly {
+		out.Error("imported task — read-only; edit it in World Store", ErrCodeInvalidOperation)
 		os.Exit(1)
 	}
-	saved, err := client.SetStatus(context.Background(), board.Owner, *t, status)
+	ctx := context.Background()
+	switch kind {
+	case "start":
+		err = client.Start(ctx, board.Owner, *t, worldstore.NewOperationID())
+	case "pause":
+		err = client.Pause(ctx, board.Owner, *t)
+	case "resume":
+		err = client.Resume(ctx, board.Owner, *t)
+	case "done":
+		err = client.Complete(ctx, board.Owner, *t, *result)
+	}
 	if err != nil {
 		out.Error(tasksErrorText(err), tasksErrorCode(err))
 		os.Exit(1)
 	}
-	out.Success(fmt.Sprintf("%s → %s", saved.Name, saved.Status), map[string]any{"success": true, "task": saved})
-}
-
-func handleTasksDone(args []string) {
-	fs := flag.NewFlagSet("tasks done", flag.ExitOnError)
-	jsonOut := fs.Bool("json", false, "Output as JSON")
-	result := fs.String("result", "", "Completion note (optional; empty keeps the stored result)")
-	out, client, _, board := tasksSetup(fs, args, jsonOut)
-	t, err := resolveTask(board, fs.Arg(0))
-	if err != nil {
-		out.Error(err.Error(), ErrCodeNotFound)
-		os.Exit(1)
-	}
-	saved, err := client.Complete(context.Background(), board.Owner, *t, *result)
-	if err != nil {
-		out.Error(tasksErrorText(err), tasksErrorCode(err))
-		os.Exit(1)
-	}
-	out.Success(fmt.Sprintf("%s → %s", saved.Name, saved.Status), map[string]any{"success": true, "task": saved})
+	out.Success(fmt.Sprintf("%s: %s", kind, t.Name), map[string]any{"success": true, "action": kind, "taskId": t.ID})
 }
 
 func handleTasksLink(profile string, link bool, args []string) {
@@ -369,6 +375,10 @@ func handleTasksLaunch(profile string, args []string) {
 	if err != nil {
 		out.Error(err.Error(), ErrCodeInvalidOperation)
 		os.Exit(1)
+	}
+	if !board.LinksReady {
+		out.Success(fmt.Sprintf("session %s started on %s (not linked: run `agent-deck tasks init-links --yes` first)", sessionID, t.Name), map[string]any{"success": true, "taskId": t.ID, "sessionId": sessionID, "linked": false})
+		return
 	}
 	links, err := client.Link(context.Background(), board.Owner, *t, worldstore.DeviceID(ws.DeviceID), sessionID)
 	if err != nil {

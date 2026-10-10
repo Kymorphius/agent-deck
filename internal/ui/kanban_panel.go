@@ -2,8 +2,10 @@ package ui
 
 // matrix/hardened: World Store task board (alt+t). Tasks live only in World
 // Store; this panel reads them when it opens or on `r`, and writes only after
-// the user confirms one action. A write whose outcome is unknown locks every
-// further write until a fresh read (never retried automatically).
+// the user confirms one action. Status changes follow World Store's flow
+// (start / pause / resume / complete), the same keys as its own TUI. A write
+// whose outcome is unknown locks every further write until a fresh read
+// (never retried automatically).
 
 import (
 	"context"
@@ -37,10 +39,11 @@ type kanbanEnv struct {
 }
 
 type kanbanConfirm struct {
-	kind    string // move, done, link, unlink, launch
-	task    worldstore.Task
-	choices []string
-	choice  int
+	kind string // start, pause, resume, done, link, unlink, launch
+	task worldstore.Task
+	// operationID is fixed when the confirmation opens, so a start the user
+	// confirms is one World Store operation however it ends.
+	operationID string
 }
 
 type kanbanLoadedMsg struct {
@@ -157,14 +160,12 @@ func (p *KanbanPanel) handleWritten(msg kanbanWrittenMsg) tea.Cmd {
 	p.busy = false
 	if msg.err != nil {
 		p.err = kanbanErrorText(msg.err)
-		switch worldstore.CodeOf(msg.err) {
-		case worldstore.CodeWriteUncertain:
+		if worldstore.Uncertain(msg.err) {
 			p.locked = true
 			return nil
-		case worldstore.CodeConflict, worldstore.CodeNotFound, worldstore.CodeOwnerChanged:
-			return p.reload()
 		}
-		return nil
+		// Nothing was written; show what World Store holds now.
+		return p.reload()
 	}
 	p.notice = msg.notice
 	return p.reload()
@@ -172,16 +173,16 @@ func (p *KanbanPanel) handleWritten(msg kanbanWrittenMsg) tea.Cmd {
 
 func kanbanErrorText(err error) string {
 	switch worldstore.CodeOf(err) {
-	case worldstore.CodeWriteUncertain:
+	case worldstore.CodeUnconfirmed, worldstore.CodeWriteUncertain:
 		return "Write not confirmed — it may have been applied. Press r and check before doing anything else. (" + err.Error() + ")"
-	case worldstore.CodeConflict:
-		return "Task changed in World Store since it was read; reloaded, review and try again."
-	case worldstore.CodeSourceUnavailable:
-		if strings.Contains(err.Error(), "关联") {
-			return "agent-deck link field not set up in World Store: run `agent-deck tasks init-links --yes` once."
-		}
+	case worldstore.CodeRedlineReview, worldstore.CodeRedlineUnavailable:
+		return "Red lines must be reviewed before starting this task — start it in World Store. (" + err.Error() + ")"
+	case worldstore.CodeBusy:
+		return "World Store is saving this record elsewhere; nothing was written. Reloaded — try again."
+	case worldstore.CodeOwnerChanged:
+		return "World Store account or space changed; reloaded."
 	case worldstore.CodeUnavailable:
-		return "World Store unreachable — is the app running with one window open? (" + err.Error() + ")"
+		return "World Store unreachable — is its data service set up? (" + err.Error() + ")"
 	}
 	return err.Error()
 }
@@ -255,14 +256,6 @@ func (p *KanbanPanel) Update(msg tea.Msg) (*KanbanPanel, tea.Cmd) {
 			p.confirm, p.notice = nil, "Cancelled; nothing written."
 		case "enter":
 			return p, p.execute()
-		case "left", "h", "shift+tab":
-			if n := len(p.confirm.choices); n > 0 {
-				p.confirm.choice = (p.confirm.choice + n - 1) % n
-			}
-		case "right", "l", "tab":
-			if n := len(p.confirm.choices); n > 0 {
-				p.confirm.choice = (p.confirm.choice + 1) % n
-			}
 		}
 		return p, nil
 	}
@@ -324,7 +317,7 @@ func (p *KanbanPanel) Update(msg tea.Msg) (*KanbanPanel, tea.Cmd) {
 		return p, p.reload()
 	case "/":
 		p.filterEditing = true
-	case "m", "x", "L", "U", "n":
+	case "s", "p", "c", "x", "L", "U", "n":
 		p.startConfirm(k)
 	case "enter":
 		return p, p.jump()
@@ -367,27 +360,53 @@ func (p *KanbanPanel) startConfirm(k string) {
 	case t.ReadOnly:
 		fail("Imported task — read-only here; edit it in World Store.")
 		return
+	case p.board != nil && !p.board.CanWrite:
+		fail("World Store reports this space as read-only.")
+		return
 	}
+	closed := t.Status == worldstore.StatusDone || t.Status == worldstore.StatusCancelled
 	c := &kanbanConfirm{task: *t}
 	switch k {
-	case "m":
-		if t.Lane == "review" || t.Lane == "done" {
-			fail("Status " + t.Status + " can only be changed in World Store.")
+	case "s":
+		switch {
+		case closed:
+			fail("Task is already " + t.Status + ".")
+			return
+		case t.Execution != nil:
+			fail("Task already has an open execution — p pauses, c resumes.")
+			return
+		case p.board.Running != nil:
+			fail("Another task is running (" + p.runningName() + "); pause or finish it first.")
 			return
 		}
-		c.kind = "move"
-		for _, s := range worldstore.MovableStatuses {
-			if s != t.Status {
-				c.choices = append(c.choices, s)
-			}
+		c.kind, c.operationID = "start", worldstore.NewOperationID()
+	case "p":
+		if t.Execution == nil || t.Execution.Status != worldstore.ExecRunning {
+			fail("Task is not running.")
+			return
 		}
+		c.kind = "pause"
+	case "c":
+		switch {
+		case t.Execution == nil || t.Execution.Status != worldstore.ExecPaused:
+			fail("Task has no paused execution.")
+			return
+		case p.board.Running != nil && p.board.Running.ID != t.Execution.ID:
+			fail("Another task is running (" + p.runningName() + "); pause or finish it first.")
+			return
+		}
+		c.kind = "resume"
 	case "x":
-		if t.Lane == "review" || t.Lane == "done" {
-			fail("Complete " + t.Status + " tasks in World Store.")
+		if closed || t.Status == worldstore.StatusCycle {
+			fail("Finish " + t.Status + " tasks in World Store.")
 			return
 		}
 		c.kind = "done"
 	case "L", "U":
+		if !p.board.LinksReady {
+			fail("agent-deck link field not set up in World Store: run `agent-deck tasks init-links --yes` once.")
+			return
+		}
 		if p.context == nil {
 			fail("Open the board with a session selected to link it.")
 			return
@@ -420,17 +439,14 @@ func (p *KanbanPanel) confirmText() string {
 	c := p.confirm
 	name := kanbanClean(c.task.Name)
 	switch c.kind {
-	case "move":
-		var opts []string
-		for i, s := range c.choices {
-			if i == c.choice {
-				s = "[" + s + "]"
-			}
-			opts = append(opts, s)
-		}
-		return fmt.Sprintf("Move %q from %s to  %s  (←/→ choose)", name, c.task.Status, strings.Join(opts, " "))
+	case "start":
+		return fmt.Sprintf("Start %q (World Store creates a running execution)", name)
+	case "pause":
+		return fmt.Sprintf("Pause the running execution of %q", name)
+	case "resume":
+		return fmt.Sprintf("Resume the paused execution of %q", name)
 	case "done":
-		return fmt.Sprintf("Mark %q complete (records completion time)", name)
+		return fmt.Sprintf("Mark %q complete (records completion time, closes its executions)", name)
 	case "link":
 		return fmt.Sprintf("Link session %q to %q", p.context.Title, name)
 	case "unlink":
@@ -453,29 +469,30 @@ func (p *KanbanPanel) execute() tea.Cmd {
 		return nil
 	}
 	p.busy, p.err = true, ""
-	env, owner, task := *p.env, p.board.Owner, c.task
+	// Captured here: the closure runs off the UI goroutine and must not touch p.
+	env, owner, task, linksReady := *p.env, p.board.Owner, c.task, p.board.LinksReady
 	var ctxSession kanbanSession
 	if p.context != nil {
 		ctxSession = *p.context
 	}
-	choice := ""
-	if len(c.choices) > 0 {
-		choice = c.choices[c.choice]
-	}
 	return func() tea.Msg {
 		bg := context.Background()
 		name := kanbanClean(task.Name)
+		done := func(err error, notice string) tea.Msg {
+			if err != nil {
+				return kanbanWrittenMsg{err: err}
+			}
+			return kanbanWrittenMsg{notice: notice}
+		}
 		switch c.kind {
-		case "move":
-			if _, err := env.client.SetStatus(bg, owner, task, choice); err != nil {
-				return kanbanWrittenMsg{err: err}
-			}
-			return kanbanWrittenMsg{notice: name + " → " + choice}
+		case "start":
+			return done(env.client.Start(bg, owner, task, c.operationID), "Started "+name)
+		case "pause":
+			return done(env.client.Pause(bg, owner, task), "Paused "+name)
+		case "resume":
+			return done(env.client.Resume(bg, owner, task), "Resumed "+name)
 		case "done":
-			if _, err := env.client.Complete(bg, owner, task, ""); err != nil {
-				return kanbanWrittenMsg{err: err}
-			}
-			return kanbanWrittenMsg{notice: name + " → " + worldstore.StatusDone}
+			return done(env.client.Complete(bg, owner, task, ""), name+" → "+worldstore.StatusDone)
 		case "link":
 			if _, err := env.client.Link(bg, owner, task, env.device, ctxSession.ID); err != nil {
 				return kanbanWrittenMsg{err: err}
@@ -499,6 +516,9 @@ func (p *KanbanPanel) execute() tea.Cmd {
 			})
 			if err != nil {
 				return kanbanWrittenMsg{err: err}
+			}
+			if !linksReady {
+				return kanbanWrittenMsg{notice: "Started session " + id + " (not linked: run `agent-deck tasks init-links --yes` first)"}
 			}
 			if _, err := env.client.Link(bg, owner, task, env.device, id); err != nil {
 				return kanbanWrittenMsg{err: fmt.Errorf("session %s started but not linked: %w", id, err)}
@@ -742,10 +762,17 @@ func (p *KanbanPanel) renderDetail(inner int) string {
 		meta = append(meta, t.Category)
 	}
 	if t.PlanDate != nil {
-		meta = append(meta, "计划 "+time.UnixMilli(*t.PlanDate).Local().Format("2006-01-02"))
+		meta = append(meta, "计划 "+time.Unix(*t.PlanDate, 0).Local().Format("2006-01-02"))
 	}
 	if t.CompletedAt != nil {
-		meta = append(meta, "完成 "+time.UnixMilli(*t.CompletedAt).Local().Format("2006-01-02"))
+		meta = append(meta, "完成 "+time.Unix(*t.CompletedAt, 0).Local().Format("2006-01-02"))
+	}
+	if e := t.Execution; e != nil {
+		label := "执行" + e.Status
+		if e.StartedAt > 0 {
+			label += " 自 " + time.Unix(e.StartedAt, 0).Local().Format("01-02 15:04")
+		}
+		meta = append(meta, label)
 	}
 	if t.ReadOnly {
 		meta = append(meta, "read-only")
@@ -797,11 +824,22 @@ func (p *KanbanPanel) renderFooter(inner int) string {
 	default:
 		status = ""
 	}
-	keys := "[h/l j/k] Move  [m] Status  [x] Done  [L/U] Link/unlink session  [n] New session  [Enter] Go to session  [/] Filter  [r] Reload  [Esc] Close"
+	keys := "[h/l j/k] Move  [s] Start  [p] Pause  [c] Resume  [x] Done  [L/U] Link/unlink  [n] New session  [Enter] Go to session  [/] Filter  [r] Reload  [Esc] Close"
 	if p.confirm != nil {
 		keys = "[Enter] Confirm  [Esc] Cancel"
 	} else if p.filterEditing {
 		keys = "[Enter] Keep filter  [Esc] Clear"
 	}
 	return status + "\n" + dim.Render(kanbanFit(keys, inner))
+}
+
+// runningName names the task whose execution is running, for notices.
+func (p *KanbanPanel) runningName() string {
+	if p.board == nil || p.board.Running == nil {
+		return ""
+	}
+	if t := p.board.Find(p.board.RunningTaskID); t != nil {
+		return kanbanClean(t.Name)
+	}
+	return "an execution"
 }
