@@ -84,6 +84,16 @@ func rowStatusGlyph(status session.Status, substate session.Substate, archived b
 		icon = "🔒"
 	}
 
+	// matrix/hardened: the last turn ended on an API error (connection lost,
+	// overloaded, ...) instead of finishing. It looks exactly like a finished
+	// turn otherwise, so it gets its own glyph in the error color: the work
+	// stopped halfway and needs a "continue". Not on running rows: the verdict
+	// is refreshed every few seconds and a new turn may already be under way.
+	if substate == session.SubstateAPIInterrupted &&
+		(status == session.StatusWaiting || status == session.StatusIdle) {
+		icon, style = "↯", SessionStatusError
+	}
+
 	if archived {
 		icon, style = "■", SessionStatusStopped
 	}

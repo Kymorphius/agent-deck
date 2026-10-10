@@ -330,6 +330,9 @@ type Instance struct {
 	usageLimitSessionID  string
 	usageLimitScanGen    uint64
 	lastCodexProbeAt     time.Time // Rate-limits expensive Codex process-file probes
+	// matrix/hardened: last turn ended on an API error (matrix_turn_interrupt.go),
+	// guarded by i.mu.
+	matrixInterrupt matrixTurnInterruptMemo
 	// pendingCodexRestartWarning is consumed by UI/CLI after Restart() succeeds.
 	// It is intentionally transient and never persisted.
 	pendingCodexRestartWarning string `json:"-"`
@@ -6313,6 +6316,9 @@ func (i *Instance) updateStatus(pass *StatusUpdatePass, syncMetadata bool) error
 	// Cheap no-op unless the cold-load fold below (or an earlier
 	// UpdateHookStatus within the throttle window) left something behind.
 	defer i.persistLastActivity(false)
+	// matrix/hardened: refresh the API-interrupt verdict after the lock is
+	// released (registered first, so it runs last).
+	defer i.matrixRefreshTurnInterrupt()
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	// Short grace period for tmux initialization (not Claude startup)
@@ -11666,7 +11672,8 @@ func (i *Instance) Substate() Substate {
 	// The frame just read is hook-lag evidence too (see hook_lag.go); feed it
 	// back so status and substate describe the same frame.
 	i.absorbCompletedTurnSample()
-	return i.reconcileSubstate(sub)
+	// matrix/hardened: a turn that ended on an API error (matrix_turn_interrupt.go).
+	return i.matrixOverlayTurnInterrupt(i.reconcileSubstate(sub))
 }
 
 // SubstateDetail returns free-text detail for the substate the last
@@ -11676,6 +11683,12 @@ func (i *Instance) Substate() Substate {
 // Call after Substate/CachedSubstate; it reads the cached value and never
 // captures the pane.
 func (i *Instance) SubstateDetail() string {
+	// matrix/hardened: the API error behind an api-interrupted substate.
+	if i.CachedSubstate() == SubstateAPIInterrupted {
+		if t, ok := i.matrixTurnInterruptCached(); ok {
+			return t.Detail()
+		}
+	}
 	if work := i.BackgroundWork(); work.InFlight() {
 		return work.Summary()
 	}
@@ -11725,7 +11738,8 @@ func (i *Instance) CachedSubstate() Substate {
 	if tmuxSess == nil {
 		return SubstateNone
 	}
-	return i.reconcileSubstate(tmuxSess.CachedSubstate())
+	// matrix/hardened: reads the verdict cached by the status poll; no file I/O.
+	return i.matrixOverlayTurnInterrupt(i.reconcileSubstate(tmuxSess.CachedSubstate()))
 }
 
 // SetAcknowledgedFromShared applies an acknowledgment from another TUI instance
