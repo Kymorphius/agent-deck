@@ -1446,6 +1446,7 @@ func (h *Home) normalizeMainKey(pressed string) string {
 	if pressed == string(shiftEnterMarker) {
 		pressed = "shift+enter"
 	}
+	pressed = matrixMacOptionKey(pressed) // matrix/hardened: "∑" -> alt+w (matrix_mac_option.go)
 	if canonical, ok := h.hotkeyLookup[pressed]; ok {
 		return canonical
 	}

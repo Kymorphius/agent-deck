@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.12`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.13`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -66,7 +66,7 @@
 - `internal/session/claude_hooks.go`：`isAgentDeckHookCommand` 的判断规则：先去掉开头的 `VAR=值`，再要求第二个词是 `hook-handler`、程序名的文件名部分是 `agent-deck`。`RemoveClaudeHooks` 会扫描全部事件，并做 UTC 时间戳备份（约 387–414 行）。
 - `cmd/agent-deck/main.go`（约 4845、5070 行）：`agent-deck uninstall` 会移除这些钩子。`uninstall.sh` 第 253 行附近的 jq 过滤用的是同一套规则（正则），写回时用 `cat >` 保持软链接和权限。
 
-**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.12`。
+**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.13`。
 
 **测试**：以 `_hardened_test.go` 结尾的文件、`update_check_disable_test.go`、`update_timer_wiring_test.go` 等是新增或调整过的测试；`testdata/goldens/*` 里的快照已经按加固后的输出更新。
 
@@ -173,6 +173,7 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 - **行号和 `:N`**：列表每一行左边显示行号（vim 的 `:set number`），分组标题也编号，视图模式的分隔线不编号。按 `:` 在底部帮助栏位置打开命令行，`:12` 回车跳到第 12 行（行号超出范围时报错、光标不动），`:set nonu` / `:set nu` 隐藏或显示行号（只在本次运行有效，不写配置），`Esc` 或空命令行上的退格取消。行号只在普通列表里画；内嵌侧栏（embedded layout）的卡片高度随宽度变，为了不影响鼠标点击和滚动，那里不画行号，但 `:N` 照样能用。各行渲染时宽度减去行号列，再在前面补行号。
 - **`''` 跳回**：回到上一次 `'N` 或 `:N` 跳转之前所在的行，再按一次又跳回去（和 vim 一样来回切）。只有这两种跳转会记位置，`j/k`、翻页不记；跳转没让光标动（比如 `'9` 而没有第 9 组）也不记。记的是那一行的会话或分组，列表折叠、刷新后照样找得到；窗口行和远程行按位置找。和上游的 `` ` ``（直接进入上一个会话）不同，`''` 只移光标。
 - **Alt+Q 断开会话**：进入会话后，除了 Ctrl+Q（或配置的 detach 键），Alt+Q 也能回到列表，本地会话和远程（ssh/mosh）会话都行。终端发 Alt+Q 的方式不同：Option 设为 Esc+ 时是 `ESC q`，增强键盘协议下是 `ESC[27;3;113~` / `ESC[113;3u`，iTerm2 默认（Option 为 Normal）时是字符 `œ`，这几种都认。只有这一次读取正好是这个按键时才断开：先按 Esc 再按 q 是两次读取，粘贴含 `œ` 的文字是括号粘贴、按 32 字节分块读，都不会误断开。代价是在会话里打不出单个 `œ`。内嵌侧栏模式（embedded layout）走 Bubble Tea 的按键，那里没加。代码：`internal/tmux/matrix_alt_detach.go`（`MatrixIsAltQDetach`），挂在 `internal/tmux/pty.go` 的 `resolveAttachInterrupt` 开头和 `internal/session/ssh.go` 的 `sshAttachInput.forward` 开头。
+- **macOS Option 键当 Alt**：iTerm2 / Terminal.app 默认把 Option 设为 Normal，这时 Option+W 到达程序的是字符 `∑` 而不是 alt+w，列表里所有 alt+键（`alt+w` web 服务面板、`alt+t` 任务看板、`alt+a`、`alt+j/k`、`alt+1-9` 等）都按不出来（2026-10-09 在日志里确认：按 Option+W 收到的是 `∑`）。`normalizeMainKey` 现在先把 US/ABC 布局下 Option+字母/数字 产生的字符映射回 alt+键（`internal/ui/matrix_mac_option.go`），只影响会话列表；搜索框、对话框和 `:` 命令行照样收到原字符。Option+E/I/N/U/` 是死键，单按不发送任何东西，所以 `alt+u`（接管面板）这样按不出来；要用它，把终端的 Option 键设成 Esc+。测试：`internal/ui/matrix_mac_option_test.go`。
 - **改动地图**：`internal/ui/matrix_nav_count.go`（新文件，`matrixHandleNavPrefix`）、`internal/ui/matrix_line_numbers.go`（新文件，行号列和 `:` 命令行）；`internal/ui/home.go`（`navCount` 字段、`Update` 里紧跟 jump mode 的 `:` 命令行路由、`handleMainKey` 在 switch 前调用前缀处理、`up/k` 与 `down/j` 按计数循环、`renderSessionList` 的行号列、`View` 里帮助栏替换；原 `1`–`9` 分支保留但已不可达，注释说明）；`internal/ui/help.go`（帮助里 `'1-'9`、`3j / 3k`、`:12`、`''`、`Alt+Q`）。合并上游时注意上游若改了数字键、`'`、`:` 键的绑定或 `renderSessionList` 的循环。
 - **测试**：`internal/ui/matrix_nav_count_test.go`、`internal/tmux/matrix_alt_detach_test.go`、`internal/session/matrix_alt_detach_test.go`；`group_nav_test.go` 的 `TestGroupNav_Regression_Plain1_JumpsToFirstRootGroup` 改为按 `'1`。列表快照（`testdata/funccheck/`、`testdata/viewers/`、`tree-*` 帧）已用 `UPDATE_GOLDEN=1` 重新生成，去掉行号列后与原快照逐行一致。
 
