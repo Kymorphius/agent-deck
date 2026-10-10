@@ -199,7 +199,7 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 - **改动地图**：`internal/ui/matrix_group_move.go`（新文件）；`internal/ui/group_dialog.go`（`moveGroupSource`、`ShowMoveGroup`、`SelectedMoveGroupParent`、标题和 `(root)` 显示）；`internal/ui/home.go`（`groupOpMoveGroup` 常量和补做分支、`M` 的分组和远程分组分支、对话框回车的分组移动分支、分组行底栏的 `M Move` 提示）；`internal/ui/help.go`（GROUPS 里的 `M`）。
 - **测试**：`internal/ui/matrix_group_move_test.go`。
 
-## 14. 查看和控制本机的 `agent-deck web` 服务（我们自己加的功能，CLI 部分）
+## 14. 查看和控制 `agent-deck web` 服务（我们自己加的功能）
 
 2026-10-09 新增。手机用的 `agent-deck web --no-tui` 是用户自己写的 LaunchAgent / systemd 单元，agent-deck 不安装它。`agent-deck webservice [status|start|stop|restart] [--json]` 读取它在服务管理器里的状态、探测 `<url>/healthz`，并让服务管理器启动、停止或重启它。`remote_exec.go` 放行了 `webservice`，所以也能对远程主机执行。
 
@@ -213,5 +213,7 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
   # sudo = true                    # systemd：用 `sudo -n systemctl` 控制
   ```
 - **行为**：launchd 的 `stop` 是 `bootout`（卸载，避免 KeepAlive 立刻拉起），`start` 在未加载时用 plist `bootstrap`，`restart` 是 `kickstart -k`；操作后最多等 10 秒，直到状态反映出来。健康探测是一次不带凭据的 GET，不走环境里的代理、不跟随重定向（R1/R3 不受影响）。
-- **还没做**：TUI 里的 `alt+w` 面板（代码注释里提到它，但还没有接线）；没有自动化测试。2026-10-09 在本机对 `matrix.agent-deck-web` 手动验证过 `status`（运行中、healthz 应答），没有在真机上试 `start/stop/restart`。
-- **改动地图**：`internal/session/matrix_webservice.go`（新文件）、`cmd/agent-deck/matrix_webservice_cmd.go`（新文件）；`cmd/agent-deck/main.go`（分发和 commandRegistry）、`cmd/agent-deck/remote_exec.go`、`internal/session/userconfig.go`（`WebService` 字段，必须在结构体里，否则 SaveUserConfig 会丢掉这一节）。
+- **TUI**：`alt+w` 打开「WEB SERVICE」面板，显示服务名、状态、pid、healthz 应答和延迟；`s` 启动，`x` 停止、`R` 重启（这两个要按 `y` 确认），`r` 重新读取，`Esc` 关闭。光标在远程分组或会话上时管的是远程主机的服务（经 SSH 运行远程的 `agent-deck webservice`，所以远程也要装上带这个命令的版本、配好 `[webservice]`）。面板只是调用 CLI，两边说法不会不一致。
+- **顶栏标记**：本机配了 `[webservice]` 时，顶栏多一个 `web ●`（绿：在跑且 healthz 应答）、`web ◐ no reply`（黄：进程在但不应答）、`web ○ stopped`（红）、`web ? unknown`（读不到状态）。后台每 30 秒读一次（在进程内直接调用，不起子进程跑 agent-deck），面板里的操作结果会立即更新它；顶栏太窄时它最先被省略。改了配置要重启 TUI 才会出现。
+- **测试**：`internal/session/matrix_webservice_test.go`（假的 launchctl/systemctl，覆盖解析、bootstrap/bootout/kickstart、sudo、失败信息、探测不带 Authorization）、`internal/ui/matrix_webservice_panel_test.go`（面板确认流程、远程目标、未配置、顶栏标记）。
+- **改动地图**：`internal/session/matrix_webservice.go`、`cmd/agent-deck/matrix_webservice_cmd.go`、`internal/ui/matrix_webservice_panel.go`、`internal/ui/matrix_webservice_home.go`（新文件）；`cmd/agent-deck/main.go`（分发和 commandRegistry）、`cmd/agent-deck/remote_exec.go`、`internal/session/userconfig.go`（`WebService` 字段，必须在结构体里，否则 SaveUserConfig 会丢掉这一节）、`internal/ui/hotkeys.go`（`web_service` = `alt+w`）、`internal/ui/help.go`、`internal/ui/home.go`（字段、消息分发、SetSize、按键路由、hasModalVisible、热键分支、View、Init 启动和退出时停止后台读取、顶栏 optionalSegments，共 10 处）。

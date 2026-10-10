@@ -315,6 +315,8 @@ type Home struct {
 	agentsPanel          *AgentsPanel          // Agents tab: adopted agents, grouped by machine
 	kanbanPanel          *KanbanPanel          // matrix/hardened: World Store task board (alt+t)
 	adoptPanel           *AdoptPanel           // matrix/hardened: adopt a running Claude from tmux (alt+u)
+	webServicePanel      *WebServicePanel      // matrix/hardened: the user's own `agent-deck web` service (alt+w)
+	webServiceWatch      *webServiceWatch      // matrix/hardened: background reading for the header's "web" mark
 	deadLetterPanel      *DeadLetterPanel      // Inspect, retry, and explicitly purge delivery failures
 	// agentsView is the last built fleet view; agentBySession indexes its
 	// rows by adopted session id so the session list can mark agent-owned
@@ -4055,6 +4057,7 @@ func (h *Home) Init() tea.Cmd {
 	if h.sshCollector != nil {
 		h.sshCollector.Start()
 	}
+	h.startWebServiceWatch() // matrix/hardened: header "web" mark (no-op without [webservice])
 	if h.sysStatsCollector != nil {
 		h.sysStatsCollector.Start()
 	}
@@ -7423,6 +7426,9 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if cmd, ok := h.handleAdoptMsg(msg); ok { // matrix/hardened: alt+u (matrix_adopt_home.go)
 		return h, cmd
 	}
+	if cmd, ok := h.handleWebServiceMsg(msg); ok { // matrix/hardened: alt+w (matrix_webservice_home.go)
+		return h, cmd
+	}
 
 	switch msg := msg.(type) {
 	case quitMsg:
@@ -7450,8 +7456,9 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		h.settingsPanel.SetSize(msg.Width, msg.Height)
 		h.watcherPanel.SetSize(msg.Width, msg.Height)
 		h.agentsPanel.SetSize(msg.Width, msg.Height)
-		h.kanbanPanel.SetSize(msg.Width, msg.Height) // matrix/hardened
-		h.adoptPanel.SetSize(msg.Width, msg.Height)  // matrix/hardened
+		h.kanbanPanel.SetSize(msg.Width, msg.Height)     // matrix/hardened
+		h.adoptPanel.SetSize(msg.Width, msg.Height)      // matrix/hardened
+		h.webServicePanel.SetSize(msg.Width, msg.Height) // matrix/hardened
 		if h.deadLetterPanel != nil {
 			h.deadLetterPanel.SetSize(msg.Width, msg.Height)
 		}
@@ -10094,6 +10101,11 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			h.adoptPanel, cmd = h.adoptPanel.Update(msg)
 			return h, cmd
 		}
+		if h.webServicePanel.IsVisible() { // matrix/hardened
+			var cmd tea.Cmd
+			h.webServicePanel, cmd = h.webServicePanel.Update(msg)
+			return h, cmd
+		}
 		if h.watcherPanel.IsVisible() {
 			var cmd tea.Cmd
 			h.watcherPanel, cmd = h.watcherPanel.Update(msg)
@@ -11174,6 +11186,7 @@ func (h *Home) hasModalVisible() bool {
 		h.agentsPanel.IsVisible() || // hotkeyAgentsPanel overlay
 		h.kanbanPanel.IsVisible() || // matrix/hardened: hotkeyTaskBoard overlay
 		h.adoptPanel.IsVisible() || // matrix/hardened: hotkeyAdoptPanel overlay
+		h.webServicePanel.IsVisible() || // matrix/hardened: hotkeyWebService overlay
 		(h.deadLetterPanel != nil && h.deadLetterPanel.IsVisible()) || // hotkeyDeadLetters overlay
 		h.helpOverlay.IsVisible() || h.search.IsVisible() || h.globalSearch.IsVisible() ||
 		h.newDialog.IsVisible() || h.groupDialog.IsVisible() || h.forkDialog.IsVisible() ||
@@ -12417,6 +12430,9 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case defaultHotkeyBindings[hotkeyAdoptPanel]: // matrix/hardened: adopt a running Claude from tmux
 		return h, h.openAdoptPanel()
+
+	case defaultHotkeyBindings[hotkeyWebService]: // matrix/hardened: watch/control the `agent-deck web` service
+		return h, h.openWebServicePanel()
 
 	case "E":
 		// Exec an interactive shell inside the sandbox container.
@@ -13784,6 +13800,7 @@ func (h *Home) performFinalShutdown(shutdownPool bool) tea.Cmd {
 		if h.sshCollector != nil {
 			h.sshCollector.Stop()
 		}
+		h.stopWebServiceWatch() // matrix/hardened
 		if h.sysStatsCollector != nil {
 			h.sysStatsCollector.Stop()
 		}
@@ -18981,6 +18998,9 @@ func (h *Home) renderFrame() string {
 	if h.adoptPanel.IsVisible() { // matrix/hardened
 		return h.adoptPanel.View()
 	}
+	if h.webServicePanel.IsVisible() { // matrix/hardened
+		return h.webServicePanel.View()
+	}
 	if h.watcherPanel.IsVisible() {
 		return h.watcherPanel.View()
 	}
@@ -19260,7 +19280,9 @@ func (h *Home) renderFrame() string {
 	// total (statsCompact) rather than falling through to MaxWidth's blind
 	// mid-text byte truncation, which used to eat the badge on a busy
 	// fleet even with every optional field off (#2301 round-2).
-	optionalSegments := []string{sysStatsSegment, costSegment, accountsSegment, sshSegment}
+	// matrix/hardened: the "web ●" mark is appended last (dropped first on a
+	// narrow header); "" when no [webservice] is configured.
+	optionalSegments := []string{sysStatsSegment, costSegment, accountsSegment, sshSegment, h.webServiceHeaderSegment()}
 	headerLeft, versionFits := assembleHeaderLeft(logo, title, stats, statsCompact, statsSep, optionalSegments, versionBadge, h.width)
 	if !versionFits {
 		// Retry with the ssh and accounts fields' compact forms before

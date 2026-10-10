@@ -229,7 +229,8 @@ func (h *HelpOverlay) View() string {
 	helpKey := h.key(hotkeyHelp, "?")
 	quitKey := h.key(hotkeyQuit, "q")
 	importKey := h.key(hotkeyImport, "i")
-	adoptKey := h.key(hotkeyAdoptPanel, "Alt+U") // matrix/hardened
+	adoptKey := h.key(hotkeyAdoptPanel, "Alt+U")      // matrix/hardened
+	webServiceKey := h.key(hotkeyWebService, "Alt+W") // matrix/hardened
 	reloadKey := h.key(hotkeyReload, "Ctrl+R")
 	restartDeckKey := h.key(hotkeyRestartDeck, "Ctrl+T")
 	installUpdateKey := h.key(hotkeyInstallUpdate, "Ctrl+Y")
@@ -445,7 +446,8 @@ func (h *HelpOverlay) View() string {
 				{installUpdateKey, "Install the available update (runs agent-deck update)"},
 				{restartDeckKey, "Restart agent-deck in place (picks up an installed update)"},
 				{importKey, "Import tmux sessions"},
-				{adoptKey, "Adopt a running Claude from tmux (here or on the remote)"}, // matrix/hardened
+				{adoptKey, "Adopt a running Claude from tmux (here or on the remote)"},             // matrix/hardened
+				{webServiceKey, "Web service: status, start/stop/restart (here or on the remote)"}, // matrix/hardened
 				{switchKey, "Switch session (here or attached)"},
 				{scrollbackKey, "Scrollback pager (while attached)"},
 				{quitKey, "Quit"},
