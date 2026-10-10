@@ -8,15 +8,16 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
-type fakeBridge struct {
+type fakeEntry struct {
 	requests []map[string]any
 	answer   func(req map[string]any) (string, error)
 }
 
-func (f *fakeBridge) runner() Runner {
-	return func(_ context.Context, stdin []byte) ([]byte, error) {
+func (f *fakeEntry) client() *Client {
+	c := NewWithRunner(func(_ context.Context, stdin []byte) ([]byte, error) {
 		var req map[string]any
 		if err := json.Unmarshal(stdin, &req); err != nil {
 			return nil, err
@@ -24,118 +25,238 @@ func (f *fakeBridge) runner() Runner {
 		f.requests = append(f.requests, req)
 		out, err := f.answer(req)
 		return []byte(out), err
-	}
+	})
+	c.now = func() time.Time { return time.Unix(1791600000, 0) }
+	return c
 }
 
-const ownerJSON = `{"accountId":"acc","spaceId":"space"}`
+func ok(result string) string { return `{"ok":true,"result":` + result + `}` }
 
-func TestBoardFollowsPaginationAndDecodesLinkStates(t *testing.T) {
-	f := &fakeBridge{answer: func(req map[string]any) (string, error) {
-		if req["cursor"] == nil {
-			return `{"version":1,"owner":` + ownerJSON + `,"tasks":[
-				{"id":"a","name":"A","status":"待办","lane":"todo","revision":"r1"},
-				{"id":"b","name":"B","status":"进行中","lane":"doing","revision":"r2","agentDeckLinks":[{"source":"agent-deck","deviceId":"host","sessionId":"s1","linkedAt":1}]}
-			],"nextCursor":"b"}`, nil
+const snapshotJSON = `{"accountId":"acc","spaceId":"space","updatedAt":"u","pending":false,"tuiCanWrite":true,
+ "availableFields":["任务｜状态","任务｜agent-deck 会话关联"],
+ "groups":{
+  "tasks":[
+   {"id":"t1","name":"写周报","imported":false,"fields":{"任务｜状态":"待办","任务｜计划日期":1790784000}},
+   {"id":"t2","name":"修复登录","imported":false,"fields":{"任务｜状态":"待办","任务｜agent-deck 会话关联":"{\"version\":1,\"links\":[{\"source\":\"agent-deck\",\"deviceId\":\"host\",\"sessionId\":\"s1\",\"linkedAt\":1}]}"}},
+   {"id":"t3","name":"整理行李","imported":false,"fields":{"任务｜状态":"待办"}},
+   {"id":"t4","name":"理发","imported":false,"fields":{"任务｜状态":"周期进行中","任务｜agent-deck 会话关联":"free text"}},
+   {"id":"t5","name":"旧任务","imported":true,"fields":{"任务｜状态":"已完成","任务｜完成时间":1790000000000}}
+  ],
+  "executions":[
+   {"id":"e1","name":"执行｜修复登录","fields":{"执行｜状态":"进行中","执行｜关联任务":["t2"],"执行｜开始时间":1791500000}},
+   {"id":"e2","name":"执行｜整理行李","fields":{"执行｜状态":"暂停","执行｜关联任务":["t3"],"执行｜开始时间":1791400000}},
+   {"id":"e3","name":"执行｜写周报","fields":{"执行｜状态":"已完成","执行｜关联任务":["t1"]}}
+  ]}}`
+
+func boardEntry() *fakeEntry {
+	return &fakeEntry{answer: func(req map[string]any) (string, error) {
+		if req["op"] == "snapshot" {
+			return ok(snapshotJSON), nil
 		}
-		return `{"version":1,"owner":` + ownerJSON + `,"tasks":[{"id":"c","name":"C","status":"暂停","lane":"paused","revision":"r3","agentDeckLinks":null}],"nextCursor":null}`, nil
+		return ok(`{"verified":true}`), nil
 	}}
-	board, err := NewWithRunner(f.runner()).Board(context.Background())
+}
+
+func TestBoardDerivesLanesFromStatusAndOpenExecutions(t *testing.T) {
+	board, err := boardEntry().client().Board(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(board.Tasks) != 3 || board.Owner.SpaceID != "space" {
+	if board.Owner != (Owner{"acc", "space"}) || !board.LinksReady || !board.CanWrite {
 		t.Fatalf("board = %+v", board)
 	}
-	if f.requests[1]["cursor"] != "b" || f.requests[1]["owner"] == nil {
-		t.Fatalf("second page must carry cursor and owner: %v", f.requests[1])
+	want := map[string]string{"t1": "todo", "t2": "doing", "t3": "paused", "t4": "review", "t5": "done"}
+	for id, lane := range want {
+		if got := board.Find(id).Lane; got != lane {
+			t.Errorf("%s lane = %s, want %s", id, got, lane)
+		}
 	}
-	if a := board.Find("a"); a.AgentDeckLinks != nil || a.LinksUnknown {
-		t.Fatalf("absent links must be empty and known: %+v", a)
+	if board.Running == nil || board.Running.ID != "e1" || board.RunningTaskID != "t2" {
+		t.Fatalf("running = %+v / %s", board.Running, board.RunningTaskID)
 	}
-	if b := board.Find("b"); !b.LinkedTo("host", "s1") {
-		t.Fatalf("links not decoded: %+v", b)
+	if *board.Find("t1").PlanDate != 1790784000 || *board.Find("t5").CompletedAt != 1790000000 {
+		t.Fatal("dates must be Unix seconds (milliseconds normalised)")
 	}
-	if c := board.Find("c"); !c.LinksUnknown {
-		t.Fatalf("null links must be unknown: %+v", c)
+	if !board.Find("t2").LinkedTo("host", "s1") || board.Find("t2").LinksRaw == "" {
+		t.Fatalf("links: %+v", board.Find("t2"))
+	}
+	if !board.Find("t4").LinksUnknown || !board.Find("t5").ReadOnly {
+		t.Fatal("unknown link format and imported tasks must be flagged")
 	}
 }
 
-func TestBridgeErrorsKeepTheirCode(t *testing.T) {
-	f := &fakeBridge{answer: func(map[string]any) (string, error) {
-		return `{"ok":false,"error":{"code":"CONFLICT","message":"任务已变化"}}`, errors.New("exit status 1")
+func TestPendingOrUnconfirmedGroupsAreNotEmpty(t *testing.T) {
+	for _, snap := range []string{
+		`{"accountId":"a","spaceId":"s","pending":true,"groups":{"tasks":[],"executions":[]}}`,
+		`{"accountId":"a","spaceId":"s","pending":false,"groups":{"tasks":null,"executions":[]}}`,
+		`{"accountId":"","spaceId":"s","pending":false,"groups":{"tasks":[],"executions":[]}}`,
+	} {
+		f := &fakeEntry{answer: func(map[string]any) (string, error) { return ok(snap), nil }}
+		if _, err := f.client().Board(context.Background()); CodeOf(err) != CodeSourceUnavailable {
+			t.Fatalf("%s: err = %v", snap, err)
+		}
+	}
+}
+
+func TestActionsFollowWorldStoreFlow(t *testing.T) {
+	f := boardEntry()
+	c := f.client()
+	board, _ := c.Board(context.Background())
+	owner := board.Owner
+	if err := c.Start(context.Background(), owner, *board.Find("t1"), "agentdeck-0123456789abcdef"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Pause(context.Background(), owner, *board.Find("t2")); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Resume(context.Background(), owner, *board.Find("t3")); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Complete(context.Background(), owner, *board.Find("t1"), "写完了"); err != nil {
+		t.Fatal(err)
+	}
+	payloads := []map[string]any{}
+	for _, r := range f.requests[1:] {
+		if r["op"] != "task.action" || r["confirm"] != true || r["owner"] == nil {
+			t.Fatalf("request = %v", r)
+		}
+		payloads = append(payloads, r["payload"].(map[string]any))
+	}
+	checks := []map[string]any{
+		{"mode": "start", "taskId": "t1", "expectedTaskStatus": "待办", "operationId": "agentdeck-0123456789abcdef"},
+		{"mode": "pause", "executionId": "e1", "expectedStatus": "进行中"},
+		{"mode": "resume", "executionId": "e2", "expectedStatus": "暂停"},
+		{"mode": "complete", "taskId": "t1", "expectedTaskStatus": "待办", "result": "写完了", "expectedResult": ""},
+	}
+	for i, want := range checks {
+		for k, v := range want {
+			if payloads[i][k] != v {
+				t.Fatalf("payload %d %s = %v, want %v (%v)", i, k, payloads[i][k], v, payloads[i])
+			}
+		}
+		if payloads[i]["now"] != float64(1791600000) {
+			t.Fatalf("payload %d needs an explicit now: %v", i, payloads[i])
+		}
+	}
+}
+
+func TestActionsRefusedBeforeSending(t *testing.T) {
+	f := boardEntry()
+	c := f.client()
+	board, _ := c.Board(context.Background())
+	o := board.Owner
+	for name, err := range map[string]error{
+		"start with open execution": c.Start(context.Background(), o, *board.Find("t2"), "agentdeck-x1234567"),
+		"start closed":              c.Start(context.Background(), o, *board.Find("t5"), "agentdeck-x1234567"),
+		"pause without running":     c.Pause(context.Background(), o, *board.Find("t1")),
+		"resume running":            c.Resume(context.Background(), o, *board.Find("t2")),
+		"complete recurring":        c.Complete(context.Background(), o, *board.Find("t4"), ""),
+		"complete done":             c.Complete(context.Background(), o, *board.Find("t5"), ""),
+	} {
+		if CodeOf(err) != CodeBadInput {
+			t.Errorf("%s: err = %v", name, err)
+		}
+	}
+	if _, err := c.Link(context.Background(), o, *board.Find("t4"), "host", "s"); CodeOf(err) != CodeBadInput {
+		t.Errorf("link over unknown format: %v", err)
+	}
+	if len(f.requests) != 1 {
+		t.Fatalf("only the snapshot may reach World Store: %v", f.requests)
+	}
+}
+
+func TestWorldStoreErrorsKeepTheirCode(t *testing.T) {
+	f := &fakeEntry{answer: func(map[string]any) (string, error) {
+		return `{"ok":false,"error":{"code":"REDLINE_REVIEW_REQUIRED","message":"关联红线尚未核对"}}`, errors.New("exit status 1")
 	}}
-	_, err := NewWithRunner(f.runner()).SetStatus(context.Background(), Owner{"acc", "space"}, Task{ID: "a", Revision: "r"}, "暂停")
-	if CodeOf(err) != CodeConflict {
+	err := f.client().Start(context.Background(), Owner{"a", "s"}, Task{ID: "t", Status: "待办"}, "agentdeck-x1234567")
+	if CodeOf(err) != CodeRedlineReview {
 		t.Fatalf("err = %v", err)
 	}
-	req := f.requests[0]
-	if req["op"] != "task.update" || req["revision"] != "r" || req["patch"].(map[string]any)["status"] != "暂停" {
-		t.Fatalf("request = %v", req)
-	}
 }
 
-func TestInterruptedWriteIsUncertainButInterruptedReadIsNot(t *testing.T) {
-	f := &fakeBridge{answer: func(map[string]any) (string, error) { return "", errors.New("signal: killed") }}
-	c := NewWithRunner(f.runner())
-	if _, err := c.Link(context.Background(), Owner{"acc", "space"}, Task{ID: "a", Revision: "r"}, "host", "s"); CodeOf(err) != CodeWriteUncertain {
+func TestInterruptedWriteIsUncertainButReadIsNot(t *testing.T) {
+	f := &fakeEntry{answer: func(map[string]any) (string, error) { return "", errors.New("signal: killed") }}
+	c := f.client()
+	err := c.Complete(context.Background(), Owner{"a", "s"}, Task{ID: "t", Status: "待办"}, "")
+	if !Uncertain(err) {
 		t.Fatalf("write err = %v", err)
 	}
 	if _, err := c.Board(context.Background()); CodeOf(err) != CodeUnavailable {
 		t.Fatalf("read err = %v", err)
 	}
-	// A bridge that never started cannot have written anything.
+	// Garbage instead of a JSON answer after a write is also uncertain.
+	f.answer = func(map[string]any) (string, error) { return "half a line", nil }
+	if err := c.Complete(context.Background(), Owner{"a", "s"}, Task{ID: "t", Status: "待办"}, ""); !Uncertain(err) {
+		t.Fatalf("garbage err = %v", err)
+	}
+	// An entry that never started cannot have written anything.
 	f.answer = func(map[string]any) (string, error) {
 		return "", &Error{Code: CodeUnavailable, Message: "did not start"}
 	}
-	if _, err := c.Complete(context.Background(), Owner{"acc", "space"}, Task{ID: "a"}, ""); CodeOf(err) != CodeUnavailable {
+	if err := c.Complete(context.Background(), Owner{"a", "s"}, Task{ID: "t", Status: "待办"}, ""); CodeOf(err) != CodeUnavailable {
 		t.Fatalf("start failure err = %v", err)
 	}
 }
 
-func TestStatusChangeRefusesDoneAndUnknownWithoutCallingBridge(t *testing.T) {
-	f := &fakeBridge{answer: func(map[string]any) (string, error) { return "{}", nil }}
-	c := NewWithRunner(f.runner())
-	for _, s := range []string{StatusDone, "已调整", ""} {
-		if _, err := c.SetStatus(context.Background(), Owner{}, Task{ID: "a"}, s); CodeOf(err) != CodeBadRequest {
-			t.Fatalf("%q: err = %v", s, err)
+func TestLinkRequestsQuoteTheStoredBaseline(t *testing.T) {
+	f := boardEntry()
+	f.answer = func(req map[string]any) (string, error) {
+		if req["op"] == "snapshot" {
+			return ok(snapshotJSON), nil
 		}
+		return ok(`{"links":[]}`), nil
 	}
-	if len(f.requests) != 0 {
-		t.Fatalf("bridge called: %v", f.requests)
+	c := f.client()
+	board, _ := c.Board(context.Background())
+	t2 := *board.Find("t2")
+	if _, err := c.Unlink(context.Background(), board.Owner, t2, "host", "s1"); err != nil {
+		t.Fatal(err)
 	}
-}
-
-func TestLinkRequestsUseAgentDeckSourceAndConfirmation(t *testing.T) {
-	f := &fakeBridge{answer: func(map[string]any) (string, error) {
-		return `{"links":[{"source":"agent-deck","deviceId":"host","sessionId":"s","linkedAt":5}]}`, nil
-	}}
-	links, err := NewWithRunner(f.runner()).Link(context.Background(), Owner{"acc", "space"}, Task{ID: "a", Revision: "r"}, "host", "s")
-	if err != nil || len(links) != 1 {
-		t.Fatalf("links=%v err=%v", links, err)
-	}
-	req := f.requests[0]
-	if req["source"] != Source || req["confirmed"] != true || req["op"] != "task.linkExecution" {
+	req := f.requests[1]
+	payload, expected := req["payload"].(map[string]any), req["expected"].(map[string]any)
+	if req["op"] != "task.unlink" || req["id"] != "t2" || req["confirm"] != true || payload["source"] != Source || payload["sessionId"] != "s1" || expected[LinkField] != t2.LinksRaw {
 		t.Fatalf("request = %v", req)
 	}
 }
 
-func TestNewValidatesBridgePath(t *testing.T) {
+func TestOlderWorldStoreWithoutLinkOpsIsExplained(t *testing.T) {
+	f := &fakeEntry{answer: func(map[string]any) (string, error) {
+		return `{"ok":false,"error":{"code":"INVALID_REQUEST","message":"请求格式或参数无效"}}`, errors.New("exit status 1")
+	}}
+	_, err := f.client().Link(context.Background(), Owner{"a", "s"}, Task{ID: "t"}, "host", "s")
+	if err == nil || !strings.Contains(err.Error(), "does not support agent-deck session links") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestNewValidatesEntryPath(t *testing.T) {
 	if _, err := New(Config{}); !errors.Is(err, ErrNotConfigured) {
 		t.Fatalf("err = %v", err)
 	}
-	if _, err := New(Config{Bridge: "relative/bridge.cjs"}); err == nil {
+	if _, err := New(Config{Bridge: "relative/worldstore-ai.cjs"}); err == nil {
 		t.Fatal("relative path accepted")
 	}
 	dir := t.TempDir()
+	old := filepath.Join(dir, "multica-task-bridge.cjs")
+	_ = os.WriteFile(old, nil, 0o600)
+	if _, err := New(Config{Bridge: old}); err == nil || !strings.Contains(err.Error(), "worldstore-ai.cjs") {
+		t.Fatalf("retired bridge accepted: %v", err)
+	}
 	if _, err := New(Config{Bridge: filepath.Join(dir, "missing.cjs")}); err == nil {
 		t.Fatal("missing file accepted")
 	}
-	path := filepath.Join(dir, "bridge.cjs")
-	if err := os.WriteFile(path, []byte(""), 0o600); err != nil {
+	entry := filepath.Join(dir, "worldstore-ai.cjs")
+	_ = os.WriteFile(entry, nil, 0o600)
+	if _, err := New(Config{Bridge: entry}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := New(Config{Bridge: path}); err != nil {
-		t.Fatal(err)
+}
+
+func TestOperationIDsMatchWorldStoreFormat(t *testing.T) {
+	a, b := NewOperationID(), NewOperationID()
+	if a == b || len(a) < 8 || len(a) > 80 || strings.Trim(a, "abcdefghijklmnopqrstuvwxyz0123456789-") != "" {
+		t.Fatalf("ids %q %q", a, b)
 	}
 }
 
@@ -164,13 +285,6 @@ func TestColumnsOrderCapAndFilter(t *testing.T) {
 	}
 	if len(cols[4].Tasks) != DoneLimit || cols[4].Hidden != 3 || *cols[4].Tasks[0].CompletedAt != int64(DoneLimit+2) {
 		t.Fatalf("done = %d hidden %d", len(cols[4].Tasks), cols[4].Hidden)
-	}
-	for _, c := range cols {
-		for _, task := range c.Tasks {
-			if task.Lane == "cancelled" {
-				t.Fatal("cancelled task shown")
-			}
-		}
 	}
 	if got := Columns(tasks, "EAR"); len(got[1].Tasks) != 1 || got[1].Tasks[0].Name != "early" {
 		t.Fatalf("filter = %+v", got[1])

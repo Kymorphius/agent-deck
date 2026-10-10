@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-// Column is one kanban column: a bridge lane with its tasks in board order.
+// Column is one kanban column: a lane with its tasks in board order.
 type Column struct {
 	Lane  string
 	Title string
@@ -14,9 +14,9 @@ type Column struct {
 	Hidden int
 }
 
-// Lanes in board order, with the title shown for each. The bridge maps
+// Lanes in board order, with the title shown for each. laneOf maps
 // statuses it does not know (已调整, 周期进行中, ...) to "review"; those stay
-// visible but are never moved by agent-deck's plain status change.
+// visible, and World Store's own rules decide which actions they allow.
 var laneOrder = []struct{ lane, title string }{
 	{"doing", "进行中"},
 	{"todo", "待办"},

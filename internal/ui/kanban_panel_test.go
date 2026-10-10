@@ -15,27 +15,44 @@ import (
 
 // matrix/hardened: World Store task board panel.
 
-type kanbanFakeBridge struct {
-	ops    []string
-	answer func(req map[string]any) (string, error)
+type kanbanFakeEntry struct {
+	ops    []map[string]any
+	answer func(req map[string]any) string
 }
 
-func (f *kanbanFakeBridge) env() *kanbanEnv {
+func (f *kanbanFakeEntry) env() *kanbanEnv {
 	run := func(_ context.Context, stdin []byte) ([]byte, error) {
 		var req map[string]any
 		_ = json.Unmarshal(stdin, &req)
-		f.ops = append(f.ops, req["op"].(string))
-		out, err := f.answer(req)
-		return []byte(out), err
+		f.ops = append(f.ops, req)
+		return []byte(f.answer(req)), nil
 	}
 	return &kanbanEnv{client: worldstore.NewWithRunner(run), device: "host"}
 }
 
-const kanbanBoardJSON = `{"version":1,"owner":{"accountId":"a","spaceId":"s"},"tasks":[
-	{"id":"t1","name":"写周报","status":"待办","lane":"todo","revision":"r1"},
-	{"id":"t2","name":"修复登录","status":"进行中","lane":"doing","revision":"r2","agentDeckLinks":[{"source":"agent-deck","deviceId":"host","sessionId":"sess-1","linkedAt":1}]},
-	{"id":"t3","name":"历史导入","status":"待办","lane":"todo","revision":"r3","readOnly":true}
-],"nextCursor":null}`
+func (f *kanbanFakeEntry) last() map[string]any { return f.ops[len(f.ops)-1] }
+
+// t2 is running (linked to sess-1), t4 is paused, t1/t3 are to-do.
+const kanbanSnapshot = `{"ok":true,"result":{"accountId":"a","spaceId":"s","pending":false,"tuiCanWrite":true,
+ "availableFields":["任务｜agent-deck 会话关联"],
+ "groups":{"tasks":[
+  {"id":"t1","name":"写周报","fields":{"任务｜状态":"待办"}},
+  {"id":"t2","name":"修复登录","fields":{"任务｜状态":"待办","任务｜agent-deck 会话关联":"{\"version\":1,\"links\":[{\"source\":\"agent-deck\",\"deviceId\":\"host\",\"sessionId\":\"sess-1\",\"linkedAt\":1}]}"}},
+  {"id":"t3","name":"历史导入","imported":true,"fields":{"任务｜状态":"待办"}},
+  {"id":"t4","name":"整理行李","fields":{"任务｜状态":"待办"}}
+ ],"executions":[
+  {"id":"e1","fields":{"执行｜状态":"进行中","执行｜关联任务":["t2"],"执行｜开始时间":1791500000}},
+  {"id":"e4","fields":{"执行｜状态":"暂停","执行｜关联任务":["t4"],"执行｜开始时间":1791400000}}
+ ]}}}`
+
+func kanbanEntry() *kanbanFakeEntry {
+	return &kanbanFakeEntry{answer: func(req map[string]any) string {
+		if req["op"] == "snapshot" {
+			return kanbanSnapshot
+		}
+		return `{"ok":true,"result":{"links":[]}}`
+	}}
+}
 
 func kanbanKey(s string) tea.KeyMsg {
 	switch s {
@@ -43,14 +60,12 @@ func kanbanKey(s string) tea.KeyMsg {
 		return tea.KeyMsg{Type: tea.KeyEnter}
 	case "esc":
 		return tea.KeyMsg{Type: tea.KeyEsc}
-	case "right":
-		return tea.KeyMsg{Type: tea.KeyRight}
 	}
 	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
 }
 
-// openKanban opens a panel on the fake bridge and delivers the first read.
-func openKanban(t *testing.T, f *kanbanFakeBridge, ctx *kanbanSession) *KanbanPanel {
+// openKanban opens a panel on the fake entry and delivers the first read.
+func openKanban(t *testing.T, f *kanbanFakeEntry, ctx *kanbanSession) *KanbanPanel {
 	t.Helper()
 	p := NewKanbanPanel()
 	p.SetSize(140, 30)
@@ -62,27 +77,30 @@ func openKanban(t *testing.T, f *kanbanFakeBridge, ctx *kanbanSession) *KanbanPa
 	}
 	cmd := p.Open(f.env(), "", ctx, lookup)
 	p.handleLoaded(cmd().(kanbanLoadedMsg))
+	if p.board == nil {
+		t.Fatalf("board not loaded: %s", p.err)
+	}
 	return p
 }
 
-func kanbanBoardBridge() *kanbanFakeBridge {
-	return &kanbanFakeBridge{answer: func(req map[string]any) (string, error) {
-		switch req["op"] {
-		case "task.list":
-			return kanbanBoardJSON, nil
-		case "task.update":
-			return `{"task":{"id":"t1","status":"暂停"}}`, nil
-		case "task.linkExecution":
-			return `{"links":[]}`, nil
+// selectTask moves the cursor onto task id.
+func selectTask(t *testing.T, p *KanbanPanel, id string) {
+	t.Helper()
+	for c := range p.cols {
+		for i, task := range p.cols[c].Tasks {
+			if task.ID == id {
+				p.col, p.rows[c] = c, i
+				return
+			}
 		}
-		return `{"ok":false,"error":{"code":"BAD_REQUEST","message":"unexpected"}}`, nil
-	}}
+	}
+	t.Fatalf("task %s not on board", id)
 }
 
 func TestKanbanBoardRendersColumnsWithinTerminal(t *testing.T) {
-	p := openKanban(t, kanbanBoardBridge(), nil)
+	p := openKanban(t, kanbanEntry(), nil)
 	view := p.View()
-	for _, want := range []string{"进行中 (1)", "待办 (2)", "修复登录", "写周报", "login-fix (waiting)"} {
+	for _, want := range []string{"进行中 (1)", "待办 (2)", "暂停 (1)", "修复登录", "写周报", "login-fix (waiting)", "执行进行中"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("view missing %q:\n%s", want, view)
 		}
@@ -96,55 +114,97 @@ func TestKanbanBoardRendersColumnsWithinTerminal(t *testing.T) {
 			t.Fatalf("line wider than terminal (%d): %q", w, l)
 		}
 	}
-	// Narrow terminals show one column with tabs.
 	p.SetSize(60, 20)
 	if v := p.View(); !strings.Contains(v, "[进行中 1]") || strings.Count(v, "\n") != 19 {
 		t.Fatalf("narrow view:\n%s", v)
 	}
 }
 
-func TestKanbanMoveNeedsConfirmationAndRereads(t *testing.T) {
-	f := kanbanBoardBridge()
+func TestKanbanStartNeedsConfirmationAndUsesOneOperationID(t *testing.T) {
+	f := kanbanEntry()
+	f.answer = func(req map[string]any) string {
+		if req["op"] == "snapshot" {
+			// Nothing running, so a start is allowed.
+			return strings.Replace(kanbanSnapshot, `"执行｜状态":"进行中"`, `"执行｜状态":"已完成"`, 1)
+		}
+		return `{"ok":true,"result":{"verified":true}}`
+	}
 	p := openKanban(t, f, nil)
-	p.Update(kanbanKey("l")) // todo column, first card 写周报
-	if p.selected().ID != "t1" {
-		t.Fatalf("selected %+v", p.selected())
-	}
-	p.Update(kanbanKey("m"))
-	if p.confirm == nil || p.confirm.kind != "move" {
-		t.Fatal("m must open a confirmation")
-	}
-	p.Update(kanbanKey("right")) // 进行中 → 暂停
-	if got := p.confirm.choices[p.confirm.choice]; got != "暂停" {
-		t.Fatalf("choice = %s", got)
+	selectTask(t, p, "t1")
+	p.Update(kanbanKey("s"))
+	if p.confirm == nil || p.confirm.kind != "start" || p.confirm.operationID == "" {
+		t.Fatalf("s must open a start confirmation: %+v / %q", p.confirm, p.notice)
 	}
 	p.Update(kanbanKey("esc"))
 	if p.confirm != nil || len(f.ops) != 1 {
 		t.Fatalf("esc must cancel without writing: %v", f.ops)
 	}
-	p.Update(kanbanKey("m"))
-	p.Update(kanbanKey("right"))
+	p.Update(kanbanKey("s"))
+	opID := p.confirm.operationID
 	_, cmd := p.Update(kanbanKey("enter"))
 	written := cmd().(kanbanWrittenMsg)
-	if written.err != nil || f.ops[len(f.ops)-1] != "task.update" {
-		t.Fatalf("written=%+v ops=%v", written, f.ops)
+	payload := f.last()["payload"].(map[string]any)
+	if written.err != nil || payload["mode"] != "start" || payload["operationId"] != opID || payload["taskId"] != "t1" {
+		t.Fatalf("written=%+v payload=%v", written, payload)
 	}
-	reload := p.handleWritten(written)
-	if reload == nil {
+	if p.handleWritten(written) == nil {
 		t.Fatal("a confirmed write must be followed by a fresh read")
 	}
 }
 
-func TestKanbanUncertainWriteLocksUntilReread(t *testing.T) {
-	f := kanbanBoardBridge()
-	p := openKanban(t, f, &kanbanSession{ID: "sess-9", Title: "other"})
-	f.answer = func(req map[string]any) (string, error) {
-		if req["op"] == "task.list" {
-			return kanbanBoardJSON, nil
-		}
-		return `{"ok":false,"error":{"code":"WRITE_UNCERTAIN","message":"原生写入未确认"}}`, nil
+func TestKanbanPauseResumeTargetTheExecution(t *testing.T) {
+	f := kanbanEntry()
+	p := openKanban(t, f, nil)
+	selectTask(t, p, "t2")
+	p.Update(kanbanKey("p"))
+	_, cmd := p.Update(kanbanKey("enter"))
+	p.handleWritten(cmd().(kanbanWrittenMsg))
+	if pl := f.last()["payload"].(map[string]any); pl["mode"] != "pause" || pl["executionId"] != "e1" {
+		t.Fatalf("pause payload = %v", pl)
 	}
-	p.Update(kanbanKey("l"))
+	// Resuming t4 while t2 is still running is refused before sending.
+	p.loading = false
+	selectTask(t, p, "t4")
+	before := len(f.ops)
+	p.Update(kanbanKey("c"))
+	if p.confirm != nil || !strings.Contains(p.notice, "Another task is running") || len(f.ops) != before {
+		t.Fatalf("resume over a running task allowed: %q", p.notice)
+	}
+	// Starting anything while t2 runs is refused too.
+	selectTask(t, p, "t1")
+	p.Update(kanbanKey("s"))
+	if p.confirm != nil {
+		t.Fatal("start while another task runs allowed")
+	}
+}
+
+func TestKanbanRedlineRefusalExplainsAndDoesNotLock(t *testing.T) {
+	f := kanbanEntry()
+	p := openKanban(t, f, nil)
+	f.answer = func(req map[string]any) string {
+		if req["op"] == "snapshot" {
+			return kanbanSnapshot
+		}
+		return `{"ok":false,"error":{"code":"REDLINE_REVIEW_REQUIRED","message":"关联红线尚未核对"}}`
+	}
+	selectTask(t, p, "t2")
+	p.Update(kanbanKey("p"))
+	_, cmd := p.Update(kanbanKey("enter"))
+	if follow := p.handleWritten(cmd().(kanbanWrittenMsg)); follow == nil || p.locked || !strings.Contains(p.err, "World Store") {
+		t.Fatalf("redline refusal: locked=%v err=%q", p.locked, p.err)
+	}
+}
+
+func TestKanbanUncertainWriteLocksUntilReread(t *testing.T) {
+	f := kanbanEntry()
+	p := openKanban(t, f, &kanbanSession{ID: "sess-9", Title: "other"})
+	f.answer = func(req map[string]any) string {
+		if req["op"] == "snapshot" {
+			return kanbanSnapshot
+		}
+		return `{"ok":false,"error":{"code":"UNCONFIRMED","message":"写入可能已发出"}}`
+	}
+	selectTask(t, p, "t1")
 	p.Update(kanbanKey("L"))
 	_, cmd := p.Update(kanbanKey("enter"))
 	if follow := p.handleWritten(cmd().(kanbanWrittenMsg)); follow != nil {
@@ -164,28 +224,30 @@ func TestKanbanUncertainWriteLocksUntilReread(t *testing.T) {
 	}
 }
 
-func TestKanbanRefusesReadOnlyAndUnlinkedActionsWithoutBridge(t *testing.T) {
-	f := kanbanBoardBridge()
-	p := openKanban(t, f, nil)
-	p.Update(kanbanKey("l"))
-	p.Update(kanbanKey("j")) // 历史导入 (read-only)
-	p.Update(kanbanKey("m"))
-	if p.confirm != nil || !strings.Contains(p.notice, "read-only") {
-		t.Fatalf("read-only move allowed: %q", p.notice)
+func TestKanbanRefusesReadOnlyAndUnreadyLinksWithoutSending(t *testing.T) {
+	f := kanbanEntry()
+	f.answer = func(req map[string]any) string {
+		return strings.Replace(kanbanSnapshot, `"availableFields":["任务｜agent-deck 会话关联"]`, `"availableFields":[]`, 1)
 	}
-	p.Update(kanbanKey("k"))
+	p := openKanban(t, f, &kanbanSession{ID: "sess-9", Title: "other"})
+	selectTask(t, p, "t3")
+	p.Update(kanbanKey("x"))
+	if p.confirm != nil || !strings.Contains(p.notice, "read-only") {
+		t.Fatalf("read-only complete allowed: %q", p.notice)
+	}
+	selectTask(t, p, "t1")
 	p.Update(kanbanKey("L"))
-	if p.confirm != nil {
-		t.Fatal("link without a context session allowed")
+	if p.confirm != nil || !strings.Contains(p.notice, "init-links") {
+		t.Fatalf("link without the relation allowed: %q", p.notice)
 	}
 	if len(f.ops) != 1 {
-		t.Fatalf("bridge called: %v", f.ops)
+		t.Fatalf("entry called: %v", f.ops)
 	}
 }
 
 func TestKanbanEnterJumpsToLinkedSession(t *testing.T) {
-	p := openKanban(t, kanbanBoardBridge(), nil)
-	// doing column is first; 修复登录 is linked to sess-1.
+	p := openKanban(t, kanbanEntry(), nil)
+	selectTask(t, p, "t2")
 	_, cmd := p.Update(kanbanKey("enter"))
 	if cmd == nil {
 		t.Fatal("no jump")
@@ -199,7 +261,7 @@ func TestKanbanEnterJumpsToLinkedSession(t *testing.T) {
 }
 
 func TestKanbanFilterNarrowsColumns(t *testing.T) {
-	p := openKanban(t, kanbanBoardBridge(), nil)
+	p := openKanban(t, kanbanEntry(), nil)
 	p.Update(kanbanKey("/"))
 	for _, r := range "周报" {
 		p.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
