@@ -21871,8 +21871,15 @@ func (h *Home) renderGroupItem(
 	gutter := strings.Repeat(" ", leftGutterWidth)
 	if selected {
 		gutter = SessionSelectionPrefix.Render("▶ ")
-	} else if item.Level == 0 && item.RootGroupNum >= 1 && item.RootGroupNum <= 9 {
-		gutter = GroupHotkeyStyle.Render(fmt.Sprintf("%d·", item.RootGroupNum))
+	}
+	// matrix/hardened: digits are a vim count now and the root-group jump is
+	// "'N" (matrix_nav_count.go), so the gutter's "N·" named a key that no
+	// longer jumps, and next to the line-number column it ran into the line
+	// number and the expand arrow ("5 2·▾ beta"). The real key is shown as a
+	// dim "'N" after the group's count instead; the gutter stays blank.
+	hotkeyHint := ""
+	if item.Level == 0 && item.RootGroupNum >= 1 && item.RootGroupNum <= 9 {
+		hotkeyHint = " " + GroupHotkeyStyle.Render(fmt.Sprintf("'%d", item.RootGroupNum))
 	}
 
 	// Calculate indentation based on nesting level (no tree lines, just spaces).
@@ -21936,15 +21943,16 @@ func (h *Home) renderGroupItem(
 		statusStr += " " + GroupStatusWaiting.Render(fmt.Sprintf("◐ %d", stats.waiting))
 	}
 
-	// Build the row: [hotkey gutter][indent][expand] [name](count) [status]
+	// Build the row: [gutter][indent][expand] [name](count) [status] ['N]
 	row := fmt.Sprintf(
-		"%s%s%s %s%s%s",
+		"%s%s%s %s%s%s%s",
 		gutter,
 		indent,
 		expandIcon,
 		nameStyle.Render(groupName),
 		countStr,
 		statusStr,
+		hotkeyHint, // matrix/hardened: see above
 	)
 	b.WriteString(row)
 	b.WriteString("\n")

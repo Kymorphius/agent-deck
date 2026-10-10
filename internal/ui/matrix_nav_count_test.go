@@ -270,3 +270,50 @@ func TestMatrixJumpBack_NoMarkIsANoop(t *testing.T) {
 		t.Fatalf("'' with no mark: cursor = %d (%s), want a2", h.cursor, describeCursor(h))
 	}
 }
+
+// ---------- group rows show the real jump key ("'N") ----------
+
+func TestMatrixGroupHint_RowShowsQuoteKey(t *testing.T) {
+	home, idx := buildTwoGroupHome(t)
+	home.cursor = idx["a2"]
+
+	lines := strings.Split(ansi.Strip(home.renderSessionList(60, 12)), "\n")
+	var beta string
+	for _, l := range lines {
+		if strings.Contains(l, "beta (2)") {
+			beta = l
+		}
+	}
+	if !strings.HasSuffix(strings.TrimRight(beta, " "), "beta (2) '2") {
+		t.Fatalf("beta row %q: want the jump key \"'2\" after the count", beta)
+	}
+	if strings.Contains(beta, "2·") {
+		t.Fatalf("beta row %q still shows the old \"2·\" (plain 2 is a count now)", beta)
+	}
+	// Line number, blank gutter, then the arrow: nothing runs together.
+	if f := strings.Fields(beta); len(f) < 2 || f[1] != "▾" {
+		t.Fatalf("beta row %q: want \"<line> ▾ beta ...\"", beta)
+	}
+}
+
+func TestMatrixGroupHint_ShownKeyJumpsThroughUpdate(t *testing.T) {
+	home, idx := buildTwoGroupHome(t)
+	home.cursor = idx["b2"]
+
+	for _, tc := range []struct {
+		digit rune
+		path  string
+	}{{'1', "alpha"}, {'2', "beta"}} {
+		for _, r := range []rune{'\'', tc.digit} {
+			model, _ := home.Update(plainKeyMsg(r))
+			home = model.(*Home)
+		}
+		if it := home.flatItems[home.cursor]; it.Type != session.ItemTypeGroup || it.Path != tc.path {
+			t.Fatalf("'%c via Update: cursor on %s, want group %s", tc.digit, describeCursor(home), tc.path)
+		}
+		rendered := ansi.Strip(home.renderSessionList(60, 12))
+		if !strings.Contains(rendered, tc.path+" ("+map[string]string{"alpha": "3", "beta": "2"}[tc.path]+") '"+string(tc.digit)) {
+			t.Fatalf("row for %s does not advertise '%c:\n%s", tc.path, tc.digit, rendered)
+		}
+	}
+}
