@@ -49,18 +49,10 @@ ADDED_CODE=$(git diff "$MB" HEAD -- . ':!*.md' ":!$SELF_REL" | grep '^+' | grep 
 HAVE_GO=1
 command -v go >/dev/null 2>&1 || HAVE_GO=0
 
-# Sandbox: throwaway HOME + cleared XDG, but keep Go caches so runs stay fast.
-SANDBOX_HOME=$(mktemp -d)
-GOMODCACHE_SAVED=""; GOCACHE_SAVED=""
-if [ "$HAVE_GO" = 1 ]; then
-  GOMODCACHE_SAVED=$(go env GOMODCACHE); GOCACHE_SAVED=$(go env GOCACHE)
-fi
+# matrix/hardened: share the same cache-preserving, cleanup-safe test entrypoint.
 sandboxed() {
-  HOME="$SANDBOX_HOME" XDG_CONFIG_HOME= XDG_DATA_HOME= XDG_CACHE_HOME= CLAUDE_CONFIG_DIR= \
-    GOMODCACHE="$GOMODCACHE_SAVED" GOCACHE="$GOCACHE_SAVED" "$@"
+  "$ROOT/scripts/run-isolated.py" "$@"
 }
-cleanup() { rm -rf "$SANDBOX_HOME" 2>/dev/null; }
-trap cleanup EXIT
 
 echo "== agent-deck contributor self-check =="
 echo "   base: $BASE_REF ($(git rev-parse --short "$MB"))   body: $BODY_FILE"

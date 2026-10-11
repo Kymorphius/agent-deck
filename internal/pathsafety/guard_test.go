@@ -123,7 +123,7 @@ func TestPathsDoNotResolveUnderRealHome(t *testing.T) {
 					"The test suite is NOT sandboxed. Running it would write to (and can "+
 					"WIPE) the live ~/.agent-deck. This is the 2026-06-04 incident class.\n"+
 					"Run every test with a sandboxed HOME+XDG, e.g.:\n"+
-					"  HOME=$(mktemp -d) XDG_CONFIG_HOME= XDG_DATA_HOME= XDG_CACHE_HOME= go test -race ./<pkg>/...\n"+
+					"  scripts/run-isolated.py go test -race ./<pkg>/...\n"+
 					"and ensure the package's TestMain calls testutil.IsolateHome().",
 				name, clean, home,
 			)

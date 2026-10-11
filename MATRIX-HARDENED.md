@@ -81,11 +81,10 @@ scripts/matrix-install.sh 1
 **跑测试时必须隔离**，否则会碰到真实的 `~/.claude`、`~/.config/agent-deck` 等：
 
 ```sh
-T=$(mktemp -d)
-env -i PATH="$PATH" HOME=$T XDG_CONFIG_HOME=$T/.config XDG_DATA_HOME=$T/.local/share \
-  XDG_CACHE_HOME=$T/.cache XDG_STATE_HOME=$T/.local/state TZ=UTC GOTOOLCHAIN=go1.25.13 \
-  go test ./internal/update/... ./internal/telemetry/... ./internal/feedback/... ./internal/session/... ./cmd/agent-deck/...
+scripts/run-isolated.py go test ./internal/update/... ./internal/telemetry/... ./internal/feedback/... ./internal/session/... ./cmd/agent-deck/...
 ```
+
+- **matrix/hardened: 统一使用 `scripts/run-isolated.py`**（需要 Python 3）。入口在隔离配置前解析并复用 GOPATH、GOMODCACHE、GOCACHE 和工具链设置；正常结束、失败及 INT/TERM/HUP 后回收临时 HOME。不要再手写 `HOME=$(mktemp -d)` 或裸 `T=$(mktemp -d)` 测试命令。SIGKILL、断电无法触发清理；旧遗留目录需另行审核，入口不会自动删除它们。此隔离不覆盖 launchd/tmux。
 
 - 本机 Go 是 1.25.5，`go.mod` 要求 1.25.13，用 `GOTOOLCHAIN=go1.25.13`（会自动下载）。
 - 代码规范检查：golangci-lint v2.14.0（Makefile 里固定的版本），要用 `GOTOOLCHAIN=go1.26.0` 运行；当前结果是 0 个问题。
