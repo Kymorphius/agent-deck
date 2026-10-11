@@ -220,17 +220,17 @@ func TestNewSessionFlow_TabWalksClaudeOptionsRows(t *testing.T) {
 		}
 	}
 	d = pressKey(d, tea.KeyTab)
-	if d.currentTarget() != focusCreate {
-		t.Fatalf("Tab past the last option row landed on %v, want focusCreate", d.currentTarget())
+	if d.currentTarget() != focusSaveDefaults {
+		t.Fatalf("Tab past the last option row landed on %v, want focusSaveDefaults", d.currentTarget())
 	}
 	d = pressKey(d, tea.KeyShiftTab)
 	if d.currentTarget() != focusOptions || panel.focusIndex != rows-1 {
-		t.Fatalf("Shift+Tab from Create: target=%v panel row=%d, want focusOptions row %d", d.currentTarget(), panel.focusIndex, rows-1)
+		t.Fatalf("Shift+Tab from Save defaults: target=%v panel row=%d, want focusOptions row %d", d.currentTarget(), panel.focusIndex, rows-1)
 	}
 }
 
 // Enter and ↓ inside the options panel step one row at a time; Enter past the
-// last row lands on the Create button.
+// matrix/hardened: last row lands on the separate Save defaults button.
 func TestNewSessionFlow_EnterAndDownWalkClaudeOptionsRows(t *testing.T) {
 	d := flowDialog(t, "claude")
 	flowFocus(t, d, focusOptions)
@@ -246,8 +246,8 @@ func TestNewSessionFlow_EnterAndDownWalkClaudeOptionsRows(t *testing.T) {
 	}
 	panel.FocusLast()
 	d = pressKey(d, tea.KeyEnter)
-	if d.currentTarget() != focusCreate {
-		t.Fatalf("Enter on the last option row landed on %v, want focusCreate", d.currentTarget())
+	if d.currentTarget() != focusSaveDefaults {
+		t.Fatalf("Enter on the last option row landed on %v, want focusSaveDefaults", d.currentTarget())
 	}
 }
 

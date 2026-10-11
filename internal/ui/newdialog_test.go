@@ -373,11 +373,14 @@ func TestNewDialog_TabFromLastFieldCyclesToTop(t *testing.T) {
 	}
 	d.updateFocus()
 
-	// The Create button follows the (single-row) codex options panel; Tab from
-	// it wraps to the top of the form.
+	// matrix/hardened: Save defaults precedes Create, then Tab wraps to Name.
+	d, _ = d.Update(tea.KeyMsg{Type: tea.KeyTab})
+	if d.currentTarget() != focusSaveDefaults {
+		t.Fatalf("currentTarget after options = %v, want focusSaveDefaults", d.currentTarget())
+	}
 	d, _ = d.Update(tea.KeyMsg{Type: tea.KeyTab})
 	if d.currentTarget() != focusCreate {
-		t.Fatalf("currentTarget after tab from options = %v, want focusCreate", d.currentTarget())
+		t.Fatal("Save defaults must precede Create")
 	}
 	d, _ = d.Update(tea.KeyMsg{Type: tea.KeyTab})
 	if d.currentTarget() != focusName {
@@ -440,7 +443,7 @@ func TestDialogPresetCommands(t *testing.T) {
 	d := NewNewDialog()
 
 	// Should have shell (empty), claude, gemini, opencode, codex, pi, copilot, crush, muse, cursor, hermes, deepseek, omp
-	expectedCommands := []string{"", "claude", "gemini", "opencode", "codex", "pi", "copilot", "crush", "muse", "cursor", "hermes", "deepseek", "omp"}
+	expectedCommands := []string{"", "codex", "claude", "gemini", "opencode", "pi", "copilot", "crush", "muse", "cursor", "hermes", "deepseek", "omp"}
 
 	if len(d.presetCommands) != len(expectedCommands) {
 		t.Errorf("Expected %d preset commands, got %d", len(expectedCommands), len(d.presetCommands))
@@ -457,7 +460,7 @@ func TestDialogGetValues(t *testing.T) {
 	d := NewNewDialog()
 	d.nameInput.SetValue("my-session")
 	d.pathInput.SetValue("/tmp/project")
-	d.commandCursor = 1 // claude
+	d.SetDefaultTool("claude") // matrix/hardened: select by tool name
 
 	name, path, command := d.GetValues()
 
@@ -657,7 +660,7 @@ func TestNewDialog_TabShowsCompletionMatches(t *testing.T) {
 		}
 	}
 	first := d.pathCycler.Matches()[0]
-	if !strings.Contains(view, "▶ "+first) {
+	if !strings.Contains(view, "▶ "+pathDropdownLabel(first, d.effectiveDialogWidth()-8, d.height)) {
 		t.Errorf("current match %q should be highlighted with ▶", first)
 	}
 
@@ -668,10 +671,10 @@ func TestNewDialog_TabShowsCompletionMatches(t *testing.T) {
 		t.Errorf("second Tab should complete to %q, got %q", second, got)
 	}
 	view = d.View()
-	if !strings.Contains(view, "▶ "+second) {
+	if !strings.Contains(view, "▶ "+pathDropdownLabel(second, d.effectiveDialogWidth()-8, d.height)) {
 		t.Errorf("after second Tab, %q should be highlighted with ▶", second)
 	}
-	if strings.Contains(view, "▶ "+first) {
+	if strings.Contains(view, "▶ "+pathDropdownLabel(first, d.effectiveDialogWidth()-8, d.height)) {
 		t.Errorf("after second Tab, %q should no longer be highlighted", first)
 	}
 }
@@ -2218,8 +2221,8 @@ func TestNewDialog_View_ShowsStartQueryField_WhenClaudeSelected(t *testing.T) {
 	dialog := NewNewDialog()
 	dialog.SetSize(100, 50)
 	dialog.Show()
-	// commandCursor = 1 selects "claude" (see buildPresetCommands order).
-	dialog.commandCursor = 1
+	// matrix/hardened: tool order may change; select Claude by name.
+	dialog.SetDefaultTool("claude")
 	dialog.updateToolOptions()
 
 	view := dialog.View()
@@ -2242,7 +2245,7 @@ func TestNewDialog_View_ShowsStartQueryField_WhenClaudeSelected(t *testing.T) {
 func TestNewDialog_GetClaudeStartQuery_ReturnsInputValue(t *testing.T) {
 	dialog := NewNewDialog()
 	dialog.Show()
-	dialog.commandCursor = 1 // claude
+	dialog.SetDefaultTool("claude") // matrix/hardened: select by tool name
 	dialog.updateToolOptions()
 
 	// Use reflection to drive the test even before GetClaudeStartQuery exists.
@@ -2464,7 +2467,7 @@ func TestNewDialog_RecentPicker_JK(t *testing.T) {
 func TestNewDialog_StartQuery_ClearsBetweenOpenings(t *testing.T) {
 	dialog := NewNewDialog()
 	dialog.Show()
-	dialog.commandCursor = 1 // claude
+	dialog.SetDefaultTool("claude") // matrix/hardened: select by tool name
 	dialog.updateToolOptions()
 
 	dialog.claudeOptions.SetStartQuery("explain this repo")
@@ -2474,7 +2477,7 @@ func TestNewDialog_StartQuery_ClearsBetweenOpenings(t *testing.T) {
 
 	dialog.Hide()
 	dialog.Show()
-	dialog.commandCursor = 1
+	dialog.SetDefaultTool("claude")
 	dialog.updateToolOptions()
 
 	if got := dialog.GetClaudeStartQuery(); got != "" {

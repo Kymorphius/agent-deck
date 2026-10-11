@@ -76,6 +76,10 @@ type UserConfig struct {
 	// If empty or invalid, defaults to "shell" (no pre-selection)
 	DefaultTool string `toml:"default_tool,omitempty"`
 
+	// matrix/hardened: an explicitly saved new-session preset never contains
+	// a project path or repository-specific session identity.
+	NewSessionDefaults *NewSessionDefaults `toml:"new_session_defaults,omitempty"`
+
 	// DefaultPath is the global fallback project directory for `agent-deck add`
 	// when no explicit path or group default_path is provided.
 	DefaultPath string `toml:"default_path,omitempty"`

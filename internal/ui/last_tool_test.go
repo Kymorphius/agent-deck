@@ -30,11 +30,10 @@ func TestResolveInitialTool_RememberedUsedWhenNoConfig(t *testing.T) {
 	}
 }
 
-// resolveInitialTool: first run — nothing configured, nothing remembered → "".
-// SetDefaultTool("") preselects shell, i.e. behavior is unchanged.
-func TestResolveInitialTool_FirstRunEmpty(t *testing.T) {
-	if got := resolveInitialTool("", ""); got != "" {
-		t.Fatalf("resolveInitialTool(\"\", \"\") = %q, want \"\" (first-run unchanged)", got)
+// matrix/hardened: first run with nothing remembered preselects Codex.
+func TestResolveInitialTool_FirstRunCodex(t *testing.T) {
+	if got := resolveInitialTool("", ""); got != "codex" {
+		t.Fatalf("resolveInitialTool(\"\", \"\") = %q, want codex", got)
 	}
 }
 

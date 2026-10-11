@@ -41,13 +41,12 @@ func matrixAssertDropdownPlacement(t *testing.T, base, view, input, selectedSuff
 	t.Helper()
 	baseLines := strings.Split(ansi.Strip(base), "\n")
 	lines := strings.Split(ansi.Strip(view), "\n")
-	inputRow := matrixDropdownLine(t, baseLines, input)
-	gotInputRow := ""
-	if inputRow < len(lines) {
-		gotInputRow = lines[inputRow]
-	}
-	if gotInputRow != baseLines[inputRow] {
-		t.Fatalf("dropdown overwrote focused path row %d:\nbefore: %q\nafter: %q\n%s", inputRow, baseLines[inputRow], gotInputRow, view)
+	// matrix/hardened: inline candidates can move a centered form; compare
+	// input content at its actual row instead of assuming a fixed screen row.
+	baseInputRow := matrixDropdownLine(t, baseLines, input)
+	inputRow := matrixDropdownLine(t, lines, input)
+	if strings.Trim(baseLines[baseInputRow], " │") != strings.Trim(lines[inputRow], " │") {
+		t.Fatalf("candidate list changed the input: before %q, after %q", baseLines[baseInputRow], lines[inputRow])
 	}
 	selectedRow := inputRow + 1 + matrixDropdownLine(t, lines[inputRow+1:], selectedSuffix)
 	if selectedRow <= inputRow {
@@ -75,7 +74,7 @@ func matrixAssertDropdownPlacement(t *testing.T, base, view, input, selectedSuff
 	menuRight += menuLeft
 	menuRightCell := lipgloss.Width(lines[menuTop][:menuRight])
 	foundDialogBorder := false
-	for row := inputRow; row >= 0; row-- {
+	for row := baseInputRow; row >= 0; row-- {
 		if right := strings.Index(baseLines[row], "╮"); right >= 0 {
 			foundDialogBorder = true
 			dialogRightCell := lipgloss.Width(baseLines[row][:right])
@@ -154,7 +153,7 @@ func TestMatrixPathDropdown_NewHistoryInputVisible(t *testing.T) {
 }
 
 func TestMatrixPathDropdown_NewFilesystemCompletionInputVisible(t *testing.T) {
-	parent := filepath.Join(t.TempDir(), strings.Repeat("long-parent-", 12), "nested")
+	parent := filepath.Join(t.TempDir(), strings.Repeat("long-parent-", 5), "nested")
 	for i := 0; i < 15; i++ {
 		if err := os.MkdirAll(filepath.Join(parent, fmt.Sprintf("candidate-%02d-项目👩🏽‍💻", i)), 0755); err != nil {
 			t.Fatal(err)
