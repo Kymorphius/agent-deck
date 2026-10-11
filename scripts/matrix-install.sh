@@ -13,4 +13,6 @@ GOTOOLCHAIN=${GOTOOLCHAIN:-go1.25.13} go build -trimpath -ldflags "-s -w -X main
 if strings "$out/agent-deck" | grep -qE 'phc_[A-Za-z0-9]{20}'; then echo "refusing: a PostHog key is compiled in" >&2; exit 1; fi
 install -m 755 "$out/agent-deck" "$HOME/.local/bin/agent-deck"; rm -rf "$out"
 echo "installed: $("$HOME/.local/bin/agent-deck" --version)"
-"$HOME/.local/bin/agent-deck" hooks status | head -3
+# matrix/hardened: consume all status output so pipefail does not report SIGPIPE
+# after a successful install when hooks status writes more than three lines.
+"$HOME/.local/bin/agent-deck" hooks status | sed -n '1,3p'
