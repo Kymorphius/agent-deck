@@ -654,6 +654,8 @@ func (g *GroupDialog) View() string {
 		if g.parentName != "" {
 			title = "Create Subgroup"
 			parentInfo := lipgloss.NewStyle().
+				// matrix/hardened: wrap long context before centering the fields.
+				Width(min(titleWidth, cellWidth("Parent: "+g.parentName))).
 				Foreground(ColorCyan).
 				Render("Parent: " + g.parentName)
 			content = parentInfo + "\n\n" + fields
@@ -666,6 +668,8 @@ func (g *GroupDialog) View() string {
 		// user knows the group will be created on the remote host, not locally.
 		if g.remoteName != "" {
 			remoteInfo := lipgloss.NewStyle().
+				// matrix/hardened: remote names must not widen the field block.
+				Width(min(titleWidth, cellWidth("Remote: "+g.remoteName))).
 				Foreground(ColorCyan).
 				Render("Remote: " + g.remoteName)
 			content = remoteInfo + "\n\n" + content
@@ -791,7 +795,7 @@ func (g *GroupDialog) View() string {
 
 	// Overlay the path suggestion dropdown as a floating menu anchored to the
 	// Default Path row, so its appearance/disappearance never shifts layout.
-	if suggestionsOverlay := g.renderPathDropdown(); suggestionsOverlay != "" {
+	if g.IsPathDropdownVisible() {
 		topRow, leftCol := dialogOrigin(g.width, g.height, lipgloss.Width(dialog), lipgloss.Height(dialog))
 		// Rows: border (1) + vertical padding (1) + content offset. Columns:
 		// measure the rendered row's own leading spaces so JoinVertical's
@@ -804,7 +808,16 @@ func (g *GroupDialog) View() string {
 			leading = leadingVisibleSpaces(stripAnsi(dialogLines[lineIdx]))
 		}
 		overlayCol := leftCol + leading
-
+		// matrix/hardened: use the fitted row, then place the menu below the
+		// input. Padding and viewport scrolling can change the original offset.
+		for i, line := range dialogLines {
+			if strings.HasPrefix(strings.TrimLeft(stripAnsi(line), " │"), "Default Path:") {
+				overlayRow = topRow + i + 1
+				overlayCol = leftCol + 1
+				break
+			}
+		}
+		suggestionsOverlay := g.renderPathDropdown(min(lipgloss.Width(dialog)-2, g.width-overlayCol), g.height-overlayRow)
 		placed = overlayDropdown(placed, suggestionsOverlay, overlayRow, overlayCol)
 	}
 
@@ -813,7 +826,7 @@ func (g *GroupDialog) View() string {
 
 // renderPathDropdown renders the Default Path suggestions as a standalone
 // bordered block for overlay positioning. Empty when nothing should show.
-func (g *GroupDialog) renderPathDropdown() string {
+func (g *GroupDialog) renderPathDropdown(bounds ...int) string {
 	if !g.IsPathDropdownVisible() {
 		return ""
 	}
@@ -857,7 +870,8 @@ func (g *GroupDialog) renderPathDropdown() string {
 			style = selectedStyle
 			prefix = "▶ "
 		}
-		b.WriteString(style.Render(prefix + g.pathSuggestions[i]))
+		// matrix/hardened: abbreviate long paths without changing their values.
+		b.WriteString(style.Render(prefix + pathDropdownLabel(g.pathSuggestions[i], bounds...)))
 	}
 	if endIdx < total {
 		b.WriteString("\n")
@@ -875,13 +889,7 @@ func (g *GroupDialog) renderPathDropdown() string {
 	b.WriteString("\n")
 	b.WriteString(lipgloss.NewStyle().Foreground(ColorBorder).Background(menuBg).Render(footerText))
 
-	menuStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(ColorBorder).
-		Background(menuBg).
-		Padding(0, 1)
-
-	return menuStyle.Render(b.String())
+	return renderPathDropdownBox(b.String(), ColorBorder, bounds...)
 }
 
 // leadingVisibleSpaces counts the space characters before the first
