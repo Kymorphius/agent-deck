@@ -67,21 +67,52 @@ type codexThreadMeta struct {
 // flush after the first hook event referencing it.
 var codexThreadMetaCache sync.Map // sessionID string -> codexThreadMeta
 
+// matrix/hardened: polling must not glob the entire dated rollout tree for
+// every known thread. Cache only positive paths, separated by Codex home; a
+// missing rollout can appear on its first flush, so absence is never cached.
+type codexRolloutPathKey struct {
+	codexHome string
+	sessionID string
+}
+
+type codexRolloutPathResolver struct {
+	paths sync.Map // codexRolloutPathKey -> string
+}
+
+var codexRolloutPaths codexRolloutPathResolver
+
 // codexRolloutPathInHome returns the flushed rollout JSONL path for a session
 // ID under codexHome/sessions, or "" when none exists.
 //
 // Codex layout: codexHome/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl
 func codexRolloutPathInHome(sessionID, codexHome string) string {
+	return codexRolloutPaths.find(sessionID, codexHome, filepath.Glob)
+}
+
+// matrix/hardened: the scan argument lets regression tests count tree scans
+// without replacing a process-wide function while other lookups are running.
+func (r *codexRolloutPathResolver) find(sessionID, codexHome string, scan func(string) ([]string, error)) string {
 	sessionID = strings.TrimSpace(sessionID)
 	if sessionID == "" {
 		return ""
 	}
+	key := codexRolloutPathKey{codexHome: codexHome, sessionID: sessionID}
+	if cached, ok := r.paths.Load(key); ok {
+		path := cached.(string)
+		if _, err := os.Stat(path); err == nil {
+			return path
+		}
+		// A rollout can be removed or moved after discovery. Avoid deleting a
+		// replacement another caller has already found for the same thread.
+		r.paths.CompareAndDelete(key, path)
+	}
 	pattern := filepath.Join(codexHome, "sessions", "*", "*", "*",
 		"rollout-*-"+sessionID+".jsonl")
-	matches, err := filepath.Glob(pattern)
+	matches, err := scan(pattern)
 	if err != nil || len(matches) == 0 {
 		return ""
 	}
+	r.paths.Store(key, matches[0])
 	return matches[0]
 }
 

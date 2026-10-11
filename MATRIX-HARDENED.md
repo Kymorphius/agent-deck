@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.31`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.32`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -66,7 +66,7 @@
 - `internal/session/claude_hooks.go`：`isAgentDeckHookCommand` 的判断规则：先去掉开头的 `VAR=值`，再要求第二个词是 `hook-handler`、程序名的文件名部分是 `agent-deck`。`RemoveClaudeHooks` 会扫描全部事件，并做 UTC 时间戳备份（约 387–414 行）。
 - `cmd/agent-deck/main.go`（约 4845、5070 行）：`agent-deck uninstall` 会移除这些钩子。`uninstall.sh` 第 253 行附近的 jq 过滤用的是同一套规则（正则），写回时用 `cat >` 保持软链接和权限。
 
-**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.31`。
+**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.32`。
 
 **测试**：以 `_hardened_test.go` 结尾的文件、`update_check_disable_test.go`、`update_timer_wiring_test.go` 等是新增或调整过的测试；`testdata/goldens/*` 里的快照已经按加固后的输出更新。
 
@@ -341,3 +341,15 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 - 切换设备清空 Path 与父分组，保留输入的名称；回到原设备可恢复 Root/Subgroup 上下文，默认仍为 Root。Local 始终存在，即使列表里只有远程分组。
 - 小终端对新增目标行使用布局裁剪，保留当前输入和底部操作提示。
 - 回归验证覆盖仅远程行切到 Local 后实际创建本机分组、多目标键盘选择、原设备上下文恢复、重新打开状态重置，以及既有远程创建和路径候选布局。
+
+## 29. 减少历史日志查找与空闲推送开销
+
+`1.16.26+matrix.32` 优化多个看板与 headless Web 并行运行时的后台 CPU 开销。
+
+- **matrix/hardened:** `codexRolloutPathInHome` 缓存已经找到的日志路径，键包含 Codex 主目录与线程 ID。缓存命中只检查文件是否存在，不再遍历整个 `sessions/YYYY/MM/DD` 历史树；日志删除或移动后重新查找。尚未写出的日志不缓存缺失结果，首次写出后仍能立即找到。
+- **matrix/hardened:** 推送服务在零订阅时跳过每 3 秒的全量会话快照刷新，并清空状态基线。最后一个订阅移除后立即重置基线，重新出现首个订阅者后先建立新基线，随后正常发送状态变化；订阅读取失败保留原基线，订阅保存成功立即请求一次同步。在途快照和旧状态变化不能覆盖重订阅后的基线，网络发送在锁外执行。
+- 保持既有会话监测频率和中断判断。`claim_polling` 仍为可选配置：共享状态行尚不包含完整子状态与详情，不将它作为本轮优化的前提。
+- 回归：`matrix_codex_rollout_cache_test.go` 覆盖跨主目录隔离、首次写出、删除与移动、并发以及稳定路径的 100 次查询仅遍历一次；`matrix_push_idle_test.go` 覆盖空订阅、重新订阅、计数或写入失败、并发移除边界和真实文件存储。使用第 4 节的隔离入口运行，另验证既有 Codex 中断与子代理判断、完整 Web 包和新回归的 race 检查。
+- `BenchmarkMatrixCodexRolloutPathLookup` 在 120 个合成日期目录、12,001 个日志文件上对比原始遍历与缓存命中；这是路径查找基准，不能直接当作整机或完整看板 CPU 降幅。
+- 部署后重启 Web 服务；已打开的 TUI 在会话列表按 `Ctrl+T` 原地重载。核对实际运行版本后再做 CPU 对比，安装磁盘文件不等于旧看板已加载优化。
+- **matrix/hardened:** 安装脚本的钩子状态摘要使用 `sed` 读完完整输出后显示前三行，避免 `head` 提前退出使成功安装在 `pipefail` 下报 SIGPIPE；真实钩子状态错误仍会传播。

@@ -360,6 +360,11 @@ type pushService struct {
 	startOnce sync.Once
 	triggerCh chan struct{}
 
+	// matrix/hardened: serialize baseline snapshots with subscription mutations,
+	// and reject old transitions after the last subscriber disappears.
+	syncMu        sync.Mutex
+	baselineEpoch uint64
+
 	mu          sync.Mutex
 	initialized bool
 	lastStatus  map[string]string
@@ -451,14 +456,46 @@ func (p *pushService) UpsertSubscription(ctx context.Context, sub pushSubscripti
 	if p == nil || !p.enabled || p.store == nil {
 		return fmt.Errorf("push service is not configured")
 	}
-	return p.store.Upsert(ctx, sub)
+	// matrix/hardened: detect an empty interval even when no poll observed it;
+	// an in-flight snapshot must finish before this new baseline is reset.
+	p.syncMu.Lock()
+	defer p.syncMu.Unlock()
+	count, err := p.store.Count(ctx)
+	if err != nil {
+		pushLog.Error("push_count_subscriptions_failed", slog.String("error", err.Error()))
+		return err
+	}
+	if err := p.store.Upsert(ctx, sub); err != nil {
+		return err
+	}
+	if count == 0 {
+		p.resetBaselineLocked()
+	}
+	// matrix/hardened: prime the first subscriber's baseline promptly after idle.
+	p.TriggerSync()
+	return nil
 }
 
 func (p *pushService) RemoveSubscriptionByEndpoint(ctx context.Context, endpoint string) error {
 	if p == nil || !p.enabled || p.store == nil {
 		return fmt.Errorf("push service is not configured")
 	}
-	return p.store.RemoveByEndpoint(ctx, endpoint)
+	// matrix/hardened: reset immediately on the last removal, including when
+	// another subscriber arrives before the next scheduled idle poll.
+	p.syncMu.Lock()
+	defer p.syncMu.Unlock()
+	if err := p.store.RemoveByEndpoint(ctx, endpoint); err != nil {
+		return err
+	}
+	count, err := p.store.Count(ctx)
+	if err != nil {
+		pushLog.Error("push_count_subscriptions_failed", slog.String("error", err.Error()))
+		return nil // Removal succeeded; preserve the baseline until a valid count.
+	}
+	if count == 0 {
+		p.resetBaselineLocked()
+	}
+	return nil
 }
 
 func (p *pushService) UpdateSubscriptionFocus(ctx context.Context, endpoint string, focused bool) error {
@@ -500,11 +537,48 @@ func (p *pushService) run(ctx context.Context) {
 	}
 }
 
+// matrix/hardened: callers hold syncMu so an older snapshot cannot restore this
+// cleared baseline and already-generated transitions retain their old epoch.
+func (p *pushService) resetBaselineLocked() {
+	p.mu.Lock()
+	p.initialized = false
+	p.lastStatus = nil
+	p.baselineEpoch++
+	p.mu.Unlock()
+}
+
 func (p *pushService) syncOnce(ctx context.Context) {
+	// matrix/hardened: release the snapshot/mutation lock before network sends.
+	transitions, epoch := p.syncTransitions(ctx)
+	for _, tr := range transitions {
+		p.notifySubscribers(ctx, tr, epoch)
+	}
+}
+
+// matrix/hardened: mutations cannot interleave with a snapshot and overwrite
+// the baseline reset that marks a new subscription period.
+func (p *pushService) syncTransitions(ctx context.Context) ([]pushTransition, uint64) {
+	p.syncMu.Lock()
+	defer p.syncMu.Unlock()
+	// matrix/hardened: an idle push service must not refresh every session when
+	// nobody can receive notifications. A later subscriber starts a fresh baseline.
+	// Keep the existing snapshot-only behavior for a nil store used by tests.
+	if p.store != nil {
+		count, err := p.store.Count(ctx)
+		if err != nil {
+			pushLog.Error("push_count_subscriptions_failed", slog.String("error", err.Error()))
+			return nil, 0
+		}
+		if count == 0 {
+			p.resetBaselineLocked()
+			return nil, 0
+		}
+	}
+
 	snapshot, err := p.menuData.LoadMenuSnapshot()
 	if err != nil {
 		pushLog.Error("push_snapshot_load_failed", slog.String("error", err.Error()))
-		return
+		return nil, 0
 	}
 
 	current := make(map[string]string)
@@ -525,7 +599,7 @@ func (p *pushService) syncOnce(ctx context.Context) {
 		p.lastStatus = current
 		p.initialized = true
 		p.mu.Unlock()
-		return
+		return nil, 0
 	}
 
 	for sessionID, status := range current {
@@ -556,17 +630,23 @@ func (p *pushService) syncOnce(ctx context.Context) {
 	p.lastStatus = current
 	p.mu.Unlock()
 
-	for _, tr := range transitions {
-		p.notifySubscribers(ctx, tr)
-	}
+	return transitions, p.baselineEpoch
 }
 
-func (p *pushService) notifySubscribers(ctx context.Context, tr pushTransition) {
+func (p *pushService) notifySubscribers(ctx context.Context, tr pushTransition, epoch uint64) {
 	if p == nil || p.store == nil || p.sender == nil || tr.Session == nil {
 		return
 	}
 
+	// matrix/hardened: old transitions cannot pick up newly registered
+	// subscribers; snapshot recipients under the mutation lock, then release it.
+	p.syncMu.Lock()
+	if epoch != p.baselineEpoch {
+		p.syncMu.Unlock()
+		return
+	}
 	subs, err := p.store.List(ctx)
+	p.syncMu.Unlock()
 	if err != nil {
 		pushLog.Error("push_list_subscriptions_failed", slog.String("error", err.Error()))
 		return
@@ -626,7 +706,8 @@ func (p *pushService) notifySubscribers(ctx context.Context, tr pushTransition) 
 			slog.String("status_change", tr.Status),
 			slog.String("error", err.Error()))
 		if statusCode == http.StatusGone || statusCode == http.StatusNotFound {
-			_ = p.store.RemoveByEndpoint(ctx, sub.Endpoint)
+			// matrix/hardened: expired subscriptions reset the same idle baseline.
+			_ = p.RemoveSubscriptionByEndpoint(ctx, sub.Endpoint)
 		}
 	}
 }
@@ -685,7 +766,8 @@ func (p *pushService) sendTestPush(ctx context.Context) {
 			slog.Int("http_status", statusCode),
 			slog.String("error", err.Error()))
 		if statusCode == http.StatusGone || statusCode == http.StatusNotFound {
-			_ = p.store.RemoveByEndpoint(ctx, sub.Endpoint)
+			// matrix/hardened: test-send expiry uses the same baseline reset path.
+			_ = p.RemoveSubscriptionByEndpoint(ctx, sub.Endpoint)
 		}
 	}
 }
