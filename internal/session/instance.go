@@ -372,6 +372,10 @@ type Instance struct {
 	// crossHarnessLaunch is an executor-only immutable launch binding. It is
 	// never persisted and bypasses config re-resolution for one fresh target.
 	crossHarnessLaunch *FreshTargetLaunchPlan
+	// matrix/hardened: builder intent on detached host-local admission plans.
+	claudeLaunchKind string
+	// matrix/hardened: detached-plan marker placed after configured env sources.
+	claudeLaunchEnvironmentSetup string
 
 	// GitHub Copilot CLI integration
 	CopilotSessionID  string    `json:"copilot_session_id,omitempty"`
@@ -1443,6 +1447,9 @@ func (i *Instance) buildClaudeCommandWithMessage(baseCommand, message string) st
 		// Handle different session modes
 		switch opts.SessionMode {
 		case "continue":
+			// matrix/hardened: selectors resume; confirmed empty directories below
+			// explicitly switch back to new-session admission.
+			i.claudeLaunchKind = "resume"
 			// Simple -c mode: continue last session.
 			//
 			// #1815: `-c` asks Claude to pick "the latest conversation in this
@@ -1492,6 +1499,7 @@ func (i *Instance) buildClaudeCommandWithMessage(baseCommand, message string) st
 				roots := claudeConfigDirRootsForInstance(i)
 				found, uncertain := transcriptEvidenceAcrossRoots(i.EffectiveWorkingDir(), roots)
 				if !found && !uncertain {
+					i.claudeLaunchKind = "new" // matrix/hardened: actual fresh fallback.
 					sessionLog.Info("resume: none reason=continue_mode_no_transcript",
 						slog.String("instance_id", logging.SanitizeValue(i.ID)),
 						slog.String("path", logging.SanitizeValue(i.EffectiveWorkingDir())),
@@ -1510,6 +1518,7 @@ func (i *Instance) buildClaudeCommandWithMessage(baseCommand, message string) st
 			return fmt.Sprintf(`%sexec %s%s -c%s`, bashExportPrefix, execEnvPrefix, claudeCmd, extraFlags)
 
 		case "resume":
+			i.claudeLaunchKind = "resume" // matrix/hardened: picker/proven resume.
 			// Resume specific session by ID
 			if opts.ResumeSessionID != "" {
 				// #1815: identity first (the id must be this session's own),
@@ -1521,6 +1530,7 @@ func (i *Instance) buildClaudeCommandWithMessage(baseCommand, message string) st
 						bashExportPrefix, execEnvPrefix, claudeCmd, opts.ResumeSessionID, extraFlags)
 				}
 				// Session was never interacted with - use --session-id with same UUID.
+				i.claudeLaunchKind = "new" // matrix/hardened: count resume fallback.
 				// CLAUDE_SESSION_ID is propagated via host-side SyncSessionIDsToTmux after start.
 				//
 				// #1815: when the refusal was an IDENTITY refusal the id may
@@ -1551,6 +1561,7 @@ func (i *Instance) buildClaudeCommandWithMessage(baseCommand, message string) st
 		// bashExportPrefix is the shared export prefix built above.
 
 		// Pre-generate UUID in Go to avoid shell uuidgen (may be absent in Docker sandbox).
+		i.claudeLaunchKind = "new" // matrix/hardened: structured builder intent.
 		// CLAUDE_SESSION_ID is also propagated via host-side SetEnvironment after tmux start.
 		// Use `exec` before the final claude invocation so that when this compound
 		// command is wrapped in `bash -c` (for fish compatibility), exec replaces
@@ -1609,6 +1620,12 @@ func (i *Instance) buildClaudeCommandWithMessage(baseCommand, message string) st
 	// Command field itself (a distinct axis from GetClaudeCommandForInstance,
 	// which never sees an instance-level custom command — see its doc
 	// comment), so the F3 custom-command gate does not apply: pass false.
+	// matrix/hardened: an opaque wrapper is conservatively a new launch. A
+	// recognized stored fork has explicit provenance and creates a new session.
+	i.claudeLaunchKind = "new"
+	if commandHasToken(baseCommand, "--fork-session") {
+		i.claudeLaunchKind = "fork"
+	}
 	return i.buildEnvSourceCommand() + i.buildBashExportPrefix(false) + baseCommand
 }
 
@@ -1647,6 +1664,7 @@ func (i *Instance) buildBashExportPrefix(skipConfigDirForCustomCommand bool) str
 		prefix += fmt.Sprintf("export CLAUDE_SECURESTORAGE_CONFIG_DIR=%s; ", i.configDirShellExpr(GetClaudeConfigDirForInstance(i)))
 	}
 	prefix += i.buildResolvedAccountHintExports()
+	prefix += i.claudeLaunchEnvironmentSetup // matrix/hardened: final admission env.
 	return prefix
 }
 
@@ -5105,21 +5123,28 @@ func (i *Instance) ensureClaudeSessionIDFromDiskForRestart() {
 // we-waited" stamp so concurrent `agent-deck session start <id>`
 // invocations after a Claude exit don't each fall through the "tmux
 // session does not exist" gate and spawn parallel sessions. The lock
-// and gate are inlined here (rather than wrapping the whole body in a
-// SpawnAttempt helper) to preserve the structural-grep contract that
-// checks Start()'s body for the #745 IsForkAwaitingStart guard.
+// matrix/hardened: the shared body also accepts an admission acquired before
+// RestartFresh teardown; fork dispatch retains the same guarded branches.
 func (i *Instance) Start() error {
+	return i.startWithClaudeAdmission(nil, false)
+}
+
+// matrix/hardened: RestartFresh passes its already admitted launch while holding
+// the spawn lock, so teardown cannot be followed by a second budget charge.
+func (i *Instance) startWithClaudeAdmission(admission *claudeLaunchAdmission, lockHeld bool) (returnErr error) {
 	if err := i.ValidateAccount(); err != nil {
 		return err
 	}
-	beforeLock := spawnGenerationSnapshot(i.ID)
-	release, lockErr := acquireInstanceSpawnLock(i.ID)
-	if lockErr != nil {
-		return lockErr
-	}
-	defer release()
-	if spawnedSince(i.ID, beforeLock) {
-		return nil
+	if !lockHeld {
+		beforeLock := spawnGenerationSnapshot(i.ID)
+		release, lockErr := acquireInstanceSpawnLock(i.ID)
+		if lockErr != nil {
+			return lockErr
+		}
+		defer release()
+		if spawnedSince(i.ID, beforeLock) {
+			return nil
+		}
 	}
 	if i.tmuxSession == nil {
 		return fmt.Errorf("tmux session not initialized")
@@ -5143,6 +5168,19 @@ func (i *Instance) Start() error {
 	if err := i.guardOwnedProcessesBeforeSpawn("start"); err != nil {
 		return err
 	}
+	// matrix/hardened: reserve before command builders change live bindings.
+	if admission == nil {
+		var err error
+		admission, err = i.planClaudeLaunchAdmission(false, false, nil)
+		if err != nil {
+			return err
+		}
+	}
+	defer func() {
+		if returnErr != nil {
+			admission.cleanup()
+		}
+	}()
 	defer recordInstanceSpawn(i.ID)
 
 	// #1580 diagnosability: clear any stale spawn-failure sidecar and drop a
@@ -5154,7 +5192,10 @@ func (i *Instance) Start() error {
 	// (issue #59, v1.7.68). Runs before command-building so the
 	// CLAUDE_CONFIG_DIR= prefix picks up the scratch path. No-op for
 	// conductors, explicit telegram channel owners, and non-claude tools.
-	i.prepareWorkerScratchConfigDirForSpawn() // also runs plugin auto-install per fix C1
+	// matrix/hardened: admission already prepared its exact scratch generation.
+	if admission == nil {
+		i.prepareWorkerScratchConfigDirForSpawn()
+	} // also runs plugin auto-install per fix C1
 
 	// Pre-accept Codex workspace trust for non-sandbox sessions so first launch
 	// does not stall on the trust dialog. Sandbox sessions seed trust after
@@ -5166,6 +5207,11 @@ func (i *Instance) Start() error {
 	var command string
 	switch {
 	case IsClaudeCompatible(i.Tool):
+		// matrix/hardened: execute the exact command whose kind/UUID was admitted.
+		if admission != nil {
+			command = i.applyClaudeLaunchAdmission(admission)
+			break
+		}
 		// #745 fork guard: a fork target arrives here with a pre-built
 		// first-start command (`claude --session-id <new> --resume <parent>
 		// --fork-session`) and a pre-assigned ClaudeSessionID (the new fork
@@ -5480,7 +5526,7 @@ func (i *Instance) Start() error {
 // Issue #1040: same per-instance spawn lock as Start() — a concurrent
 // `launch -m "..."` racing with a poller-triggered Start() must not
 // produce two parallel tmux sessions.
-func (i *Instance) StartWithMessage(message string) error {
+func (i *Instance) StartWithMessage(message string) (returnErr error) {
 	if err := i.ValidateAccount(); err != nil {
 		return err
 	}
@@ -5525,6 +5571,17 @@ func (i *Instance) StartWithMessage(message string) error {
 	if err := i.guardOwnedProcessesBeforeSpawn("start"); err != nil {
 		return err
 	}
+	// matrix/hardened: first-message launches share host admission, including
+	// immutable cross-harness fresh targets; normal sends never enter here.
+	admission, admissionErr := i.planClaudeLaunchAdmission(false, false, nil)
+	if admissionErr != nil {
+		return admissionErr
+	}
+	defer func() {
+		if returnErr != nil {
+			admission.cleanup()
+		}
+	}()
 	defer recordInstanceSpawn(i.ID)
 
 	// #1580 diagnosability: clear any stale spawn-failure sidecar and drop a
@@ -5534,7 +5591,7 @@ func (i *Instance) StartWithMessage(message string) error {
 	// Prepare scratch CLAUDE_CONFIG_DIR for ordinary non-conductor Claude
 	// workers. An immutable cross-harness plan pins its own target home and
 	// must never be replaced by a mutable scratch/config resolution.
-	if i.crossHarnessLaunch == nil {
+	if i.crossHarnessLaunch == nil && admission == nil { // matrix/hardened: use planned scratch.
 		i.prepareWorkerScratchConfigDirForSpawn() // also runs plugin auto-install per fix C1
 	}
 
@@ -5548,12 +5605,23 @@ func (i *Instance) StartWithMessage(message string) error {
 	promptEmbeddedInCommand := false
 	switch {
 	case i.crossHarnessLaunch != nil:
+		// matrix/hardened: cross-harness admission preserves its embedded prompt.
+		if admission != nil {
+			command = i.applyClaudeLaunchAdmission(admission)
+			promptEmbeddedInCommand = admission.embeddedPrompt
+			break
+		}
 		var launchErr error
 		command, promptEmbeddedInCommand, launchErr = crossHarnessPlanCommand(i, i.crossHarnessLaunch, message)
 		if launchErr != nil {
 			return launchErr
 		}
 	case IsClaudeCompatible(i.Tool):
+		// matrix/hardened: retain the admitted target and one-use receipt.
+		if admission != nil {
+			command = i.applyClaudeLaunchAdmission(admission)
+			break
+		}
 		// #745 fork guard: mirrors the Start() branch above. A fork target
 		// that arrives through StartWithMessage must also bypass the
 		// resume/fresh dispatch and run its first-start command verbatim, or
@@ -9945,7 +10013,7 @@ func (i *Instance) restartRecorded(env map[string]string) error {
 	return err
 }
 
-func (i *Instance) restart(env map[string]string) error {
+func (i *Instance) restart(env map[string]string) (returnErr error) {
 	if err := i.ValidateAccount(); err != nil {
 		return err
 	}
@@ -9968,6 +10036,20 @@ func (i *Instance) restart(env map[string]string) error {
 	// respawn, no signal, and the receipt left intact for inspection.
 	if err := i.guardOwnedProcessesBeforeSpawn("restart"); err != nil {
 		return err
+	}
+	// matrix/hardened: resume may fall back to --session-id. Resolve and admit
+	// the final Claude command before any generation change, respawn, or kill.
+	admission, admissionErr := i.planClaudeLaunchAdmission(false, true, env)
+	if admissionErr != nil {
+		return admissionErr
+	}
+	defer func() {
+		if returnErr != nil {
+			admission.cleanup()
+		}
+	}()
+	if admission != nil {
+		i.applyClaudeLaunchAdmission(admission)
 	}
 	var validatedDeepSeekRestartCommand string
 	if i.Tool == "deepseek" {
@@ -10035,7 +10117,10 @@ func (i *Instance) restart(env map[string]string) error {
 	// sees the plugin enablement state from session creation, not the
 	// current state. Same call as Start()/recreate paths — idempotent
 	// per (sourceProfileDir, plugins-set) and best-effort on failure.
-	i.prepareWorkerScratchConfigDirForSpawn()
+	// matrix/hardened: preserve the generation embedded in the admitted command.
+	if admission == nil {
+		i.prepareWorkerScratchConfigDirForSpawn()
+	}
 
 	// Issue #956: custom-command Claude sessions whose hooks never fired
 	// (or whose wrapper script overrode CLAUDE_CONFIG_DIR) arrive at
@@ -10047,7 +10132,7 @@ func (i *Instance) restart(env map[string]string) error {
 	// (buildClaudeResumeCommand) engages and emits `claude --resume <uuid>`.
 	// Mirrors Start()'s ensureClaudeSessionIDFromDisk but bypasses the
 	// #608 brand-new-session gate — Restart() implies the instance ran.
-	if IsClaudeCompatible(i.Tool) && i.ClaudeSessionID == "" {
+	if admission == nil && IsClaudeCompatible(i.Tool) && i.ClaudeSessionID == "" {
 		i.ensureClaudeSessionIDFromDiskForRestart()
 	}
 
@@ -10067,7 +10152,13 @@ func (i *Instance) restart(env map[string]string) error {
 					slog.String("reason", "orphan_bak_restore_restart"))
 			}
 		}
-		prepInput := i.buildClaudeResumeCommand()
+		prepInput := ""
+		// matrix/hardened: use the preflight command without re-minting/re-reserving.
+		if admission != nil {
+			prepInput = admission.command
+		} else {
+			prepInput = i.buildClaudeResumeCommand()
+		}
 		resumeCmd, containerName, err := i.prepareCommand(prepInput)
 		if err != nil {
 			// #1924: a restart that fails here left StatusError with no reason.
@@ -10410,10 +10501,16 @@ func (i *Instance) restart(env map[string]string) error {
 
 	// Prepare scratch CLAUDE_CONFIG_DIR for non-conductor claude workers
 	// on the restart path too (issue #59, v1.7.68).
-	i.prepareWorkerScratchConfigDirForSpawn() // also runs plugin auto-install per fix C1
+	// matrix/hardened: fallback also reuses the exact admitted generation.
+	if admission == nil {
+		i.prepareWorkerScratchConfigDirForSpawn()
+	} // also runs plugin auto-install per fix C1
 
 	var command string
-	if IsClaudeCompatible(i.Tool) && i.ClaudeSessionID != "" {
+	// matrix/hardened: fallback recreation uses the same pre-teardown admission.
+	if admission != nil {
+		command = admission.command
+	} else if IsClaudeCompatible(i.Tool) && i.ClaudeSessionID != "" {
 		command = i.buildClaudeResumeCommand()
 	} else if i.Tool == "gemini" && i.GeminiSessionID != "" {
 		command = i.buildGeminiCommand("gemini")
@@ -10614,6 +10711,23 @@ func (i *Instance) restart(env map[string]string) error {
 // This recreates the tmux session and clears the stored tool session binding first,
 // so the next start gets a brand-new tool session ID.
 func (i *Instance) RestartFresh() error {
+	// matrix/hardened: acquire once, admit once, then clear/kill/start under the
+	// same lock. A denial leaves the current tool binding and pane untouched.
+	if err := i.ValidateAccount(); err != nil {
+		return err
+	}
+	release, lockErr := acquireInstanceSpawnLock(i.ID)
+	if lockErr != nil {
+		return lockErr
+	}
+	defer release()
+	if err := i.guardOwnedProcessesBeforeSpawn("restart"); err != nil {
+		return err
+	}
+	admission, admissionErr := i.planClaudeLaunchAdmission(true, false, nil)
+	if admissionErr != nil {
+		return admissionErr
+	}
 	i.prepareRestartMCPConfig()
 	i.spawnGen.Add(1)
 
@@ -10632,7 +10746,8 @@ func (i *Instance) RestartFresh() error {
 
 	i.recreateTmuxSession()
 
-	if err := i.Start(); err != nil {
+	if err := i.startWithClaudeAdmission(admission, true); err != nil {
+		admission.cleanup() // matrix/hardened: failed launches leave no ticket file.
 		i.Status = StatusError
 		return fmt.Errorf("failed to restart session fresh: %w", err)
 	}
@@ -10712,6 +10827,7 @@ func (i *Instance) buildClaudeResumeCommand() string {
 	// or a mismatch). The refused id is replaced by a freshly minted one so
 	// the session starts clean instead of claiming another session's id.
 	if decision := i.resumeIdentityAllowed(i.ClaudeSessionID); !decision.Allow {
+		i.claudeLaunchKind = "new" // matrix/hardened: refusal mints fresh UUID.
 		refused := i.ClaudeSessionID
 		i.logResumeRefusal(refused, decision.Reason)
 		fresh := i.replaceRefusedClaudeSessionID()
@@ -10784,10 +10900,12 @@ func (i *Instance) buildClaudeResumeCommand() string {
 	// after the tmux session is restarted. No inline tmux set-environment in the shell string
 	// (which silently fails inside Docker sandbox containers).
 	if useResume {
+		i.claudeLaunchKind = "resume" // matrix/hardened: no helper for same-session resume.
 		return fmt.Sprintf("%s%sexec %s --resume %s%s",
 			envPrefix, bashExportPrefix, claudeCmd, i.ClaudeSessionID, extraFlags)
 	}
 	// Session was never interacted with - use --session-id to create fresh session.
+	i.claudeLaunchKind = "new" // matrix/hardened: count the final fresh fallback.
 	return fmt.Sprintf("%s%sexec %s --session-id %s%s",
 		envPrefix, bashExportPrefix, claudeCmd, i.ClaudeSessionID, extraFlags)
 }

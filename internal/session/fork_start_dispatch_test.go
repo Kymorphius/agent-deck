@@ -114,8 +114,20 @@ func forkAwaitingStartTag(i *Instance) (string, bool) {
 //	if i.IsForkAwaitingStart { ... command = i.Command ... }
 //
 // ... appearing BEFORE buildClaudeResumeCommand(i) inside Start().
+// matrix/hardened: Start delegates to the same dispatch with an optional
+// pre-admitted plan; continue asserting its actual fork branches.
+func matrixStartDispatchBody(fn string) string {
+	if fn == "Start" {
+		if !strings.Contains(extractFuncBodyInstance(fn), "i.startWithClaudeAdmission(nil, false)") {
+			return ""
+		}
+		fn = "startWithClaudeAdmission"
+	}
+	return extractFuncBodyInstance(fn)
+}
+
 func startDispatchHonorsForkSentinel() bool {
-	body := extractFuncBodyInstance("Start")
+	body := matrixStartDispatchBody("Start")
 	if body == "" {
 		return false
 	}
@@ -190,7 +202,7 @@ func TestOpenCodeForkStartDispatchConsumesAwaitingStart(t *testing.T) {
 
 func requireOpenCodeForkStartGuard(t *testing.T, funcName string) {
 	t.Helper()
-	body := extractFuncBodyInstance(funcName)
+	body := matrixStartDispatchBody(funcName)
 	if body == "" {
 		t.Fatalf("%s body not found", funcName)
 	}
@@ -215,7 +227,7 @@ func requireOpenCodeForkStartGuard(t *testing.T, funcName string) {
 
 func requireCodexForkStartGuard(t *testing.T, funcName string) {
 	t.Helper()
-	body := extractFuncBodyInstance(funcName)
+	body := matrixStartDispatchBody(funcName)
 	if body == "" {
 		t.Fatalf("%s body not found", funcName)
 	}
@@ -256,7 +268,7 @@ func TestCodexForkStartStampsStartedAt(t *testing.T) {
 
 func requireCodexForkAwaitingStartStampsStartedAt(t *testing.T, funcName string) {
 	t.Helper()
-	body := extractFuncBodyInstance(funcName)
+	body := matrixStartDispatchBody(funcName)
 	if body == "" {
 		t.Fatalf("%s body not found", funcName)
 	}
