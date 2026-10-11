@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -19,6 +20,8 @@ type costDashboard struct {
 	top       []costs.SessionCost
 	byModel   map[string]int64
 	projected int64
+	// matrix/hardened: the full model list remains reachable in short terminals.
+	scrollOffset int
 }
 
 func newCostDashboard(store *costs.Store, width, height int) costDashboard {
@@ -39,7 +42,7 @@ func (d *costDashboard) refresh() {
 	d.projected, _ = d.store.ProjectedMonthly()
 }
 
-func (d costDashboard) View() string {
+func (d costDashboard) content() string {
 	var b strings.Builder
 
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(ColorAccent)
@@ -70,8 +73,25 @@ func (d costDashboard) View() string {
 		tokenStyle.Render(formatTokens(d.today.TotalCacheWriteTokens)),
 	))
 
-	// Top sessions
+	// Model breakdown
 	sectionStyle := lipgloss.NewStyle().Bold(true).Foreground(ColorText).Underline(true)
+	b.WriteString("  " + sectionStyle.Render("Cost by Model") + "\n")
+	if len(d.byModel) == 0 {
+		b.WriteString("  " + lipgloss.NewStyle().Foreground(ColorComment).Render("(no cost data yet)") + "\n")
+	}
+	// matrix/hardened: map iteration order changes on each repaint.
+	models := make([]string, 0, len(d.byModel))
+	for model := range d.byModel {
+		models = append(models, model)
+	}
+	sort.Strings(models)
+	for _, model := range models {
+		cost := d.byModel[model]
+		b.WriteString(fmt.Sprintf("  %-35s %s\n", model, valueStyle.Render(costs.FormatUSD(cost))))
+	}
+	b.WriteString("\n")
+
+	// Top sessions
 	b.WriteString("  " + sectionStyle.Render("Top Sessions") + "\n")
 	if len(d.top) == 0 {
 		b.WriteString("  " + lipgloss.NewStyle().Foreground(ColorComment).Render("(no cost data yet)") + "\n")
@@ -91,23 +111,50 @@ func (d costDashboard) View() string {
 	}
 	b.WriteString("\n")
 
-	// Model breakdown
-	b.WriteString("  " + sectionStyle.Render("Cost by Model") + "\n")
-	if len(d.byModel) == 0 {
-		b.WriteString("  " + lipgloss.NewStyle().Foreground(ColorComment).Render("(no cost data yet)") + "\n")
-	}
-	for model, cost := range d.byModel {
-		b.WriteString(fmt.Sprintf("  %-35s %s\n", model, valueStyle.Render(costs.FormatUSD(cost))))
-	}
-	b.WriteString("\n")
-
-	// Help
-	helpStyle := lipgloss.NewStyle().Foreground(ColorComment)
-	b.WriteString("  " + helpStyle.Render("Press q or $ to return"))
-
-	return b.String()
+	// Wrap before counting rows so narrow terminals scroll correctly.
+	return lipgloss.NewStyle().Width(max(1, d.width)).Render(strings.TrimRight(b.String(), "\n"))
 }
 
+// matrix/hardened: keep all rows accessible and the navigation footer visible.
+func (d costDashboard) View() string {
+	lines := strings.Split(d.content(), "\n")
+	page := max(1, d.height-1)
+	start := min(max(0, d.scrollOffset), max(0, len(lines)-page))
+	end := min(len(lines), start+page)
+	body := strings.Join(lines[start:end], "\n")
+	if end-start < page {
+		body += strings.Repeat("\n", page-(end-start))
+	}
+	help := "↑/↓ scroll • PgUp/PgDn page • q/$ return"
+	if len(lines) > page {
+		help += fmt.Sprintf(" • %d–%d/%d", start+1, end, len(lines))
+	}
+	return body + "\n" + lipgloss.NewStyle().Foreground(ColorComment).MaxWidth(max(1, d.width)).MaxHeight(1).Render(help)
+}
+
+func (d *costDashboard) scroll(key string) {
+	page := max(1, d.height-1)
+	limit := max(0, len(strings.Split(d.content(), "\n"))-page)
+	switch key {
+	case "down", "j":
+		d.scrollOffset++
+	case "up", "k":
+		d.scrollOffset--
+	case "pgdown", "ctrl+f":
+		d.scrollOffset += page
+	case "pgup", "ctrl+b":
+		d.scrollOffset -= page
+	case "ctrl+d":
+		d.scrollOffset += max(1, page/2)
+	case "ctrl+u":
+		d.scrollOffset -= max(1, page/2)
+	case "home", "g":
+		d.scrollOffset = 0
+	case "end", "G":
+		d.scrollOffset = limit
+	}
+	d.scrollOffset = min(max(0, d.scrollOffset), limit)
+}
 func formatTokens(n int64) string {
 	if n >= 1_000_000 {
 		return fmt.Sprintf("%.1fM", float64(n)/1_000_000)

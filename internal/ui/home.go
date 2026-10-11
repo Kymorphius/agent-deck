@@ -7462,6 +7462,8 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		h.clearDividerHover()
 		h.updateSizes()
 		h.syncViewport() // Recalculate viewport when window size changes
+		// matrix/hardened: resize the cost viewport with the terminal.
+		h.costDashboard.width, h.costDashboard.height = msg.Width, msg.Height
 		h.setupWizard.SetSize(msg.Width, msg.Height)
 		h.settingsPanel.SetSize(msg.Width, msg.Height)
 		h.watcherPanel.SetSize(msg.Width, msg.Height)
@@ -7490,6 +7492,16 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.MouseMsg:
 		if h.telemetryDialog != nil && h.telemetryDialog.IsVisible() {
+			return h, nil
+		}
+		// matrix/hardened: cost-page mouse input must not navigate the list behind it.
+		if h.showCostDashboard {
+			if msg.Button == tea.MouseButtonWheelUp {
+				h.costDashboard.scroll("up")
+			}
+			if msg.Button == tea.MouseButtonWheelDown {
+				h.costDashboard.scroll("down")
+			}
 			return h, nil
 		}
 		// Every mouse event updates the hover state, including the wheel events
@@ -10288,6 +10300,8 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 				h.showCostDashboard = false
 				return h, nil
 			}
+			// matrix/hardened: scroll the complete cost/model list.
+			h.costDashboard.scroll(keyStr)
 			return h, nil // consume all other keys
 		}
 
