@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.24`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.25`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -66,7 +66,7 @@
 - `internal/session/claude_hooks.go`：`isAgentDeckHookCommand` 的判断规则：先去掉开头的 `VAR=值`，再要求第二个词是 `hook-handler`、程序名的文件名部分是 `agent-deck`。`RemoveClaudeHooks` 会扫描全部事件，并做 UTC 时间戳备份（约 387–414 行）。
 - `cmd/agent-deck/main.go`（约 4845、5070 行）：`agent-deck uninstall` 会移除这些钩子。`uninstall.sh` 第 253 行附近的 jq 过滤用的是同一套规则（正则），写回时用 `cat >` 保持软链接和权限。
 
-**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.24`。
+**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.25`。
 
 **测试**：以 `_hardened_test.go` 结尾的文件、`update_check_disable_test.go`、`update_timer_wiring_test.go` 等是新增或调整过的测试；`testdata/goldens/*` 里的快照已经按加固后的输出更新。
 
@@ -281,3 +281,11 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 - 长路径按完整字符簇缩略前半段，保留末尾目录名；接受候选仍使用完整原始路径。
 - 长父分组和远程名称先按表单宽度换行，避免挤压路径输入。多仓库模式的视口跟随正在编辑的条目。
 - 验证：`internal/ui/matrix_path_dropdown_test.go`，覆盖 80×24、100×30、120×40、长中文和 emoji 路径、历史候选与真实目录 Tab 补全、多仓库编辑、受限高度下的选中项和完整路径接受。原有新建会话、分组、视口和布局快照测试保持通过。
+
+## 22. 费用页模型列表与滚动
+
+`1.16.26+matrix.25` 将模型费用列表移到会话排行上方，按模型名称固定排序，避免 Go map 在每次重绘时改变行顺序。全部模型保留；终端放不下时通过滚动查看。
+
+- `↑/↓` 或 `j/k` 滚动，鼠标滚轮也可使用；`PgUp/PgDn` 或 `Ctrl+B/F` 翻页，`Ctrl+U/D` 半页，`Home/End` 跳到首尾。
+- 费用页随终端尺寸调整；窄窗口先换行再计算滚动范围，返回提示固定在底部。
+- 验证：`TestMatrixCostDashboardStableOrderAndScroll` 覆盖 40 个模型的稳定顺序、末项可达、翻页及窄窗口尺寸。
