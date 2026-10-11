@@ -136,15 +136,19 @@ func (h *Home) matrixTakeNavCount() int {
 }
 
 // matrixIMEKeys maps what a Chinese input method in Chinese mode types for
-// the vim prefix keys back to those keys, for the session list only. Rime's
+// list shortcuts back to those keys, for the session list only. Rime's
 // default punctuation turns "'" into 「/」 and ":" into "："; other IMEs type
 // curly quotes. Without this "'2" and ":12" silently did nothing there.
 var matrixIMEKeys = map[string]string{
 	"「": "'", "」": "'", "‘": "'", "’": "'",
 	"：": ":",
+	// matrix/hardened: Shift+1 can arrive as ！ in Chinese punctuation mode;
+	// recognize the other shifted filter/dashboard keys in the same way.
+	"！": "!", "＠": "@", "＃": "#", "＄": "$", "￥": "$",
+	"％": "%", "＾": "^", "＆": "&", "＊": "*", "～": "~",
 }
 
-// matrixIMEKey returns the vim prefix key an IME character stands for, or
+// matrixIMEKey returns the list shortcut an IME character stands for, or
 // pressed unchanged.
 func matrixIMEKey(pressed string) string {
 	if k, ok := matrixIMEKeys[pressed]; ok {

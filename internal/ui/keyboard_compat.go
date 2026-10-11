@@ -206,10 +206,11 @@ func ParseCSIu(data []byte) *tea.KeyMsg {
 		return &msg
 	}
 
-	// Regular rune: apply shift to lowercase letters.
+	// matrix/hardened: CSI u sends a base key plus Shift; normalize digits and
+	// punctuation for list hotkeys, preserving Ctrl-modified keys' prior meaning.
 	r := rune(codepoint) // #nosec G115 -- codepoint parsed from CSI/xterm sequence, validated >= 0 above
-	if shiftHeld && r >= 'a' && r <= 'z' {
-		r = r - 'a' + 'A'
+	if shiftHeld && !ctrlHeld {
+		r = matrixShiftedASCIIRune(r)
 	}
 
 	msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}, Alt: altHeld}
@@ -297,12 +298,30 @@ func ParseModifyOtherKeys(data []byte) *tea.KeyMsg {
 	}
 
 	r := rune(codepoint) // #nosec G115 -- codepoint parsed from CSI/xterm sequence, validated >= 0 above
+	// matrix/hardened: modifyOtherKeys already reports the produced character;
+	// preserve digits/punctuation for other layouts and keep historic letter handling.
 	if shiftHeld && r >= 'a' && r <= 'z' {
 		r = r - 'a' + 'A'
 	}
 
 	msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}, Alt: altHeld}
 	return &msg
+}
+
+// matrix/hardened: US/ABC ASCII Shift mapping for CSI u's base key reporting.
+// Already shifted characters and non-ASCII runes are preserved.
+func matrixShiftedASCIIRune(r rune) rune {
+	if r >= 'a' && r <= 'z' {
+		return r - 'a' + 'A'
+	}
+	const base = "`1234567890-=[]\\;',./"
+	const shifted = "~!@#$%^&*()_+{}|:\"<>?"
+	for i, key := range base {
+		if r == key {
+			return rune(shifted[i])
+		}
+	}
+	return r
 }
 
 // parseDecimalBytes parses a decimal integer from a byte slice.
