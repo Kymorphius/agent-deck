@@ -12383,6 +12383,15 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		} else {
 			h.groupDialog.ShowCreateWithContext("", "")
 		}
+		// matrix/hardened: Local remains reachable even with only remote rows.
+		names := []string{}
+		if cfg, err := session.LoadUserConfig(); err == nil {
+			for name := range cfg.Remotes {
+				names = append(names, name)
+			}
+		}
+		h.groupDialog.SetCreationTargets(names)
+
 		return h, nil
 
 	case "r":
@@ -14841,6 +14850,12 @@ func (h *Home) reapplyPendingGroupOps() bool {
 
 // handleGroupDialogKey handles keys when group dialog is visible
 func (h *Home) handleGroupDialogKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// matrix/hardened: Enter on Target changes destination, never creates.
+	if h.groupDialog.Mode() == GroupDialogCreate && h.groupDialog.focusIndex == 2 && msg.String() == "enter" {
+		h.groupDialog.Update(msg)
+		return h, nil
+	}
+
 	switch msg.String() {
 	case "enter":
 		// Enter with a highlighted path suggestion accepts it instead of

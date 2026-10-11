@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.30`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.31`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -66,7 +66,7 @@
 - `internal/session/claude_hooks.go`：`isAgentDeckHookCommand` 的判断规则：先去掉开头的 `VAR=值`，再要求第二个词是 `hook-handler`、程序名的文件名部分是 `agent-deck`。`RemoveClaudeHooks` 会扫描全部事件，并做 UTC 时间戳备份（约 387–414 行）。
 - `cmd/agent-deck/main.go`（约 4845、5070 行）：`agent-deck uninstall` 会移除这些钩子。`uninstall.sh` 第 253 行附近的 jq 过滤用的是同一套规则（正则），写回时用 `cat >` 保持软链接和权限。
 
-**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.30`。
+**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.31`。
 
 **测试**：以 `_hardened_test.go` 结尾的文件、`update_check_disable_test.go`、`update_timer_wiring_test.go` 等是新增或调整过的测试；`testdata/goldens/*` 里的快照已经按加固后的输出更新。
 
@@ -332,3 +332,12 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 - **matrix/hardened:** CSI u 编码可能报告数字键与 Shift 修饰，原来仅转换字母，导致 Shift+1 被当作普通 `1` 的移动计数。现在补上 US/ABC 数字与标点的 Shift 映射；含 Ctrl 时不套用此映射。xterm modifyOtherKeys 使用已经生成的字符码点，保持其数字和标点原样，避免破坏其它键盘布局的输入。
 - **matrix/hardened:** 中文输入法输出的全角 `！＠＃％＾＆～` 在列表快捷键入口映射到对应筛选键；`＄` / `￥` 打开费用页，`＊` 对应时间筛选。此映射只应用于列表命令。
 - 验证：`matrix_shifted_keyboard_test.go` 覆盖两个协议的解析及 reader、数字与标点、未 Shift 数字、Alt、Shift+Enter 和控制键；`matrix_status_filter_keyboard_test.go` 经 `Home.Update` 验证运行中列表、再次按键取消筛选、待处理的移动计数与分组前缀、Ctrl+Shift 不触发 Shift 筛选，以及全角快捷键和原始文本保持。
+
+## 28. 创建分组可选目标设备
+
+`1.16.26+matrix.31` 的创建分组界面显示 Target，并提供 Local 与已配置远程设备选择；光标位于远程行时仍默认该设备，但不会将创建目的地锁在远程。
+
+- **matrix/hardened:** Ctrl+T 循环切换目标，也可 Shift+Tab 从 Name 聚焦 Target，再用左右键、Space 或 Enter 切换。Enter 在 Target 行只切换设备，不创建分组；Tab 返回 Name。
+- 切换设备清空 Path 与父分组，保留输入的名称；回到原设备可恢复 Root/Subgroup 上下文，默认仍为 Root。Local 始终存在，即使列表里只有远程分组。
+- 小终端对新增目标行使用布局裁剪，保留当前输入和底部操作提示。
+- 回归验证覆盖仅远程行切到 Local 后实际创建本机分组、多目标键盘选择、原设备上下文恢复、重新打开状态重置，以及既有远程创建和路径候选布局。
