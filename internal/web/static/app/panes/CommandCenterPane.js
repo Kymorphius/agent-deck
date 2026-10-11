@@ -33,8 +33,8 @@ const STATUS_DOT = {
 const SUBSTATE_LABEL = {
   'model-unavailable': 'model unavailable',
   'auth-401': 'auth error (401)',
-  // matrix/hardened: last turn ended on an API error (matrix_turn_interrupt.go)
-  'api-interrupted': 'interrupted (API error)',
+  // matrix/hardened: last turn stopped before it finished (matrix_turn_interrupt.go)
+  'turn-interrupted': 'turn interrupted',
   'idle-at-empty-prompt': 'idle (empty prompt)',
 }
 

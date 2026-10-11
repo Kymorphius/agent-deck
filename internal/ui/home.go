@@ -3372,7 +3372,7 @@ func (h *Home) rebuildFlatItemsAt(now time.Time) {
 				continue
 			}
 			for _, inst := range group.Sessions {
-				if inst != nil && !inst.IsArchived() && h.matchesStatusFilter(h.statusFilter, inst.Status) {
+				if inst != nil && !inst.IsArchived() && h.matchesSessionFilter(h.statusFilter, inst) { // matrix/hardened: + interrupted filter
 					markGroupPathAndAncestors(groupsWithMatches, group.Path)
 				}
 			}
@@ -3388,7 +3388,7 @@ func (h *Home) rebuildFlatItemsAt(now time.Time) {
 				}
 			} else if item.Type == session.ItemTypeSession && item.Session != nil {
 				// Keep session if it matches the filter
-				if h.matchesStatusFilter(h.statusFilter, item.Session.Status) {
+				if h.matchesSessionFilter(h.statusFilter, item.Session) { // matrix/hardened
 					filtered = append(filtered, item)
 				}
 			}
@@ -3450,7 +3450,7 @@ func (h *Home) rebuildFlatItemsAt(now time.Time) {
 				if inst == nil || inst.IsArchived() != viewArchived {
 					continue
 				}
-				if h.statusFilter != "" && !viewArchived && !h.matchesStatusFilter(h.statusFilter, inst.Status) {
+				if h.statusFilter != "" && !viewArchived && !h.matchesSessionFilter(h.statusFilter, inst) { // matrix/hardened
 					continue
 				}
 				hasCandidates = true
@@ -5901,6 +5901,8 @@ type sessionRenderState struct {
 	substate  session.Substate // Honest Status v2: additive refinement (model-unavailable, auth-401, ...)
 	tool      string
 	paneTitle string // Current task description from tmux pane title (stripped of spinner/done markers)
+	// matrix/hardened: archived rows are not counted as interrupted turns.
+	matrixArchived bool
 	// Row-label fields (#1753): the per-row render path used to read these
 	// through Instance getters, each an Instance.mu RLock. A background
 	// UpdateStatus holds that mutex as a WRITER across tmux subprocess calls
@@ -6078,6 +6080,7 @@ func (h *Home) refreshSessionRenderSnapshot(instances []*session.Instance) {
 			substate:           inst.CachedSubstate(),
 			tool:               inst.GetToolThreadSafe(),
 			archivedSuperseded: inst.IsArchived() && inst.SupersededBy != "",
+			matrixArchived:     inst.IsArchived(), // matrix/hardened
 			// Label fields: read here, on the refresher's goroutine, so the
 			// render path never takes Instance.mu per row (#1753). Title goes
 			// through GetTitleThreadSafe because SetField/ReconcileTitleFromClaude/
@@ -13236,6 +13239,9 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case FilterKeyArchived, "shift+6":
 		return h, h.changeStatusFilter(FilterModeArchived)
+
+	case FilterKeyInterrupted: // matrix/hardened: interrupted turns (matrix_turn_interrupt_filter.go)
+		return h, h.changeStatusFilter(FilterModeInterrupted)
 	}
 
 	return h, nil
@@ -18762,6 +18768,9 @@ func (h *Home) renderFilterBar() string {
 			Padding(0, 1).Render(idleLabel))
 	}
 
+	// matrix/hardened: interrupted turns, always shown (dim at 0).
+	pills = append(pills, h.matrixInterruptedPill(dimPillStyle))
+
 	// Stopped pill (issue #953): manually-stopped sessions deserve their own
 	// affordance — they're not errors, they're intentional. Render-only-if
 	// non-zero or actively filtered, mirroring the error pill's pattern, so
@@ -18820,6 +18829,8 @@ func (h *Home) statusFilterLabel() string {
 		return "Open"
 	case FilterModeArchived:
 		return "Archived"
+	case FilterModeInterrupted: // matrix/hardened
+		return "Interrupted"
 	case session.StatusRunning:
 		return "Running"
 	case session.StatusWaiting:
@@ -19958,6 +19969,9 @@ func (h *Home) filteredEmptyState() (EmptyStateConfig, bool) {
 			Subtitle: "Archive a session to see it here",
 			Hints:    hints,
 		}, true
+	}
+	if h.statusFilter == FilterModeInterrupted && h.timeFilter == session.TimeFilterAll { // matrix/hardened
+		return matrixInterruptedEmptyState(), true
 	}
 	if h.statusFilter == "" && h.timeFilter == session.TimeFilterAll {
 		return EmptyStateConfig{}, false
@@ -26019,6 +26033,7 @@ func (h *Home) renderFilterBarHint() []string {
 			mark("@", h.statusFilter == session.StatusWaiting) +
 			mark("#", h.statusFilter == session.StatusIdle) +
 			mark(FilterKeyError, h.statusFilter == session.StatusError) +
+			mark(FilterKeyInterrupted, h.statusFilter == FilterModeInterrupted) + // matrix/hardened
 			dim.Render(" filter"),
 		mark("0", h.statusFilter == "") + dim.Render(" all"),
 		mark(FilterKeyActive, h.statusFilter == FilterModeActive) + dim.Render(" open"),

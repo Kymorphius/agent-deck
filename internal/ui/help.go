@@ -431,6 +431,7 @@ func (h *HelpOverlay) View() string {
 				{searchKey, "Open search"},
 				{FilterKeyError, "Filter errors"},
 				{FilterKeyActive, "Filter open (hide errors)"},
+				{FilterKeyInterrupted, "Filter interrupted turns ↯"}, // matrix/hardened
 				{"/waiting", "Filter waiting"},
 				{"/running", "Filter running"},
 				{"/idle", "Filter idle"},
