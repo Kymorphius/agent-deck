@@ -317,3 +317,45 @@ func TestMatrixGroupHint_ShownKeyJumpsThroughUpdate(t *testing.T) {
 		}
 	}
 }
+
+// ---------- pending-key bar and Chinese IME punctuation ----------
+
+func TestMatrixPendingBar_QuoteAndCountAreVisible(t *testing.T) {
+	home, idx := buildTwoGroupHome(t)
+	home.cursor = idx["a1"]
+
+	h := matrixPressKeys(t, home, '\'')
+	if v := ansi.Strip(h.View()); !strings.Contains(v, "press 1-9 to jump to that root group") {
+		t.Fatalf("after ': no waiting hint in the frame:\n%s", v)
+	}
+	h = matrixPressKeys(t, h, '2')
+	if v := ansi.Strip(h.View()); strings.Contains(v, "press 1-9") {
+		t.Fatal("hint still shown after the group jump")
+	}
+
+	h = matrixPressKeys(t, h, '3')
+	if v := ansi.Strip(h.View()); !strings.Contains(v, "j/k (or ↓/↑) moves 3 rows") {
+		t.Fatalf("after 3: no count hint in the frame:\n%s", v)
+	}
+	h = matrixPressKeys(t, h, 'k')
+	if v := ansi.Strip(h.View()); strings.Contains(v, "moves 3 rows") {
+		t.Fatal("count hint still shown after 3k")
+	}
+}
+
+func TestMatrixIMEKeys_ChinesePunctuationActsAsVimPrefix(t *testing.T) {
+	for _, quote := range []rune{'「', '」', '‘', '’'} {
+		home, idx := buildTwoGroupHome(t)
+		home.cursor = idx["a1"]
+		h := matrixPressKeys(t, home, quote, '2')
+		if it := h.flatItems[h.cursor]; it.Type != session.ItemTypeGroup || it.Path != "beta" {
+			t.Errorf("%c2: cursor on %s, want group beta", quote, describeCursor(h))
+		}
+	}
+
+	home, _ := buildTwoGroupHome(t)
+	h := matrixPressKeys(t, home, '：')
+	if !h.navCount.cmd {
+		t.Fatal("full-width colon did not open the : prompt")
+	}
+}

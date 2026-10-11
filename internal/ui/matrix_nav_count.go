@@ -1,5 +1,13 @@
 package ui
 
+import (
+	"fmt"
+	"strconv"
+	"strings"
+
+	"github.com/charmbracelet/lipgloss"
+)
+
 // matrix/hardened: vim-style count prefix for the session list ("3j", "12k").
 //
 // Digits are a count only, as in vim: "3j" moves three rows down, "12k"
@@ -125,4 +133,41 @@ func (h *Home) matrixTakeNavCount() int {
 		return 1
 	}
 	return n
+}
+
+// matrixIMEKeys maps what a Chinese input method in Chinese mode types for
+// the vim prefix keys back to those keys, for the session list only. Rime's
+// default punctuation turns "'" into 「/」 and ":" into "："; other IMEs type
+// curly quotes. Without this "'2" and ":12" silently did nothing there.
+var matrixIMEKeys = map[string]string{
+	"「": "'", "」": "'", "‘": "'", "’": "'",
+	"：": ":",
+}
+
+// matrixIMEKey returns the vim prefix key an IME character stands for, or
+// pressed unchanged.
+func matrixIMEKey(pressed string) string {
+	if k, ok := matrixIMEKeys[pressed]; ok {
+		return k
+	}
+	return pressed
+}
+
+// matrixPendingNav reports whether "'" or a count is waiting for its next
+// key, so the help bar can say so (a bare "'" used to look like no response).
+func (h *Home) matrixPendingNav() bool {
+	return h.navCount.groupJump || h.navCount.n > 0
+}
+
+// matrixRenderPendingBar replaces the help bar while "'" or a count waits.
+func (h *Home) matrixRenderPendingBar() string {
+	border := lipgloss.NewStyle().Foreground(ColorBorder).Render(strings.Repeat("─", max(0, h.width)))
+	keys, hint := "'", "   press 1-9 to jump to that root group ('' jumps back) · any other key cancels"
+	if !h.navCount.groupJump {
+		keys = strconv.Itoa(h.navCount.n)
+		hint = fmt.Sprintf("   j/k (or ↓/↑) moves %d rows · more digits extend the count · any other key cancels", h.navCount.n)
+	}
+	line := lipgloss.NewStyle().Foreground(ColorYellow).Bold(true).Render(keys) +
+		lipgloss.NewStyle().Foreground(ColorComment).Render(hint)
+	return lipgloss.JoinVertical(lipgloss.Left, border, lipgloss.NewStyle().MaxWidth(h.width).Render(line))
 }

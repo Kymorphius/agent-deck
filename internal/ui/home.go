@@ -1447,6 +1447,7 @@ func (h *Home) normalizeMainKey(pressed string) string {
 		pressed = "shift+enter"
 	}
 	pressed = matrixMacOptionKey(pressed) // matrix/hardened: "∑" -> alt+w (matrix_mac_option.go)
+	pressed = matrixIMEKey(pressed)       // matrix/hardened: Rime's 「 / ： -> ' / : (matrix_nav_count.go)
 	if canonical, ok := h.hotkeyLookup[pressed]; ok {
 		return canonical
 	}
@@ -19400,6 +19401,8 @@ func (h *Home) renderFrame() string {
 		helpBar = h.renderInsertModeBar()
 	} else if h.navCount.cmd { // matrix/hardened: ":" line prompt
 		helpBar = h.matrixRenderCmdBar()
+	} else if h.matrixPendingNav() { // matrix/hardened: "'" or a count is waiting
+		helpBar = h.matrixRenderPendingBar()
 	} else {
 		helpBar = h.renderHelpBar()
 	}
