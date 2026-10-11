@@ -881,6 +881,23 @@ weekly_limit = 200.00
 "custom-model" = { input_per_mtok = 1.0, output_per_mtok = 5.0 }
 ```
 
+<!-- matrix/hardened: subscription usage can be displayed as an API-equivalent estimate. -->
+For subscription sessions, this dashboard can show an **API-equivalent estimate**;
+it does not report the subscription bill or remaining allowance. Unknown models
+currently calculate as zero. For Claude Opus 5.5, add this entry to the existing
+`[costs.pricing.overrides]` section (create the section if absent):
+
+```toml
+"claude-opus-5-5" = { input_per_mtok = 4.0, output_per_mtok = 20.0, cache_read_per_mtok = 0.20, cache_write_per_mtok = 5.0 }
+```
+
+These are [Anthropic's standard API rates](https://www.anthropic.com/claude-opus-5-5),
+in USD per million tokens, using five-minute cache writes; fast mode and other
+pricing modifiers are excluded. Run `agent-deck costs recompute --dry-run`, then
+`agent-deck costs recompute` to apply the estimate to existing records. Close and
+reopen `$` to read the updated totals. Processes that loaded pricing before the
+configuration change need a restart to use the override for new collection.
+
 #### Customizing the status-line cost segment
 
 The home status bar shows a brief cost line drawn from the seven windows below. The default renders `$X.XX today`; configure `cost_line_template` to surface different windows or a per-profile layout. Variables substitute as `$X.XX`; unknown placeholders pass through literally so typos surface in the output.
