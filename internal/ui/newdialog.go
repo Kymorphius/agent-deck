@@ -3401,6 +3401,16 @@ func (d *NewDialog) View() string {
 		content.WriteString("\n")
 		markFocusedRow(focusMultiRepo)
 		d.renderMultiRepoSection(&content, cur)
+		// matrix/hardened: keep the selected repository input in the viewport,
+		// rather than scrolling around the toggle above the repository list.
+		if cur == focusMultiRepo && d.multiRepoEnabled {
+			for i, line := range strings.Split(content.String(), "\n") {
+				if strings.HasPrefix(strings.TrimSpace(stripAnsi(line)), fmt.Sprintf("▸ %d. ", d.multiRepoPathCursor+1)) {
+					focusLogicalLine = i
+					break
+				}
+			}
+		}
 	}
 
 	// Tool options panel
@@ -3552,7 +3562,22 @@ func (d *NewDialog) View() string {
 		overlayRow := topRow + 1 + 2 + d.suggestionsLineOffset
 		// Align with the path input: border (1) + padding (4)
 		overlayCol := leftCol + 1 + 4
-
+		// matrix/hardened: anchor to the rendered input after height fitting,
+		// and bound the menu to the form width and the remaining rows below it.
+		for i, line := range strings.Split(dialog, "\n") {
+			plain := strings.Trim(stripAnsi(line), " │")
+			if !d.multiRepoEnabled && plain == "▶ Path:" {
+				overlayRow = topRow + i + 2
+				break
+			}
+			if d.multiRepoEnabled && d.multiRepoEditing && strings.HasPrefix(plain, fmt.Sprintf("▸ %d. ", d.multiRepoPathCursor+1)) {
+				inputRow := fmt.Sprintf("  ▸ %d. ", d.multiRepoPathCursor+1) + d.pathInput.View()
+				inputHeight := lipgloss.Height(lipgloss.NewStyle().Width(innerWidth).Render(inputRow))
+				overlayRow = topRow + i + inputHeight
+				break
+			}
+		}
+		suggestionsOverlay = d.renderSuggestionsDropdown(min(dialogWrapWidth(dialogStyle), d.width-overlayCol), d.height-overlayRow)
 		placed = overlayDropdown(placed, suggestionsOverlay, overlayRow, overlayCol)
 	}
 
@@ -3611,7 +3636,7 @@ func dropdownMenuBg() lipgloss.Color {
 	return lipgloss.Color("#292e42")
 }
 
-func (d *NewDialog) renderSuggestionsDropdown() string {
+func (d *NewDialog) renderSuggestionsDropdown(bounds ...int) string {
 	cur := d.currentTarget()
 
 	// The dropdown shows whenever the path field is focused — even with no
@@ -3628,7 +3653,7 @@ func (d *NewDialog) renderSuggestionsDropdown() string {
 	// show those matches instead of the recent-path suggestions so the user
 	// can see what Tab is cycling through (terminal-style menu completion).
 	if len(d.pathCycler.Matches()) > 1 {
-		return d.renderCompletionDropdown()
+		return d.renderCompletionDropdown(bounds...)
 	}
 
 	menuBg := dropdownMenuBg()
@@ -3694,7 +3719,8 @@ func (d *NewDialog) renderSuggestionsDropdown() string {
 				style = selectedStyle
 				prefix = "▶ "
 			}
-			b.WriteString(style.Render(prefix + d.pathSuggestions[i]))
+			// matrix/hardened: retain the useful directory tail in a bounded menu.
+			b.WriteString(style.Render(prefix + pathDropdownLabel(d.pathSuggestions[i], bounds...)))
 		}
 
 		if endIdx < total {
@@ -3718,13 +3744,7 @@ func (d *NewDialog) renderSuggestionsDropdown() string {
 	if d.suggestionsActive {
 		borderColor = ColorCyan
 	}
-	menuStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(borderColor).
-		Background(menuBg).
-		Padding(0, 1)
-
-	return menuStyle.Render(b.String())
+	return renderPathDropdownBox(b.String(), borderColor, bounds...)
 }
 
 // sanitizeMatchForDisplay neutralizes control characters in a
@@ -3745,7 +3765,7 @@ func sanitizeMatchForDisplay(name string) string {
 
 // renderCompletionDropdown renders the active Tab-completion matches as a
 // menu, highlighting the match currently applied to the path input.
-func (d *NewDialog) renderCompletionDropdown() string {
+func (d *NewDialog) renderCompletionDropdown(bounds ...int) string {
 	menuBg := dropdownMenuBg()
 	matchStyle := lipgloss.NewStyle().Foreground(ColorComment).Background(menuBg)
 	selectedStyle := lipgloss.NewStyle().Foreground(ColorCyan).Bold(true).Background(menuBg)
@@ -3789,7 +3809,8 @@ func (d *NewDialog) renderCompletionDropdown() string {
 			style = selectedStyle
 			prefix = "▶ "
 		}
-		b.WriteString(style.Render(prefix + sanitizeMatchForDisplay(matches[i])))
+		// matrix/hardened: filesystem completion shares the same display bounds.
+		b.WriteString(style.Render(prefix + pathDropdownLabel(matches[i], bounds...)))
 	}
 	if endIdx < total {
 		b.WriteString("\n")
@@ -3801,13 +3822,7 @@ func (d *NewDialog) renderCompletionDropdown() string {
 	footerText := fmt.Sprintf(" %d matches │ Tab cycle │ / open dir ", total)
 	b.WriteString(lipgloss.NewStyle().Foreground(ColorBorder).Background(menuBg).Render(footerText))
 
-	menuStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(ColorCyan).
-		Background(menuBg).
-		Padding(0, 1)
-
-	return menuStyle.Render(b.String())
+	return renderPathDropdownBox(b.String(), ColorCyan, bounds...)
 }
 
 func (d *NewDialog) renderModelSuggestionsDropdown() string {

@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.23`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.24`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -66,7 +66,7 @@
 - `internal/session/claude_hooks.go`：`isAgentDeckHookCommand` 的判断规则：先去掉开头的 `VAR=值`，再要求第二个词是 `hook-handler`、程序名的文件名部分是 `agent-deck`。`RemoveClaudeHooks` 会扫描全部事件，并做 UTC 时间戳备份（约 387–414 行）。
 - `cmd/agent-deck/main.go`（约 4845、5070 行）：`agent-deck uninstall` 会移除这些钩子。`uninstall.sh` 第 253 行附近的 jq 过滤用的是同一套规则（正则），写回时用 `cat >` 保持软链接和权限。
 
-**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.23`。
+**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.24`。
 
 **测试**：以 `_hardened_test.go` 结尾的文件、`update_check_disable_test.go`、`update_timer_wiring_test.go` 等是新增或调整过的测试；`testdata/goldens/*` 里的快照已经按加固后的输出更新。
 
@@ -272,3 +272,12 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 - GPT-6.1 Sol / GPT-6 Sol / Astra / Luna、GPT-5.6 Sol/Luna 和 GPT-5.3 Codex 使用官方标准 API 单价；适用模型超过 272K 输入按长上下文费率。自定义价格按原配置计算。Fast、Ultrafast、地域附加费不计入这项标准 API 等价估价。
 - `$` 页面注明这是 API 等价估价，不是订阅账单或额度。
 - 验证：`internal/costs/codex_matrix_test.go`、`cmd/agent-deck/costs_codex_matrix_test.go`，覆盖缓存拆分、回填和 fork 去重、模型切换、缓存输入请求、不完整行、长上下文以及本地/远程精确来源隔离。
+
+## 21. 新建界面路径候选布局
+
+`1.16.26+matrix.24` 修复新建分组的路径候选遮挡输入，以及新建会话历史路径和 Tab 补全因长路径撑宽菜单的问题。
+
+- 候选菜单从实际显示的输入行下方展开，宽度限制在表单内；高度随输入下方的剩余终端行数调整，选中项保持可见。
+- 长路径按完整字符簇缩略前半段，保留末尾目录名；接受候选仍使用完整原始路径。
+- 长父分组和远程名称先按表单宽度换行，避免挤压路径输入。多仓库模式的视口跟随正在编辑的条目。
+- 验证：`internal/ui/matrix_path_dropdown_test.go`，覆盖 80×24、100×30、120×40、长中文和 emoji 路径、历史候选与真实目录 Tab 补全、多仓库编辑、受限高度下的选中项和完整路径接受。原有新建会话、分组、视口和布局快照测试保持通过。
