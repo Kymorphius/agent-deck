@@ -637,7 +637,8 @@ func crossHarnessPlanCommand(target *Instance, plan *FreshTargetLaunchPlan, _ st
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
-	prefix := target.buildEnvSourceCommand() + fmt.Sprintf("AGENTDECK_INSTANCE_ID=%s AGENTDECK_TITLE=%s AGENTDECK_TOOL=%s AGENTDECK_PROFILE=%s ", shellescape.Quote(target.ID), shellescape.Quote(target.Title), shellescape.Quote(target.Tool), shellescape.Quote(sessionProfileEnvValue()))
+	// matrix/hardened: host admission env is applied after configured sources.
+	prefix := target.buildEnvSourceCommand() + target.claudeLaunchEnvironmentSetup + fmt.Sprintf("AGENTDECK_INSTANCE_ID=%s AGENTDECK_TITLE=%s AGENTDECK_TOOL=%s AGENTDECK_PROFILE=%s ", shellescape.Quote(target.ID), shellescape.Quote(target.Title), shellescape.Quote(target.Tool), shellescape.Quote(sessionProfileEnvValue()))
 	for _, key := range keys {
 		prefix += key + "=" + shellescape.Quote(plan.Environment[key]) + " "
 	}
