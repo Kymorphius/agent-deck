@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.29`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.30`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -66,7 +66,7 @@
 - `internal/session/claude_hooks.go`：`isAgentDeckHookCommand` 的判断规则：先去掉开头的 `VAR=值`，再要求第二个词是 `hook-handler`、程序名的文件名部分是 `agent-deck`。`RemoveClaudeHooks` 会扫描全部事件，并做 UTC 时间戳备份（约 387–414 行）。
 - `cmd/agent-deck/main.go`（约 4845、5070 行）：`agent-deck uninstall` 会移除这些钩子。`uninstall.sh` 第 253 行附近的 jq 过滤用的是同一套规则（正则），写回时用 `cat >` 保持软链接和权限。
 
-**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.29`。
+**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.30`。
 
 **测试**：以 `_hardened_test.go` 结尾的文件、`update_check_disable_test.go`、`update_timer_wiring_test.go` 等是新增或调整过的测试；`testdata/goldens/*` 里的快照已经按加固后的输出更新。
 
@@ -324,3 +324,11 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 - 不保存项目路径、仓库列表、会话名、具体分支、父会话或 resume ID。每次打开重新确定路径，多仓库开关开启时也只以本次路径初始化；worktree 分支根据新会话名生成。远程目标继续使用远端配置，不接收本机默认参数。
 - 分组路径候选改为表单内展开，输入和选中项一起参与高度适配，操作提示保留在候选框下方；窄宽度提示按完整项目取舍，避免浮层盖住底部及按键提示截断。
 - 验证：`matrix_new_session_defaults_test.go` 的冷打开、完整路径排除、其它配置保留、按钮与 Ctrl+D、Claude 参数、远程隔离及 64×28 / 80×24 / 60×15 / 100×30 底部提示；既有路径候选、新建表单键盘流程和布局快照测试。
+
+## 27. Shift 数字键与中文标点筛选
+
+`1.16.26+matrix.30` 修复 Shift+1 偶尔无法切到运行中列表的问题。
+
+- **matrix/hardened:** CSI u 编码可能报告数字键与 Shift 修饰，原来仅转换字母，导致 Shift+1 被当作普通 `1` 的移动计数。现在补上 US/ABC 数字与标点的 Shift 映射；含 Ctrl 时不套用此映射。xterm modifyOtherKeys 使用已经生成的字符码点，保持其数字和标点原样，避免破坏其它键盘布局的输入。
+- **matrix/hardened:** 中文输入法输出的全角 `！＠＃％＾＆～` 在列表快捷键入口映射到对应筛选键；`＄` / `￥` 打开费用页，`＊` 对应时间筛选。此映射只应用于列表命令。
+- 验证：`matrix_shifted_keyboard_test.go` 覆盖两个协议的解析及 reader、数字与标点、未 Shift 数字、Alt、Shift+Enter 和控制键；`matrix_status_filter_keyboard_test.go` 经 `Home.Update` 验证运行中列表、再次按键取消筛选、待处理的移动计数与分组前缀、Ctrl+Shift 不触发 Shift 筛选，以及全角快捷键和原始文本保持。
