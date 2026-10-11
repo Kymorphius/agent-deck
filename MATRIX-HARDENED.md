@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.22`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.23`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -66,7 +66,7 @@
 - `internal/session/claude_hooks.go`：`isAgentDeckHookCommand` 的判断规则：先去掉开头的 `VAR=值`，再要求第二个词是 `hook-handler`、程序名的文件名部分是 `agent-deck`。`RemoveClaudeHooks` 会扫描全部事件，并做 UTC 时间戳备份（约 387–414 行）。
 - `cmd/agent-deck/main.go`（约 4845、5070 行）：`agent-deck uninstall` 会移除这些钩子。`uninstall.sh` 第 253 行附近的 jq 过滤用的是同一套规则（正则），写回时用 `cat >` 保持软链接和权限。
 
-**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.22`。
+**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.23`。
 
 **测试**：以 `_hardened_test.go` 结尾的文件、`update_check_disable_test.go`、`update_timer_wiring_test.go` 等是新增或调整过的测试；`testdata/goldens/*` 里的快照已经按加固后的输出更新。
 
@@ -261,3 +261,14 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 - **tmux latest**：`Resize` 额外给 attach 客户端发 SIGWINCH（同 `tmux.HandLatestToViewer`）；页面切回前台或点终端时发一次同尺寸 resize（2 秒节流）。手机切回来不再看到按桌面宽度截断的窗格。
 - **改动地图**：`internal/web/static/app/app.css`（TOUCH TABLET、COMPACT TERMINAL HEAD、NO STICKY HOVER 三段）、`uiState.js`（`sessionDrawerOpenSignal`）、`Topbar.js`（`.sdrawer-btn`、`.rail-toggle`）、`AppShell.js`（遮罩、选中即收起、标题行 `.sid` 和 `.wh-image`）、`terminalImage.js`（picker 注册、`imageUploadingSignal`）、`terminalTouchScroll.js`（新文件）、`TerminalPanel.js`（触摸滚动、抢 latest）、`icons.js`（menu）、`internal/web/terminal_bridge.go`（Resize 发 SIGWINCH）。
 - **测试**：`internal/web/terminal_bridge_matrix_claim_test.go`、`tests/web/unit/terminalTouchScroll.test.js`。
+
+## 20. Codex API 等价费用
+
+`1.16.26+matrix.23` 新增：TUI 和 headless web 每 30 秒读取受管理 Codex 会话的原生 `token_usage_record`，使用会话自身的账号、CODEX_HOME 和精确 thread id 查找日志；不猜最近的文件，不读取远程或容器路径。`costs sync` 支持相同来源的历史回填。
+
+- 输入拆成普通输入、缓存读取及缓存写入，推理 token 已包含在输出，不能再加一次。
+- 响应 ID 跨重复回填、recall 和 fork 重放去重；唯一键插入处理多实例竞争。
+- 日志读取按完整行增量推进，保留当前模型；首次全读后只读新增内容。旧日志只有累计 `token_count` 时不估算。
+- GPT-6.1 Sol / GPT-6 Sol / Astra / Luna、GPT-5.6 Sol/Luna 和 GPT-5.3 Codex 使用官方标准 API 单价；适用模型超过 272K 输入按长上下文费率。自定义价格按原配置计算。Fast、Ultrafast、地域附加费不计入这项标准 API 等价估价。
+- `$` 页面注明这是 API 等价估价，不是订阅账单或额度。
+- 验证：`internal/costs/codex_matrix_test.go`、`cmd/agent-deck/costs_codex_matrix_test.go`，覆盖缓存拆分、回填和 fork 去重、模型切换、缓存输入请求、不完整行、长上下文以及本地/远程精确来源隔离。

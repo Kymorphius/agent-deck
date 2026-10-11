@@ -108,7 +108,7 @@ func TestCodexIngest_AllRecordKinds(t *testing.T) {
 		t.Fatalf("exec call: %+v", c)
 	}
 	// Usage from token_usage_record.usage (never the thread total).
-	if len(rec.usage) != 1 || rec.usage[0].In != 25088 || rec.usage[0].Out != 6 || rec.usage[0].CacheR != 12928 || rec.usage[0].Model != "gpt-5.6-sol" {
+	if len(rec.usage) != 1 || rec.usage[0].In != 12160 || rec.usage[0].Out != 6 || rec.usage[0].CacheR != 12928 || rec.usage[0].Model != "gpt-5.6-sol" {
 		t.Fatalf("usage: %+v", rec.usage)
 	}
 	if rec.counts[CountCompact] != 1 || rec.counts[CountInterrupt] != 1 || rec.counts[CountUnknownType] != 1 {

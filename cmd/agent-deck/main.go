@@ -45,7 +45,7 @@ import (
 )
 
 // matrix/hardened: identifies our hardened build.
-var Version = "1.16.26+matrix.22" // overridden at build time via -ldflags "-X main.Version=..."
+var Version = "1.16.26+matrix.23" // overridden at build time via -ldflags "-X main.Version=..."
 
 // Table column widths for list command output
 const (
@@ -1115,6 +1115,9 @@ func main() {
 		homeModel.SetCostStore(costStore)
 		homeModel.SetCostPricer(pricer)
 		homeModel.SetCostBudget(budgetChecker)
+		// matrix/hardened: native Codex usage feeds the same cost dashboard.
+		stopCodexCosts := startCodexCostCollection(profile, costStore)
+		defer stopCodexCosts()
 
 		// Start cost event watcher (for Claude hook events)
 		costEventsDir := getCostEventsDir()

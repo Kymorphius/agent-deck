@@ -8209,6 +8209,12 @@ func (i *Instance) codexRolloutPath() (string, error) {
 	return path, nil
 }
 
+// matrix/hardened: cost collection uses the same exact, account-aware local
+// artifact as the context inspector; never guess by title or latest file.
+func (i *Instance) CodexCostRolloutPath() (string, error) {
+	return i.codexRolloutPath()
+}
+
 func (i *Instance) codexRolloutTail() ([]string, error) {
 	path, err := i.codexRolloutPath()
 	if err != nil {

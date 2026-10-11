@@ -303,8 +303,10 @@ func (st *codexState) line(line []byte, off, n int64) {
 		if u.Usage.InputTokens+u.Usage.OutputTokens > 0 {
 			st.session()
 			// The response id keys cost-event dedup across reparses.
-			st.fail(st.sink.Usage(Usage{UUID: firstNonEmpty(u.ResponseID, u.TurnID+"@"+rec.Timestamp), TS: ts, Model: st.model,
-				In: u.Usage.InputTokens, Out: u.Usage.OutputTokens, CacheR: u.Usage.CachedInputTokens, CacheW: u.Usage.CacheWriteTokens}))
+			// matrix/hardened: Codex input includes cached tokens; costs stores
+			// disjoint categories. Reasoning is already included in output.
+			st.fail(st.sink.Usage(Usage{UUID: "codex:" + firstNonEmpty(u.ResponseID, st.src.NativeID+"@"+u.TurnID+"@"+rec.Timestamp), TS: ts, Model: st.model,
+				In: max(0, u.Usage.InputTokens-u.Usage.CachedInputTokens-u.Usage.CacheWriteTokens), Out: u.Usage.OutputTokens, CacheR: u.Usage.CachedInputTokens, CacheW: u.Usage.CacheWriteTokens}))
 		}
 	case "event_msg":
 		var ev codexEventMsg
