@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.25`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.26`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -288,3 +288,12 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 - `↑/↓` 或 `j/k` 滚动，鼠标滚轮也可使用；`PgUp/PgDn` 或 `Ctrl+B/F` 翻页，`Ctrl+U/D` 半页，`Home/End` 跳到首尾。
 - 费用页随终端尺寸调整；窄窗口先换行再计算滚动范围，返回提示固定在底部。
 - 验证：`TestMatrixCostDashboardStableOrderAndScroll` 覆盖 40 个模型的稳定顺序、末项可达、翻页及窄窗口尺寸。
+
+## 23. Recall 的管理状态标记
+
+`1.16.26+matrix.26` 修复 Recall 搜索结果没有显示管理状态的问题。原来的圆点标记未接入真实界面，且缺少 Codex 原生线程 ID 匹配；选中行还会覆盖圆点。
+
+- 每条结果在标题下显示 `[已管理]` 或 `[未管理]`，选中后仍保留。右侧预览明确显示当前列表的管理状态，已管理结果还显示对应管理会话 ID。
+- 标记范围是当前 profile 的会话列表；Recall 跨 profile 的历史绑定不等于当前列表仍有管理会话。每次渲染重新核对当前列表，加入或移除会话后不会保留旧标签。
+- 显示与 Enter 共用匹配逻辑：先匹配明确的管理会话 ID，再按 harness 匹配 Claude 对话 ID 或 Codex 线程 ID；空原生 ID 不匹配任何未设置的字段。
+- 验证：`TestMatrixRecallManagement_*` 覆盖真实 Home 渲染、Codex 匹配、跨 harness、空 ID、陈旧绑定、移除后的重算以及显示和 Enter 目标一致；Recall 和对话框快照验证终端宽度与结果滚动。
