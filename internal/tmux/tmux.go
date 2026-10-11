@@ -878,132 +878,119 @@ var toolDetectionPatterns = map[string][]*regexp.Regexp{
 }
 
 func detectToolFromCommand(command string) string {
-	cmdLower := strings.ToLower(strings.TrimSpace(command))
-	if cmdLower == "" {
+	// matrix/hardened: only the executable position can identify a runtime.
+	// Generated environment preludes, shell wrappers and developer instructions
+	// may name every supported tool; scanning their text corrupted saved tool
+	// identities. Unknown or malformed command forms deliberately fail closed.
+	fields, valid := shellwords.Split(strings.TrimSpace(command))
+	if !valid {
+		return ""
+	}
+	fields = toolCommandWords(fields)
+	if len(fields) == 0 {
 		return ""
 	}
 
-	fields, valid := shellwords.Split(cmdLower)
-	if valid {
-		base := shellwords.ExecutableBase(fields)
-		switch base {
-		case "claude":
-			return "claude"
-		case "gemini":
-			return "gemini"
-		case "opencode", "open-code":
-			return "opencode"
-		case "codex":
-			return "codex"
-		case "copilot":
-			return "copilot"
-		case "crush":
-			return "crush"
-		case "muse":
-			return "muse"
-		case "cursor":
-			return "cursor"
-		case "agent":
-			// Standalone Cursor Agent CLI binary (~/.local/bin/agent).
-			return "cursor"
-		case "hermes":
-			return "hermes"
-		case "dsh":
-			// DeepSeek Harness. The binary is `dsh`; the agent-deck tool is
-			// named for the vendor.
-			return "deepseek"
-		case "pi":
-			return "pi"
-		case "omp", "oh-my-pi":
-			return "omp"
-		}
-		if isOMPCommand(fields) {
-			return "omp"
-		}
-	}
-
-	switch {
-	case strings.Contains(cmdLower, "claude"):
-		return "claude"
-	case strings.Contains(cmdLower, "gemini"):
-		return "gemini"
-	case strings.Contains(cmdLower, "opencode") || strings.Contains(cmdLower, "open code") || strings.Contains(cmdLower, "open-code"):
+	base := toolExecutableBase(fields[0])
+	switch base {
+	case "claude", "gemini", "codex", "copilot", "crush", "muse", "hermes", "pi":
+		return base
+	case "opencode", "open-code":
 		return "opencode"
-	case strings.Contains(cmdLower, "codex"):
-		return "codex"
-	case strings.Contains(cmdLower, "copilot") || strings.Contains(cmdLower, "@github/copilot"):
-		return "copilot"
-	case strings.Contains(cmdLower, "crush"):
-		return "crush"
-	// No fallback arm for muse: the executable basename in the base switch
-	// above is the only classifier. Any mid-line token form (`my-wrapper
-	// muse --flag`, `echo muse --help`) is indistinguishable from prose or
-	// another tool's arguments at this layer, so wrappers fail closed to
-	// shell here (they still launch verbatim via passthrough). This keeps
-	// the tmux layer consistent with the registry's executableOnly rule.
-	case strings.Contains(cmdLower, "cursor"):
+	case "cursor", "agent":
+		// Standalone Cursor Agent CLI binary (~/.local/bin/agent).
 		return "cursor"
-	case strings.Contains(cmdLower, "hermes"):
-		return "hermes"
-	case isDeepSeekCommand(fields) ||
-		strings.Contains(cmdLower, "@deepseek-ai/dsh") ||
-		strings.Contains(cmdLower, "dsh --profile") ||
-		strings.Contains(cmdLower, "dsh web") ||
-		strings.Contains(cmdLower, "dsh plugin"):
-		// Deliberately NOT a bare Contains on "dsh": those three letters appear
-		// in "dshell", "dshboard", and any path containing them, and — unlike
-		// the permissive arms above — `grep dsh README.md` is an entirely
-		// ordinary thing to see in a pane. Detection therefore needs the token
-		// in COMMAND position (isDeepSeekCommand, which sees through the
-		// `DSH_HOME=… dsh` env prefix agent-deck itself emits), the documented
-		// npx spelling, or a dsh subcommand/launcher flag right after it.
+	case "dsh":
 		return "deepseek"
-	case strings.Contains(cmdLower, " pi ") || strings.HasPrefix(cmdLower, "pi "):
-		return "pi"
-	default:
+	case "omp", "oh-my-pi":
+		return "omp"
+	case "npx":
+		// Packages are recognized only as npx's command, never in arbitrary
+		// option values or arguments belonging to another package.
+		idx := 1
+		for idx < len(fields) && (fields[idx] == "-y" || fields[idx] == "--yes" || fields[idx] == "--no-install") {
+			idx++
+		}
+		if idx < len(fields) && fields[idx] == "--" {
+			idx++
+		}
+		if idx < len(fields) {
+			switch fields[idx] {
+			case "@github/copilot":
+				return "copilot"
+			case "@deepseek-ai/dsh":
+				return "deepseek"
+			case "@oh-my-pi/pi-coding-agent":
+				return "omp"
+			}
+		}
+	}
+	return ""
+}
+
+// matrix/hardened: inspect only simple env/sudo wrappers with known option
+// semantics. Options that consume a value must not expose that value as the
+// executable (for example, `sudo -u claude bash`). Other wrappers and options
+// are ambiguous without evaluating a shell and therefore return no identity.
+func toolCommandWords(fields []string) []string {
+	idx := 0
+	for idx < len(fields) {
+		if isShellAssignmentToken(fields[idx]) {
+			idx++
+			continue
+		}
+		wrapper := toolExecutableBase(fields[idx])
+		if wrapper != "env" && wrapper != "sudo" {
+			return fields[idx:]
+		}
+		idx++
+		for idx < len(fields) && strings.HasPrefix(fields[idx], "-") {
+			option := fields[idx]
+			idx++
+			if option == "--" {
+				break
+			}
+			if wrapper == "env" {
+				switch {
+				case option == "-i" || option == "--ignore-environment":
+					continue
+				case option == "-u" || option == "--unset":
+					if idx >= len(fields) || fields[idx] == "" || strings.HasPrefix(fields[idx], "-") {
+						return nil
+					}
+					idx++
+					continue
+				case strings.HasPrefix(option, "--unset="):
+					continue
+				default:
+					return nil
+				}
+			}
+			switch option {
+			case "-n", "-E", "-H", "-S", "-k", "--non-interactive", "--set-home", "--stdin":
+				continue
+			case "-u", "-g", "--user", "--group":
+				if idx >= len(fields) || fields[idx] == "" || strings.HasPrefix(fields[idx], "-") {
+					return nil
+				}
+				idx++
+				continue
+			default:
+				return nil
+			}
+		}
+	}
+	return nil
+}
+
+// matrix/hardened: normalize executable aliases, without inspecting their
+// parent directories or arguments for incidental tool names.
+func toolExecutableBase(command string) string {
+	if strings.HasSuffix(command, "/") {
 		return ""
 	}
-}
-
-// isOMPCommand recognizes only supported OMP launchers in command position.
-// In particular, incidental argument text such as `grep omp README.md` is not
-// evidence that the pane runs OMP.
-func isOMPCommand(fields []string) bool {
-	for idx, field := range fields {
-		if isShellAssignmentToken(field) {
-			continue
-		}
-		base := filepath.Base(strings.Trim(field, `"'`))
-		base = strings.TrimSuffix(strings.TrimSuffix(base, ".exe"), ".cmd")
-		if base == "env" {
-			continue
-		}
-		if base == "omp" || base == "oh-my-pi" {
-			return true
-		}
-		return base == "npx" && idx+1 < len(fields) &&
-			strings.Trim(fields[idx+1], `"'`) == "@oh-my-pi/pi-coding-agent"
-	}
-	return false
-}
-
-// isDeepSeekCommand reports whether the first COMMAND-position token of a
-// command line is the dsh binary. Leading `VAR=value` assignments are skipped:
-// agent-deck's own launch string is `DSH_HOME=… AGENTDECK_…=… dsh --profile …`,
-// so fields[0] is an assignment, not the program.
-//
-// This is the precise half of DeepSeek detection; the substring arms beside it
-// cover the npx spelling and subcommand forms.
-func isDeepSeekCommand(fields []string) bool {
-	for _, field := range fields {
-		if isShellAssignmentToken(field) {
-			continue
-		}
-		base := filepath.Base(strings.Trim(field, `"'`))
-		base = strings.TrimSuffix(strings.TrimSuffix(base, ".exe"), ".cmd")
-		return base == "dsh"
-	}
-	return false
+	base := strings.ToLower(filepath.Base(command))
+	return strings.TrimSuffix(strings.TrimSuffix(base, ".exe"), ".cmd")
 }
 
 // isShellAssignmentToken reports whether a token is a `NAME=value` environment

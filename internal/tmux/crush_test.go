@@ -33,9 +33,7 @@ func TestDetectToolFromCommand_Crush_Negative(t *testing.T) {
 		name    string
 		command string
 	}{
-		// Truly unrelated strings — strings.Contains fallback is intentionally
-		// permissive (matches the copilot / hermes precedent), so we only
-		// guard against blatant false positives here.
+		// matrix/hardened: unrelated argument text cannot identify a runtime.
 		{"empty", ""},
 		{"unrelated tool", "ls -la"},
 	}

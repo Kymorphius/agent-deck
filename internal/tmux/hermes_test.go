@@ -32,9 +32,7 @@ func TestDetectToolFromCommand_Hermes_Negative(t *testing.T) {
 		name    string
 		command string
 	}{
-		// Note: strings.Contains fallback is intentionally permissive
-		// (same as copilot matching "npx @github/copilot"). Only the
-		// basename switch provides strict matching.
+		// matrix/hardened: only executable position identifies the runtime.
 		{"herm is not hermes", "herm"},
 		{"prometheus is not hermes", "prometheus --config.file=prometheus.yml"},
 	}
