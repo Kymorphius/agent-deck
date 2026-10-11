@@ -24,6 +24,8 @@ type RecallSource interface {
 	// Search ranks sessions for q (query.Searcher.Search with the default
 	// filters, subagents hidden).
 	Search(ctx context.Context, q string, limit int) (query.SearchResult, error)
+	// matrix/hardened: limit membership before ranking, not after the result cap.
+	SearchManaged(ctx context.Context, q string, limit int, scope query.ManagedScope) (query.SearchResult, error)
 	// Show returns the session card and its first turns for the preview.
 	Show(ctx context.Context, sessID int64, turns int) (query.Detail, error)
 	// Status is the index summary shown in the header.
@@ -105,6 +107,12 @@ func openRecallIndex(profile string) (RecallSource, error) {
 
 func (r *recallIndex) Search(ctx context.Context, q string, limit int) (query.SearchResult, error) {
 	return r.q.Search(ctx, query.SearchOptions{Query: q, Limit: limit})
+}
+
+// matrix/hardened: the structural filter narrows card and body candidates
+// before either cap; unmanaged high-ranking hits cannot hide managed hits.
+func (r *recallIndex) SearchManaged(ctx context.Context, q string, limit int, scope query.ManagedScope) (query.SearchResult, error) {
+	return r.q.Search(ctx, query.SearchOptions{Query: q, Limit: limit, Filters: query.Filters{Managed: &scope}})
 }
 
 func (r *recallIndex) Show(ctx context.Context, sessID int64, turns int) (query.Detail, error) {

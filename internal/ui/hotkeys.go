@@ -54,6 +54,7 @@ const (
 	hotkeyWorktreeFinish   = "worktree_finish"
 	hotkeyCreateGroup      = "create_group"
 	hotkeySearch           = "search"
+	hotkeyManagedRecall    = "recall_managed" // matrix/hardened: content search in registered sessions.
 	hotkeyHelp             = "help"
 	hotkeySettings         = "settings"
 	hotkeyImport           = "import"
@@ -154,6 +155,7 @@ var hotkeyActionOrder = []string{
 	hotkeyWorktreeFinish,
 	hotkeyCreateGroup,
 	hotkeySearch,
+	hotkeyManagedRecall,
 	hotkeyHelp,
 	hotkeySettings,
 	hotkeyImport,
@@ -213,6 +215,7 @@ var defaultHotkeyBindings = map[string]string{
 	hotkeyWorktreeFinish:   "W",
 	hotkeyCreateGroup:      "g",
 	hotkeySearch:           "/",
+	hotkeyManagedRecall:    "alt+r", // matrix/hardened
 	hotkeyHelp:             "?",
 	hotkeySettings:         "S",
 	hotkeyImport:           "i",

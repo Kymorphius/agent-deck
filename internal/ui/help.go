@@ -290,6 +290,8 @@ func (h *HelpOverlay) View() string {
 		{"Ctrl+f/b", "Full page up/down"},
 		{"Home / End", "Jump to first / last item"},
 		{"G", "Recall search (every conversation on this machine)"},
+		// matrix/hardened: a separate, rebindable content search over current owners.
+		{h.key(hotkeyManagedRecall, "alt+r"), "Recall search (managed sessions in this profile)"},
 		{"h / Left", "Collapse / parent"},
 		{"l / Right", "Expand / toggle"},
 		// matrix/hardened: digits are a vim count; group jump moved to 'N.
