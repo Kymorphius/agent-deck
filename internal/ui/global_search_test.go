@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -20,14 +21,15 @@ import (
 // stubRecall is a RecallSource with canned answers: the overlay is tested
 // (and its frames pinned) without a recall.db.
 type stubRecall struct {
-	hits      []query.Hit
-	detail    map[int64]query.Detail
-	status    query.Status
-	refresh   []ingest.Result // one per Refresh call, in order
-	searchErr error
-	searches  []string
-	refreshes []bool
-	closed    bool
+	hits            []query.Hit
+	detail          map[int64]query.Detail
+	status          query.Status
+	refresh         []ingest.Result // one per Refresh call, in order
+	searchErr       error
+	searches        []string
+	managedSearches []query.ManagedScope // matrix/hardened: assert actual scope dispatch.
+	refreshes       []bool
+	closed          bool
 }
 
 func (s *stubRecall) Search(_ context.Context, q string, limit int) (query.SearchResult, error) {
@@ -40,6 +42,29 @@ func (s *stubRecall) Search(_ context.Context, q string, limit int) (query.Searc
 		hits = hits[:limit]
 	}
 	return query.SearchResult{Query: q, Hits: hits, Candidates: 7, ElapsedMS: 3}, nil
+}
+
+// matrix/hardened: the stub mirrors pre-limit membership; the real SQL
+// behavior is covered by the managed scope query and source tests.
+func (s *stubRecall) SearchManaged(ctx context.Context, q string, limit int, scope query.ManagedScope) (query.SearchResult, error) {
+	s.managedSearches = append(s.managedSearches, scope)
+	res, err := s.Search(ctx, q, len(s.hits))
+	if err != nil {
+		return res, err
+	}
+	hits := make([]query.Hit, 0, len(res.Hits))
+	for _, h := range res.Hits {
+		if (h.DeckID != "" && slices.Contains(scope.DeckIDs, h.DeckID)) ||
+			(h.Harness == "claude" && h.NativeID != "" && slices.Contains(scope.ClaudeIDs, h.NativeID)) ||
+			(h.Harness == "codex" && h.NativeID != "" && slices.Contains(scope.CodexIDs, h.NativeID)) {
+			hits = append(hits, h)
+		}
+	}
+	if len(hits) > limit {
+		hits = hits[:limit]
+	}
+	res.Hits = hits
+	return res, nil
 }
 
 func (s *stubRecall) Show(_ context.Context, sessID int64, _ int) (query.Detail, error) {
@@ -240,7 +265,7 @@ func TestGlobalSearch_PreviewErrorIsShown(t *testing.T) {
 	gs.input.SetValue("clock")
 	gs.query = "clock"
 	res, _ := src.Search(context.Background(), "clock", recallResultLimit)
-	gs.Update(globalSearchResultsMsg{query: "clock", res: res})
+	gs.Update(globalSearchResultsMsg{query: "clock", generation: gs.generation, res: res})
 	if !strings.Contains(ansi.Strip(gs.View()), "loading turns...") {
 		t.Fatal("before the preview answers the pane says it is loading")
 	}
@@ -263,7 +288,7 @@ func TestGlobalSearch_RefreshSkippedAndSearchErrorAreShown(t *testing.T) {
 	}
 	gs.input.SetValue("x")
 	gs.query = "x"
-	gs.Update(globalSearchResultsMsg{query: "x", err: errors.New("fts5: syntax error")})
+	gs.Update(globalSearchResultsMsg{query: "x", generation: gs.generation, err: errors.New("fts5: syntax error")})
 	if !strings.Contains(ansi.Strip(gs.View()), "fts5: syntax error") {
 		t.Fatal("a search error must be visible")
 	}
@@ -346,7 +371,7 @@ func TestGlobalSearchGolden(t *testing.T) {
 	gs.input.SetValue("clock skew")
 	gs.query = "clock skew"
 	res, _ := src.Search(context.Background(), "clock skew", recallResultLimit)
-	gs.Update(globalSearchResultsMsg{query: "clock skew", res: res})
+	gs.Update(globalSearchResultsMsg{query: "clock skew", generation: gs.generation, res: res})
 	gs.Update(recallPreviewMsg{sessID: 41, detail: src.detail[41]})
 	gs.MarkInAgentDeck([]*session.Instance{{ID: "auth-fix"}})
 	for i := range gs.results {

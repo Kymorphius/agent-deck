@@ -6,6 +6,7 @@ package query
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -28,6 +29,15 @@ const (
 	snippetChars      = 160
 )
 
+// matrix/hardened: ManagedScope is the active profile's current set of managed sessions.
+// Deck IDs and harness-specific native IDs are alternatives: a stale deck
+// link can still match through a current Claude or Codex conversation ID.
+type ManagedScope struct {
+	DeckIDs   []string
+	ClaudeIDs []string
+	CodexIDs  []string
+}
+
 // Filters are the structural filters shared by search and sessions.
 type Filters struct {
 	Harness string
@@ -40,6 +50,9 @@ type Filters struct {
 	Tags  []string
 	// DeckID restricts to one agent-deck session.
 	DeckID string
+	// Managed restricts to the current managed set. Nil searches everything;
+	// a non-nil scope with no IDs searches nothing.
+	Managed *ManagedScope
 	// IncludeSidechains lists subagent transcripts too (default: hidden).
 	IncludeSidechains bool
 }
@@ -512,6 +525,11 @@ func (s *Searcher) filterSQL(f Filters) (string, []any) {
 		sb.WriteString(" AND s.deck_id=?")
 		args = append(args, f.DeckID)
 	}
+	if f.Managed != nil {
+		where, managedArgs := managedScopeSQL(f.Managed)
+		sb.WriteString(where)
+		args = append(args, managedArgs...)
+	}
 	if !f.IncludeSidechains {
 		sb.WriteString(" AND s.is_sidechain=0")
 	}
@@ -532,6 +550,50 @@ func (s *Searcher) filterSQL(f Filters) (string, []any) {
 		args = append(args, tag, tag)
 	}
 	return sb.String(), args
+}
+
+// matrix/hardened: managedScopeSQL binds each ID set as one JSON array so large managed
+// profiles do not consume one SQLite variable or expression per session.
+// json_each is an uncorrelated set lookup, shared by the body candidate and
+// final ranking filters through filterSQL.
+func managedScopeSQL(scope *ManagedScope) (string, []any) {
+	var clauses []string
+	var args []any
+	for _, set := range []struct {
+		ids     []string
+		column  string
+		harness string
+	}{
+		{scope.DeckIDs, "s.deck_id", ""},
+		{scope.ClaudeIDs, "s.native_id", "claude"},
+		{scope.CodexIDs, "s.native_id", "codex"},
+	} {
+		ids := make([]string, 0, len(set.ids))
+		seen := make(map[string]bool, len(set.ids))
+		for _, id := range set.ids {
+			if id == "" || seen[id] {
+				continue
+			}
+			seen[id] = true
+			ids = append(ids, id)
+		}
+		if len(ids) == 0 {
+			continue
+		}
+		// A string slice is always JSON-serializable.
+		encoded, _ := json.Marshal(ids)
+		clause := set.column + "<>'' AND " + set.column + " IN (SELECT value FROM json_each(?))"
+		if set.harness != "" {
+			clause = "s.harness=? AND " + clause
+			args = append(args, set.harness)
+		}
+		clauses = append(clauses, "("+clause+")")
+		args = append(args, string(encoded))
+	}
+	if len(clauses) == 0 {
+		return " AND 0", nil
+	}
+	return " AND (" + strings.Join(clauses, " OR ") + ")", args
 }
 
 func (s *Searcher) body(ctx context.Context, conn *sql.Conn, msgID int64) (string, error) {

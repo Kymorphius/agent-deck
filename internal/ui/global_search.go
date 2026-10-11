@@ -91,14 +91,16 @@ type GlobalSearchResult struct {
 
 // globalSearchResultsMsg delivers async search results back to the UI.
 type globalSearchResultsMsg struct {
-	query string
-	res   query.SearchResult
-	err   error
+	query      string
+	generation uint64 // matrix/hardened: reject results from another query or scope.
+	res        query.SearchResult
+	err        error
 }
 
 // globalSearchDebounceMsg fires after the debounce interval.
 type globalSearchDebounceMsg struct {
-	query string
+	query      string
+	generation uint64 // matrix/hardened
 }
 
 // recallPreviewMsg delivers the preview of one session.
@@ -139,6 +141,10 @@ type GlobalSearch struct {
 	searchErr     string
 	candidates    int
 	ceilingHit    bool
+	// matrix/hardened: nil means every conversation; otherwise the current
+	// profile's owners are an immutable scope for this opening of Recall.
+	managed    *query.ManagedScope
+	generation uint64
 
 	source   RecallSource
 	status   query.Status
@@ -175,6 +181,26 @@ func (gs *GlobalSearch) SetSize(width, height int) {
 // Show opens the overlay and returns the commands that refresh the header
 // and run the first bounded sweep pass.
 func (gs *GlobalSearch) Show() tea.Cmd {
+	return gs.show(nil)
+}
+
+// matrix/hardened: a dedicated shortcut opens Recall over the current
+// registered sessions. An empty scope stays empty rather than becoming all.
+func (gs *GlobalSearch) ShowManaged(scope query.ManagedScope) tea.Cmd {
+	// matrix/hardened: own the snapshot even if the caller reuses its slices.
+	scope.DeckIDs = append([]string(nil), scope.DeckIDs...)
+	scope.ClaudeIDs = append([]string(nil), scope.ClaudeIDs...)
+	scope.CodexIDs = append([]string(nil), scope.CodexIDs...)
+	return gs.show(&scope)
+}
+
+func (gs *GlobalSearch) show(scope *query.ManagedScope) tea.Cmd {
+	gs.managed = scope
+	gs.generation++
+	gs.input.Placeholder = "Search every conversation on this machine..."
+	if scope != nil {
+		gs.input.Placeholder = "搜索已管理会话的内容..."
+	}
 	gs.visible = true
 	gs.input.Focus()
 	gs.input.SetValue("")
@@ -245,9 +271,17 @@ func (gs *GlobalSearch) refreshCmd(gated bool) tea.Cmd {
 
 func (gs *GlobalSearch) searchCmd(q string) tea.Cmd {
 	src := gs.source
+	// matrix/hardened: capture the opening/query scope before the async command.
+	scope, generation := gs.managed, gs.generation
 	return func() tea.Msg {
-		res, err := src.Search(context.Background(), q, recallResultLimit)
-		return globalSearchResultsMsg{query: q, res: res, err: err}
+		var res query.SearchResult
+		var err error
+		if scope != nil {
+			res, err = src.SearchManaged(context.Background(), q, recallResultLimit, *scope)
+		} else {
+			res, err = src.Search(context.Background(), q, recallResultLimit)
+		}
+		return globalSearchResultsMsg{query: q, generation: generation, res: res, err: err}
 	}
 }
 
@@ -315,14 +349,14 @@ func (gs *GlobalSearch) Update(msg tea.Msg) (*GlobalSearch, tea.Cmd) {
 		return gs, gs.refreshCmd(true)
 
 	case globalSearchDebounceMsg:
-		if msg.query == gs.input.Value() && msg.query != "" && gs.source != nil {
+		if msg.generation == gs.generation && msg.query == strings.TrimSpace(gs.input.Value()) && msg.query != "" && gs.source != nil {
 			gs.searching = true
 			return gs, gs.searchCmd(msg.query)
 		}
 		return gs, nil
 
 	case globalSearchResultsMsg:
-		if msg.query != gs.input.Value() {
+		if msg.generation != gs.generation || msg.query != strings.TrimSpace(gs.input.Value()) {
 			return gs, nil
 		}
 		gs.searching = false
@@ -384,6 +418,9 @@ func (gs *GlobalSearch) Update(msg tea.Msg) (*GlobalSearch, tea.Cmd) {
 				return gs, cmd
 			}
 			gs.query = q
+			// matrix/hardened: even returning to the same text must reject an
+			// older in-flight result from before the intervening edits.
+			gs.generation++
 			if q == "" {
 				gs.results = nil
 				gs.searching = false
@@ -391,8 +428,9 @@ func (gs *GlobalSearch) Update(msg tea.Msg) (*GlobalSearch, tea.Cmd) {
 				return gs, cmd
 			}
 			gs.searching = true
+			generation := gs.generation
 			return gs, tea.Batch(cmd, tea.Tick(recallDebounce, func(time.Time) tea.Msg {
-				return globalSearchDebounceMsg{query: gs.input.Value()}
+				return globalSearchDebounceMsg{query: q, generation: generation}
 			}))
 		}
 	}
@@ -480,6 +518,18 @@ func (gs *GlobalSearch) MarkInAgentDeck(instances []*session.Instance) {
 			r.InAgentDeck, r.InstanceID = true, inst.ID
 		}
 	}
+	// matrix/hardened: an owner may be removed while this opening is on
+	// screen. Never leave that result visible in the managed-only list.
+	if gs.managed != nil {
+		managed := gs.results[:0]
+		for _, r := range gs.results {
+			if r.InAgentDeck {
+				managed = append(managed, r)
+			}
+		}
+		gs.results = managed
+		gs.cursor = min(gs.cursor, max(len(gs.results)-1, 0))
+	}
 }
 
 // View renders the overlay with split-pane layout.
@@ -510,7 +560,11 @@ func (gs *GlobalSearch) View() string {
 	case len(gs.results) == 0 && gs.input.Value() != "":
 		left.WriteString(lipgloss.NewStyle().Foreground(ColorComment).Render("  No results"))
 	case len(gs.results) == 0:
-		left.WriteString(lipgloss.NewStyle().Foreground(ColorComment).Italic(true).Render("  Type to search; titles, hints and tags rank first"))
+		prompt := "  Type to search; titles, hints and tags rank first"
+		if gs.managed != nil {
+			prompt = "  仅搜索当前 profile 的已管理会话"
+		}
+		left.WriteString(lipgloss.NewStyle().Foreground(ColorComment).Italic(true).Render(prompt))
 	default:
 		summary := fmt.Sprintf("  %d matching message(s)", gs.candidates)
 		if gs.ceilingHit {
@@ -538,8 +592,12 @@ func (gs *GlobalSearch) View() string {
 	// The key hints stay two rows at every width: on a narrow pane the
 	// less important hints drop out instead of wrapping.
 	keyWidth := leftWidth - 2 // the pane's Padding(0, 1)
+	enterHint := "[Enter] Open"
+	if gs.managed != nil {
+		enterHint = "[Enter] Locate"
+	}
 	keys := lipgloss.NewStyle().Foreground(ColorComment).Render(
-		renderDialogFooter(keyWidth, "  ", []string{"[↑↓] Select", "[Enter] Open", "[Tab] Local"}, 0) + "\n" +
+		renderDialogFooter(keyWidth, "  ", []string{"[↑↓] Select", enterHint, "[Tab] Local"}, 0) + "\n" +
 			strings.TrimSpace(renderDialogFooter(keyWidth, "  ", []string{"[ ] scroll preview", " [Esc] Cancel"}, 0)))
 	// The results scroll inside the pane around the cursor; the header, the
 	// query box and the key hints stay put.
@@ -608,6 +666,10 @@ func (gs *GlobalSearch) View() string {
 
 // headerLine names the overlay and the index size.
 func (gs *GlobalSearch) headerLine() string {
+	// matrix/hardened: the index's total count is not this scoped search's size.
+	if gs.managed != nil {
+		return "🔍 Recall · 已管理"
+	}
 	if !gs.hasStat {
 		return "🔍 Recall"
 	}

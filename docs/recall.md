@@ -578,11 +578,26 @@ and loading 4.4 GB into memory; `/` stays the quick local title filter
 (Tab switches between the two). Typing runs `recall search` (debounced);
 the right pane is `recall show #n` for the selected hit (a failed preview
 says so in the pane); Enter jumps to the registered session that owns the
-conversation (bound deck id or Claude session id) or, for an unowned
-Claude conversation, registers a session that resumes it, exactly as
-`recall open` does. Codex, pi, Gemini, OpenCode and Hermes conversations
+conversation (bound deck id or the harness conversation id) or, for an unowned
+Claude or Codex conversation, registers a session that resumes it, exactly as
+`recall open` does in this hardened build. Pi, Gemini, OpenCode and Hermes conversations
 are searchable and previewable but not resumable from the TUI or
 `recall open` yet; the footer names the `recall show` command.
+
+**matrix/hardened:** `Alt+R` opens Recall restricted to sessions managed by
+the current agent-deck profile. On macOS with Option set to Normal,
+`Option+R` also works. The title and query placeholder say that the search
+is restricted to managed sessions, and Enter locates an existing session.
+Press Esc and then `G` to search every conversation again. The shortcut is
+rebindable through `[hotkeys] recall_managed = "alt+r"`.
+
+This scope is captured from the registered sessions when the overlay opens,
+matching deck IDs and Claude/Codex conversation IDs. It narrows the SQL
+candidates before the message ceiling and ranked result limit, so unmanaged
+history cannot crowd out managed matches. An empty managed set returns no
+results. Results whose owner is removed are dropped on the next render;
+Enter never imports a removed result from this managed-only view. Reopen
+the view to include sessions registered after the scope was captured.
 
 Nothing parses on a keypress. Opening the overlay runs one ungated
 bounded sweep pass in a background command and shows a staleness line

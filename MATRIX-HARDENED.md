@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.27`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.28`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -66,7 +66,7 @@
 - `internal/session/claude_hooks.go`：`isAgentDeckHookCommand` 的判断规则：先去掉开头的 `VAR=值`，再要求第二个词是 `hook-handler`、程序名的文件名部分是 `agent-deck`。`RemoveClaudeHooks` 会扫描全部事件，并做 UTC 时间戳备份（约 387–414 行）。
 - `cmd/agent-deck/main.go`（约 4845、5070 行）：`agent-deck uninstall` 会移除这些钩子。`uninstall.sh` 第 253 行附近的 jq 过滤用的是同一套规则（正则），写回时用 `cat >` 保持软链接和权限。
 
-**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.27`。
+**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.28`。
 
 **测试**：以 `_hardened_test.go` 结尾的文件、`update_check_disable_test.go`、`update_timer_wiring_test.go` 等是新增或调整过的测试；`testdata/goldens/*` 里的快照已经按加固后的输出更新。
 
@@ -304,3 +304,13 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 - **matrix/hardened:** 后台状态刷新只允许空身份或 `shell` 初次识别为支持的工具，已经配置的内建和自定义工具保持不变。用户显式修改工具、命令和跨工具切换仍使用原来的保存路径。
 - 回归覆盖默认 Codex 注入命令形状、shell 包装、说明文字中的其他工具、已识别运行时保持，以及状态刷新后数据库回读与显式工具编辑。
 - 部署需核对 TUI 和 Web 实际加载的构建；只替换磁盘文件不能保证旧进程立即使用修复。管理界面支持原地重载，tmux 中的 AI 进程无需重启。
+
+## 25. 仅在已管理会话中 Recall
+
+`1.16.26+matrix.28` 新增 `Alt+R`，直接打开当前 profile 已管理会话范围内的内容搜索；macOS 默认 Option 模式下的 `Option+R` 同样有效。`G` 仍搜索全部历史，`/` 仍是标题和路径等信息的快速筛选。
+
+- **matrix/hardened:** `[hotkeys].recall_managed` 可重绑或禁用。界面标题与输入提示明确显示已管理范围，Enter 只定位已有会话；搜索后移除的会话不会被重新导入。
+- 范围在打开界面时从已登记会话中取得，匹配管理会话 ID 或 Claude/Codex 原生对话 ID；空范围返回零结果。新增会话后重新打开此界面即可纳入搜索。
+- SQL 在正文候选上限与最终结果排序截断之前限定范围，高排名的未管理历史不会挤掉已管理结果。ID 集合用绑定 JSON 数组查询，避免大量会话耗尽参数数量。
+- 每次打开和编辑查询都更新异步请求代次，同一关键词在全量与已管理范围间切换时，不接受旧范围的结果。
+- 验证：`TestMatrixManagedScope_*` 覆盖候选上限、结果上限、空范围、跨 harness、标题匹配与大 ID 集合；`TestMatrixManagedRecall_*` 覆盖默认键、重绑禁用、Mac Option 字符、真实索引、范围切换与移除后纯定位；既有 Recall、快捷键、帮助、分组导航和宽度测试保持通过。

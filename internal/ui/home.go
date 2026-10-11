@@ -10405,6 +10405,30 @@ func (h *Home) openGlobalSearch() tea.Cmd {
 	return h.globalSearch.Show()
 }
 
+// matrix/hardened: build a scope from the current profile's registered
+// owners, including native ids whose recall deck link has not been stored yet.
+func (h *Home) openManagedRecall() tea.Cmd {
+	if !h.globalSearch.HasSource() {
+		return h.openGlobalSearch()
+	}
+	scope := query.ManagedScope{}
+	h.instancesMu.RLock()
+	for _, inst := range h.instances {
+		if inst.ID != "" {
+			scope.DeckIDs = append(scope.DeckIDs, inst.ID)
+		}
+		if inst.ClaudeSessionID != "" {
+			scope.ClaudeIDs = append(scope.ClaudeIDs, inst.ClaudeSessionID)
+		}
+		if inst.CodexSessionID != "" {
+			scope.CodexIDs = append(scope.CodexIDs, inst.CodexSessionID)
+		}
+	}
+	h.instancesMu.RUnlock()
+	h.globalSearch.SetSize(h.width, h.height)
+	return h.globalSearch.ShowManaged(scope)
+}
+
 // handleGlobalSearchSelection opens a Recall hit the way `recall open`
 // does: jump to the registered session that owns the conversation (the
 // bound deck id, or the Claude session id an instance carries); otherwise
@@ -10418,6 +10442,12 @@ func (h *Home) handleGlobalSearchSelection(result *GlobalSearchResult) tea.Cmd {
 	h.instancesMu.RUnlock()
 	if owner != nil {
 		h.jumpToSession(owner)
+		return nil
+	}
+	// matrix/hardened: managed-only Recall is a locator. A result whose
+	// owner disappeared must never turn into an import on Enter.
+	if h.globalSearch.managed != nil {
+		h.setError(fmt.Errorf("该会话已不在当前 profile 的管理列表中，请重新搜索"))
 		return nil
 	}
 	switch {
@@ -12378,6 +12408,10 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// opens Recall directly.
 		h.search.Show()
 		return h, nil
+
+	case "alt+r":
+		// matrix/hardened: content search limited to managed conversations.
+		return h, h.openManagedRecall()
 
 	case "?":
 		h.helpOverlay.SetEmbeddedLayout(h.embeddedLayout)
