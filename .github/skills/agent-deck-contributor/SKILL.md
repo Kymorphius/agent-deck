@@ -99,7 +99,7 @@ on the phases below and preserve the contributor's authorship and credit.
    sandboxed. Use precisely:
 
    ```bash
-   HOME=$(mktemp -d) XDG_CONFIG_HOME= XDG_DATA_HOME= XDG_CACHE_HOME= go test ./...
+   scripts/run-isolated.py go test ./...
    ```
 
 6. **Format and vet before every push:**

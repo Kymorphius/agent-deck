@@ -107,9 +107,9 @@ is it pinned? is it actually used?
 ```bash
 git diff "$MB" HEAD -- go.mod | grep -E '^\+\s*replace\s'      # must print nothing — automatic stop
 added | grep -n 'GOPROXY'                                       # must print nothing — automatic stop
-HOME=$(mktemp -d) XDG_CONFIG_HOME= XDG_DATA_HOME= XDG_CACHE_HOME= go mod verify   # "all modules verified"
+scripts/run-isolated.py go mod verify   # "all modules verified"
 # optional but appreciated as PR evidence:
-HOME=$(mktemp -d) XDG_CONFIG_HOME= XDG_DATA_HOME= XDG_CACHE_HOME= govulncheck ./...
+scripts/run-isolated.py govulncheck ./...
 ```
 
 ## 10. Workflow safety (if you must touch `.github/` — separate PR, human-gated)

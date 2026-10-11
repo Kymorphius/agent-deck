@@ -36,7 +36,7 @@ Reproduction on main (v1.9.71), then with this branch:
     $ agent-deck list
     opencode-fix   idle      ~/src/app      # 14:02:12
 
-Sandboxed suite: `HOME=$(mktemp -d) XDG_CONFIG_HOME= XDG_DATA_HOME= XDG_CACHE_HOME= go test ./...` → ok, all packages.
+Sandboxed suite: `scripts/run-isolated.py go test ./...` → ok, all packages.
 
 Revert-check: with the non-test hunks reverted, `TestOpenCodeStatusFromSSE`
 fails as expected (`status_test.go:88: got "running", want "idle"`), so the
@@ -59,7 +59,7 @@ they finish — can you fix the status so I stop attaching to dead sessions?"
 
 - [x] Targeted diff: one problem, no unrelated changes
 - [x] Tests added or updated for new behavior
-- [x] Test suite passes sandboxed: `HOME=$(mktemp -d) XDG_CONFIG_HOME= XDG_DATA_HOME= XDG_CACHE_HOME= go test ./...`
+- [x] Test suite passes sandboxed: `scripts/run-isolated.py go test ./...`
 - [x] If this touches a hot path (list, status, session output, startup, tmux layer): before/after timing evidence included
 - [x] CHANGELOG.md untouched (entries are added at landing)
 - [x] AI-assisted? Disclosed above, with validation evidence, and I can answer questions about the code

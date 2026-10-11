@@ -79,7 +79,7 @@ spawns storage watchers, status workers, and tickers. Wrap it in
 
 Copy `scripts/verify-tui-eval-seam-c.sh` as a template. The pattern:
 
-1. Isolate: `HOME=$(mktemp -d)` so production state is untouched.
+1. Isolate: `scripts/run-isolated.py go test ./internal/ui/...` to isolate configuration, reuse Go caches and clean up the temporary HOME.
 2. Write a minimal `config.toml` into `$HOME/.agent-deck/`.
 3. `tmux new-session -d -s <name> -x 180 -y 50 "env ... agent-deck"`.
 4. Poll `tmux capture-pane -p` until a startup string appears.
