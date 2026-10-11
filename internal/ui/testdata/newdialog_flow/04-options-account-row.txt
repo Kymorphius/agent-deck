@@ -1,5 +1,4 @@
                                                                                                     
-                                                                                                    
        ╭────────────────────────────────────────────────────────────────────────────────────╮       
        │                                                                                    │       
        │                                                                                    │       
@@ -11,7 +10,7 @@
        │      > demo                                                                        │       
        │                                                                                    │       
        │      Command:                                                                      │       
-       │        shell     claude     gemini     opencode     codex     pi     copilot       │       
+       │        shell     codex     claude     gemini     opencode     pi     copilot       │       
        │        crush     muse     cursor agent     hermes     deepseek     omp             │       
        │                                                                                    │       
        │      Model ID:                                                                     │       
@@ -39,6 +38,8 @@
        │      ▶ Account:                                                                    │       
        │          inherit     personal     work                                             │       
        │                                                                                    │       
+       │      [ Save as default (^D) ]                                                      │       
+       │                                                                                    │       
        │      [ Create session ]                                                            │       
        │                                                                                    │       
        │                                                                                    │       
@@ -46,5 +47,4 @@
        │                                                                                    │       
        │                                                                                    │       
        ╰────────────────────────────────────────────────────────────────────────────────────╯       
-                                                                                                    
                                                                                                     

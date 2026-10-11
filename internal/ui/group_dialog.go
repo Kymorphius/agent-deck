@@ -55,12 +55,11 @@ type GroupDialog struct {
 	// suggestProvider supplies the candidate corpus (recents + group defaults)
 	// each time the dialog opens; typing fuzzy-filters it live, and path-shaped
 	// queries additionally pull filesystem subdirectory completions.
-	suggestProvider        func() []string
-	allPathSuggestions     []string // full candidate corpus from the provider
-	pathSuggestions        []string // filtered subset shown in the dropdown
-	pathSuggestionCursor   int      // highlighted index into pathSuggestions (-1 = none)
-	pathSuggestionsHidden  bool     // true after Esc until the user types again
-	pathDropdownLineOffset int      // content line of the Default Path row (View-computed)
+	suggestProvider       func() []string
+	allPathSuggestions    []string // full candidate corpus from the provider
+	pathSuggestions       []string // filtered subset shown in the dropdown
+	pathSuggestionCursor  int      // highlighted index into pathSuggestions (-1 = none)
+	pathSuggestionsHidden bool     // true after Esc until the user types again
 }
 
 // groupDialogInputWidth is the text inputs' width when the dialog has room.
@@ -731,20 +730,6 @@ func (g *GroupDialog) View() string {
 		content = g.nameInput.View()
 	}
 
-	// Content line of the Default Path row (for anchoring the suggestion
-	// dropdown overlay): title + blank, then the optional toggle tabs block
-	// (2 lines) and parent info block (2 lines), then the Name row.
-	g.pathDropdownLineOffset = 2
-	if g.mode == GroupDialogCreate {
-		if g.CanToggle() {
-			g.pathDropdownLineOffset += 2
-		}
-		if g.parentName != "" {
-			g.pathDropdownLineOffset += 2
-		}
-		g.pathDropdownLineOffset += 1 // Name row
-	}
-
 	titleStyle := DialogTitleStyle.Width(titleWidth)
 	hintStyle := lipgloss.NewStyle().Foreground(ColorComment)
 	// The hint stays on one row no wider than the dialog. A wider hint used
@@ -784,6 +769,25 @@ func (g *GroupDialog) View() string {
 	dialog := DialogBoxStyle.
 		Width(dialogWidth).
 		Render(dialogContent)
+	// matrix/hardened: path candidates belong to the form, not a floating
+	// layer over its footer. Grow/fit the form and keep input + selection together.
+	if g.IsPathDropdownVisible() {
+		menuHeight := max(3, min(8, g.height-lipgloss.Height(dialog)-1))
+		menu := g.renderPathDropdown(titleWidth, menuHeight)
+		rows := strings.Split(content, "\n")
+		focus := 0
+		for i, row := range rows {
+			if strings.HasPrefix(strings.TrimSpace(stripAnsi(row)), "Default Path:") {
+				rows[i] += "\n" + menu
+				focus = i
+				break
+			}
+		}
+		dialog = renderFittedDialog(DialogBoxStyle.Width(dialogWidth), g.height, dialogSections{
+			head: []string{titleStyle.Render(title), ""}, body: rows, focus: focus,
+			foot: []string{errContent, "", hint},
+		})
+	}
 
 	placed := lipgloss.Place(
 		g.width,
@@ -792,34 +796,6 @@ func (g *GroupDialog) View() string {
 		lipgloss.Center,
 		dialog,
 	)
-
-	// Overlay the path suggestion dropdown as a floating menu anchored to the
-	// Default Path row, so its appearance/disappearance never shifts layout.
-	if g.IsPathDropdownVisible() {
-		topRow, leftCol := dialogOrigin(g.width, g.height, lipgloss.Width(dialog), lipgloss.Height(dialog))
-		// Rows: border (1) + vertical padding (1) + content offset. Columns:
-		// measure the rendered row's own leading spaces so JoinVertical's
-		// centering can never skew the anchor.
-		overlayRow := topRow + 1 + 1 + g.pathDropdownLineOffset
-		dialogLines := strings.Split(dialog, "\n")
-		lineIdx := overlayRow - topRow
-		leading := 0
-		if lineIdx >= 0 && lineIdx < len(dialogLines) {
-			leading = leadingVisibleSpaces(stripAnsi(dialogLines[lineIdx]))
-		}
-		overlayCol := leftCol + leading
-		// matrix/hardened: use the fitted row, then place the menu below the
-		// input. Padding and viewport scrolling can change the original offset.
-		for i, line := range dialogLines {
-			if strings.HasPrefix(strings.TrimLeft(stripAnsi(line), " │"), "Default Path:") {
-				overlayRow = topRow + i + 1
-				overlayCol = leftCol + 1
-				break
-			}
-		}
-		suggestionsOverlay := g.renderPathDropdown(min(lipgloss.Width(dialog)-2, g.width-overlayCol), g.height-overlayRow)
-		placed = overlayDropdown(placed, suggestionsOverlay, overlayRow, overlayCol)
-	}
 
 	return placed
 }
@@ -886,21 +862,15 @@ func (g *GroupDialog) renderPathDropdown(bounds ...int) string {
 	} else {
 		footerText = " ↑↓ select │ Tab/Enter accept │ Esc dismiss "
 	}
+	// matrix/hardened: retain complete accept/dismiss hints at narrow widths.
+	if len(bounds) >= 2 {
+		footerText = renderDialogFooter(bounds[0]-4, " │ ", []string{
+			fmt.Sprintf("%d/%d", g.pathSuggestionCursor+1, len(g.pathSuggestions)),
+			"↑↓", "Tab/Enter accept", "Esc",
+		}, 0, 1)
+	}
 	b.WriteString("\n")
 	b.WriteString(lipgloss.NewStyle().Foreground(ColorBorder).Background(menuBg).Render(footerText))
 
 	return renderPathDropdownBox(b.String(), ColorBorder, bounds...)
-}
-
-// leadingVisibleSpaces counts the space characters before the first
-// non-space character of an ANSI-stripped line.
-func leadingVisibleSpaces(s string) int {
-	n := 0
-	for _, r := range s {
-		if r != ' ' {
-			break
-		}
-		n++
-	}
-	return n
 }

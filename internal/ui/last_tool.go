@@ -15,12 +15,16 @@ const lastUsedToolMetaKey = "last_used_tool"
 // resolveInitialTool decides which tool the new-session dialog should preselect
 // on open. An explicit [default_tool] config value always wins; with nothing
 // configured the remembered last-used tool is used; when neither is set it
-// returns "" so the dialog preselects shell exactly as on first run.
+// falls back to Codex for a fresh profile (matrix/hardened).
 func resolveInitialTool(configDefault, remembered string) string {
 	if strings.TrimSpace(configDefault) != "" {
 		return configDefault
 	}
-	return remembered
+	if strings.TrimSpace(remembered) != "" {
+		return remembered
+	}
+	// matrix/hardened: new-session first-run default is Codex.
+	return "codex"
 }
 
 // rememberedTool returns the last successfully-submitted tool persisted in the

@@ -140,6 +140,7 @@ const (
 	focusBranch                      // branch input (conditional — only when worktree enabled).
 	focusOptions                     // tool-specific options panel (conditional).
 	focusRemoteMCPs                  // MCPs defined on the target remote (conditional, remote targets only).
+	focusSaveDefaults                // matrix/hardened: explicitly persist this launch preset.
 	focusCreate                      // explicit "[ Create session ]" button; the one row where Enter submits.
 )
 
@@ -167,6 +168,7 @@ type NewDialog struct {
 	commandInput          textinput.Model
 	modelInput            textinput.Model
 	reasoningEffort       string
+	defaultsStatus        string              // matrix/hardened: visible readback of a successful save.
 	claudeOptions         *ClaudeOptionsPanel // Claude-specific options (concrete for value extraction).
 	geminiOptions         *YoloOptionsPanel   // Gemini YOLO panel (concrete for value extraction).
 	codexOptions          *YoloOptionsPanel   // Codex YOLO panel (concrete for value extraction).
@@ -409,7 +411,8 @@ func displayCommandPreset(cmd string) string {
 // flag off FilterVisibleToolNames is a no-op, so the list is byte-identical to
 // before.
 func buildPresetCommands() []string {
-	presets := []string{"", "claude", "gemini", "opencode", "codex", "pi", "copilot", "crush", "muse", "cursor", "hermes", "deepseek", "omp"}
+	// matrix/hardened: put Codex before Claude in the tool picker.
+	presets := []string{"", "codex", "claude", "gemini", "opencode", "pi", "copilot", "crush", "muse", "cursor", "hermes", "deepseek", "omp"}
 	if customTools := session.GetCustomToolNames(); len(customTools) > 0 {
 		presets = append(presets, customTools...)
 	}
@@ -559,6 +562,7 @@ func (d *NewDialog) ShowInGroup(groupPath, groupName, defaultPath string, conduc
 	d.visible = true
 	d.focusIndex = 0
 	d.validationErr = ""
+	d.defaultsStatus = ""
 	d.nameInput.SetValue("")
 	d.nameInput.Focus()
 	d.suggestionNavigated = false // reset on show
@@ -654,6 +658,11 @@ func (d *NewDialog) ShowInGroup(groupPath, groupName, defaultPath string, conduc
 		// no default is configured.
 		if dm := preselectDefaultModel(userConfig, d.GetSelectedCommand()); dm != "" {
 			d.modelInput.SetValue(dm)
+		}
+		// matrix/hardened: explicit saved controls override inferred defaults;
+		// the path was freshly resolved for this opening and is never restored.
+		if p := userConfig.NewSessionDefaults; p != nil && userConfig.DefaultTool == p.Tool {
+			d.applySavedDefaults(p)
 		}
 	}
 	d.branchInput.Placeholder = d.branchPrefix + "branch-name"
@@ -820,6 +829,8 @@ func (d *NewDialog) shouldHandleEnterLocally() bool {
 	// The Create button is the one row where Enter means "create now".
 	case focusCreate:
 		return false
+	case focusSaveDefaults:
+		return true
 	// Path opens its own browse dropdown (or advances on a usable path).
 	case focusPath:
 		return true
@@ -1886,6 +1897,9 @@ func (d *NewDialog) rebuildFocusTargets() {
 	// The Create button is always last: Enter walks the form top to bottom and
 	// lands here, so nothing is created until the user asks for it (Ctrl+S
 	// remains the create-from-anywhere shortcut).
+	if !d.remoteTarget {
+		targets = append(targets, focusSaveDefaults)
+	}
 	targets = append(targets, focusCreate)
 	d.focusTargets = targets
 	// Clamp focusIndex to valid range.
@@ -2039,6 +2053,11 @@ func (d *NewDialog) Update(msg tea.Msg) (*NewDialog, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		// matrix/hardened: saving defaults never enters the create-session path.
+		if msg.String() == "ctrl+d" || (msg.String() == "enter" && d.currentTarget() == focusSaveDefaults) {
+			d.saveDefaultsFromUI()
+			return d, nil
+		}
 		if d.branchPicker != nil && d.branchPicker.IsVisible() {
 			if selected, handled := d.branchPicker.Update(msg); handled {
 				if d.branchPicker == nil || !d.branchPicker.IsVisible() {
@@ -3425,6 +3444,21 @@ func (d *NewDialog) View() string {
 
 	// Create button: the explicit end of the Enter walk. Ctrl+S still creates
 	// from any row.
+	// matrix/hardened: a keyboard-focusable save action, separate from create.
+	if !d.remoteTarget {
+		content.WriteString("\n")
+		markFocusedRow(focusSaveDefaults)
+		if cur == focusSaveDefaults {
+			content.WriteString(activeLabelStyle.Render("▶ [ Save as default (^D) ]"))
+		} else {
+			content.WriteString(labelStyle.Render("  [ Save as default (^D) ]"))
+		}
+		content.WriteString("\n")
+		if d.defaultsStatus != "" {
+			content.WriteString(lipgloss.NewStyle().Foreground(ColorCyan).Render("  " + d.defaultsStatus))
+			content.WriteString("\n")
+		}
+	}
 	content.WriteString("\n")
 	markFocusedRow(focusCreate)
 	if cur == focusCreate {
@@ -3507,6 +3541,8 @@ func (d *NewDialog) View() string {
 		helpText = "Space/y toggle │ Tab/↑↓ navigate │ " + rowHint + " │ Esc cancel"
 	} else if cur == focusCreate {
 		helpText = "Enter create │ Shift+Tab back │ ↑↓ navigate │ Esc cancel"
+	} else if cur == focusSaveDefaults {
+		helpText = "Enter/^D save defaults │ Path excluded │ Tab next │ Esc cancel"
 	}
 	content.WriteString(helpStyle.Render(helpText))
 
