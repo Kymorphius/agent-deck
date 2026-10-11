@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.26`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.27`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -66,7 +66,7 @@
 - `internal/session/claude_hooks.go`：`isAgentDeckHookCommand` 的判断规则：先去掉开头的 `VAR=值`，再要求第二个词是 `hook-handler`、程序名的文件名部分是 `agent-deck`。`RemoveClaudeHooks` 会扫描全部事件，并做 UTC 时间戳备份（约 387–414 行）。
 - `cmd/agent-deck/main.go`（约 4845、5070 行）：`agent-deck uninstall` 会移除这些钩子。`uninstall.sh` 第 253 行附近的 jq 过滤用的是同一套规则（正则），写回时用 `cat >` 保持软链接和权限。
 
-**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.25`。
+**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.27`。
 
 **测试**：以 `_hardened_test.go` 结尾的文件、`update_check_disable_test.go`、`update_timer_wiring_test.go` 等是新增或调整过的测试；`testdata/goldens/*` 里的快照已经按加固后的输出更新。
 
@@ -295,3 +295,12 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 - 标记范围是当前 profile 的会话列表；Recall 跨 profile 的历史绑定不等于当前列表仍有管理会话。每次渲染重新核对当前列表，加入或移除会话后不会保留旧标签。
 - 显示与 Enter 共用匹配逻辑：先匹配明确的管理会话 ID，再按 harness 匹配 Claude 对话 ID 或 Codex 线程 ID；空原生 ID 不匹配任何未设置的字段。
 - 验证：`TestMatrixRecallManagement_*` 覆盖真实 Home 渲染、Codex 匹配、跨 harness、空 ID、陈旧绑定、移除后的重算以及显示和 Enter 目标一致；Recall 和对话框快照验证终端宽度与结果滚动。
+
+## 24. 工具身份保持启动配置
+
+`1.16.26+matrix.27` 修复 Codex 启动后的状态刷新把会话类型写成 Claude 的问题。默认身份注入会在完整启动命令前加 `export`，并在说明参数中包含 Claude 的 CLI 示例；原识别器认不出前导命令时扫描全文，优先匹配 `claude`，随后状态保存把误判写入工具配置。
+
+- **matrix/hardened:** 命令识别只接受实际程序位置和明确支持的 npm 启动包；参数、提示词、路径中的工具名不参与全文匹配。无法确认的复杂 shell 包装不据此猜测工具。
+- **matrix/hardened:** 后台状态刷新只允许空身份或 `shell` 初次识别为支持的工具，已经配置的内建和自定义工具保持不变。用户显式修改工具、命令和跨工具切换仍使用原来的保存路径。
+- 回归覆盖默认 Codex 注入命令形状、shell 包装、说明文字中的其他工具、已识别运行时保持，以及状态刷新后数据库回读与显式工具编辑。
+- 部署需核对 TUI 和 Web 实际加载的构建；只替换磁盘文件不能保证旧进程立即使用修复。管理界面支持原地重载，tmux 中的 AI 进程无需重启。

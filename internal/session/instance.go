@@ -6879,23 +6879,15 @@ func (i *Instance) updateStatus(pass *StatusUpdatePass, syncMetadata bool) error
 		}
 	}
 
-	// Update tool detection dynamically (enables fork when wrapped tools start).
-	// Only built-in tool identities are rewritten here. Custom tools like
-	// "my-codex" should keep their configured identity even when tmux correctly
-	// detects the wrapped CLI as Codex.
-	if detectedTool := i.tmuxSession.DetectTool(); detectedTool != "" {
-		if !isBuiltinToolName(i.Tool) && GetToolDef(i.Tool) != nil {
-			// Preserve configured custom tool names.
-		} else {
-			switch detectedTool {
-			case "claude", "gemini", "opencode", "codex":
-				i.Tool = detectedTool
-			case "shell":
-				switch i.Tool {
-				case "", "shell", "claude", "gemini", "opencode", "codex":
-					i.Tool = detectedTool
-				}
-			}
+	// matrix/hardened: Tool is launch configuration, not a foreground-process
+	// observation. Prompts, child processes and shell wrappers can resemble a
+	// different tool; persisting that guess selects the wrong builder on restart.
+	// Only give an unconfigured shell its initial identity (enabling wrapped-tool
+	// fork support). Explicit tool edits and harness switches set Tool themselves.
+	if i.Tool == "" || i.Tool == "shell" {
+		switch detectedTool := i.tmuxSession.DetectTool(); detectedTool {
+		case "claude", "gemini", "opencode", "codex", "shell":
+			i.Tool = detectedTool
 		}
 	}
 
