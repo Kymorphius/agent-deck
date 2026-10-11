@@ -1,12 +1,13 @@
                                                                                 
                                                                                 
                                                                                 
-                                                                                
                  ╭────────────────────────────────────────────╮                 
                  │                                            │                 
                  │              Create Subgroup               │                 
                  │                                            │                 
                  │             Root ─── [Subgroup]            │                 
+                 │                                            │                 
+                 │  Target: Local                             │                 
                  │                                            │                 
                  │                Parent: alpha               │                 
                  │                                            │                 
@@ -17,7 +18,6 @@
                  │    Tab next │ Enter confirm │ Esc cancel   │                 
                  │                                            │                 
                  ╰────────────────────────────────────────────╯                 
-                                                                                
                                                                                 
                                                                                 
                                                                                 

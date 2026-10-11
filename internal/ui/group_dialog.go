@@ -50,6 +50,9 @@ type GroupDialog struct {
 	// the remote's own state DB via SSH instead of the local group tree; the
 	// create handler in home.go uses RemoteName() to pick the routing.
 	remoteName string
+	// matrix/hardened: target selection is independent of cursor ownership.
+	creationTargets                                  []string
+	originTarget, originParentPath, originParentName string
 
 	// Fzf-like live suggestions for the Default Path field in Create mode.
 	// suggestProvider supplies the candidate corpus (recents + group defaults)
@@ -89,8 +92,10 @@ func NewGroupDialog() *GroupDialog {
 func (g *GroupDialog) Show() {
 	g.visible = true
 	g.mode = GroupDialogCreate
+	g.creationTargets = nil
 	g.remoteName = "" // local
-	g.groupPath = ""  // No parent = root level
+	g.contextParentPath, g.contextParentName = "", ""
+	g.groupPath = "" // No parent = root level
 	g.parentName = ""
 	g.validationErr = ""
 	g.nameInput.SetValue("")
@@ -103,7 +108,9 @@ func (g *GroupDialog) Show() {
 func (g *GroupDialog) ShowCreateSubgroup(parentPath, parentName string) {
 	g.visible = true
 	g.mode = GroupDialogCreate
-	g.remoteName = ""        // local
+	g.creationTargets = nil
+	g.remoteName = "" // local
+	g.contextParentPath, g.contextParentName = "", ""
 	g.groupPath = parentPath // Parent path for the new subgroup
 	g.parentName = parentName
 	g.validationErr = ""
@@ -119,6 +126,7 @@ func (g *GroupDialog) ShowCreateSubgroup(parentPath, parentName string) {
 func (g *GroupDialog) ShowCreateWithContext(parentPath, parentName string) {
 	g.visible = true
 	g.mode = GroupDialogCreate
+	g.creationTargets = nil
 	g.remoteName = "" // local
 	g.contextParentPath = parentPath
 	g.contextParentName = parentName
@@ -147,6 +155,7 @@ func (g *GroupDialog) ShowCreateWithContextDefaultRoot(parentPath, parentName st
 	g.mode = GroupDialogCreate
 	g.contextParentPath = parentPath
 	g.contextParentName = parentName
+	g.creationTargets = nil
 	g.remoteName = "" // local
 	g.validationErr = ""
 	g.nameInput.SetValue("")
@@ -169,6 +178,7 @@ func (g *GroupDialog) ShowCreateRemoteWithContext(parentPath, parentName, remote
 	g.mode = GroupDialogCreate
 	g.contextParentPath = parentPath
 	g.contextParentName = parentName
+	g.creationTargets = nil
 	g.remoteName = remoteName
 	g.validationErr = ""
 	g.nameInput.SetValue("")
@@ -197,6 +207,7 @@ func (g *GroupDialog) ShowCreateRemoteWithContextDefaultRoot(parentPath, parentN
 	g.mode = GroupDialogCreate
 	g.contextParentPath = parentPath
 	g.contextParentName = parentName
+	g.creationTargets = nil
 	g.remoteName = remoteName
 	g.validationErr = ""
 	g.nameInput.SetValue("")
@@ -557,6 +568,18 @@ func (g *GroupDialog) Update(msg tea.KeyMsg) (*GroupDialog, tea.Cmd) {
 	// toggle across both single-line inputs.
 	if g.mode == GroupDialogCreate {
 		switch msg.String() {
+		case "ctrl+t":
+			g.cycleCreationTarget(1)
+			return g, nil
+		case "left", "right", "space", "enter":
+			if g.focusIndex == 2 {
+				delta := 1
+				if msg.String() == "left" {
+					delta = -1
+				}
+				g.cycleCreationTarget(delta)
+				return g, nil
+			}
 		case "tab":
 			// Accept the highlighted path suggestion instead of advancing
 			// focus; the dropdown closes so the next Enter submits the form.
@@ -565,18 +588,25 @@ func (g *GroupDialog) Update(msg tea.KeyMsg) (*GroupDialog, tea.Cmd) {
 			}
 			if g.focusIndex == 0 {
 				g.focusPath()
+			} else if g.focusIndex == 1 && len(g.creationTargets) > 1 {
+				g.focusCreationTarget()
 			} else {
 				g.focusName()
 			}
 			return g, nil
 		case "shift+tab":
-			if g.focusIndex == 0 {
+			if g.focusIndex == 0 && len(g.creationTargets) > 1 {
+				g.focusCreationTarget()
+			} else if g.focusIndex == 0 || g.focusIndex == 2 {
 				g.focusPath()
 			} else {
 				g.focusName()
 			}
 			return g, nil
 		case "up", "down":
+			if g.focusIndex == 2 {
+				return g, nil
+			}
 			// Navigate the suggestion dropdown while it has matches to show;
 			// only when it does not (or the field is not focused) does Up/Down
 			// keep its Issue #1536 Root/Subgroup toggle role. No-op (falls
@@ -606,6 +636,9 @@ func (g *GroupDialog) Update(msg tea.KeyMsg) (*GroupDialog, tea.Cmd) {
 		}
 	}
 
+	if g.focusIndex == 2 {
+		return g, nil
+	}
 	var cmd tea.Cmd
 	prevPath := g.pathInput.Value()
 	if g.focusIndex == 1 {
@@ -663,16 +696,19 @@ func (g *GroupDialog) View() string {
 			content = fields
 		}
 
-		// Remote create (g on a remote row): make the routing explicit so the
-		// user knows the group will be created on the remote host, not locally.
-		if g.remoteName != "" {
-			remoteInfo := lipgloss.NewStyle().
-				// matrix/hardened: remote names must not widen the field block.
-				Width(min(titleWidth, cellWidth("Remote: "+g.remoteName))).
-				Foreground(ColorCyan).
-				Render("Remote: " + g.remoteName)
-			content = remoteInfo + "\n\n" + content
+		// matrix/hardened: always identify the destination; configured targets are selectable.
+		target := g.remoteName
+		if target == "" {
+			target = "Local"
 		}
+		label := "Target: " + target
+		if len(g.creationTargets) > 1 {
+			label = "Target: ← " + target + " → (^T)"
+		}
+		if g.focusIndex == 2 {
+			label = "▶ " + label
+		}
+		content = lipgloss.NewStyle().Width(titleWidth).Foreground(ColorCyan).Render(label) + "\n\n" + content
 
 		// Add Root/Subgroup toggle indicator when Tab toggle is available
 		if g.CanToggle() {
@@ -779,6 +815,29 @@ func (g *GroupDialog) View() string {
 		for i, row := range rows {
 			if strings.HasPrefix(strings.TrimSpace(stripAnsi(row)), "Default Path:") {
 				rows[i] += "\n" + menu
+				focus = i
+				break
+			}
+		}
+		dialog = renderFittedDialog(DialogBoxStyle.Width(dialogWidth), g.height, dialogSections{
+			head: []string{titleStyle.Render(title), ""}, body: rows, focus: focus,
+			foot: []string{errContent, "", hint},
+		})
+	}
+
+	// matrix/hardened: the target row must fit on small terminals as well.
+	if g.mode == GroupDialogCreate && !g.IsPathDropdownVisible() && lipgloss.Height(dialog) > g.height {
+		rows := strings.Split(content, "\n")
+		focus := 0
+		prefix := "Name:"
+		if g.focusIndex == 1 {
+			prefix = "Default Path:"
+		}
+		if g.focusIndex == 2 {
+			prefix = "▶ Target:"
+		}
+		for i, row := range rows {
+			if strings.HasPrefix(strings.TrimSpace(stripAnsi(row)), prefix) {
 				focus = i
 				break
 			}
