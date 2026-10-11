@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.21`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.22`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -66,7 +66,7 @@
 - `internal/session/claude_hooks.go`：`isAgentDeckHookCommand` 的判断规则：先去掉开头的 `VAR=值`，再要求第二个词是 `hook-handler`、程序名的文件名部分是 `agent-deck`。`RemoveClaudeHooks` 会扫描全部事件，并做 UTC 时间戳备份（约 387–414 行）。
 - `cmd/agent-deck/main.go`（约 4845、5070 行）：`agent-deck uninstall` 会移除这些钩子。`uninstall.sh` 第 253 行附近的 jq 过滤用的是同一套规则（正则），写回时用 `cat >` 保持软链接和权限。
 
-**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.21`。
+**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.22`。
 
 **测试**：以 `_hardened_test.go` 结尾的文件、`update_check_disable_test.go`、`update_timer_wiring_test.go` 等是新增或调整过的测试；`testdata/goldens/*` 里的快照已经按加固后的输出更新。
 
@@ -228,16 +228,20 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 
 ## 15. 异常中断的分类（我们自己加的功能）
 
-2026-10-09 新增。Claude 的回合因 API 错误中途结束时（`API Error: Connection lost mid-response`、`Connection dropped (ECONNRESET)`、`Can't reach the API server (ENOTFOUND)`、过载、账号被暂停等），Claude Code 不触发 `Stop`，只重画一个空输入框。agent-deck 原来把它当成正常做完：灯变 waiting，子状态是 `idle-at-empty-prompt`，看不出活只干了一半、需要说"继续"。窗格上的那行横幅也认不出来：它是普通的 `⏺` 回复行，没有 #1400 要求的 ` · ` 分隔符，而且措辞和普通文字重合。
+2026-10-09 新增，2026-10-10 扩展到 Codex 并加了查看入口（`matrix.22`）。回合没做完就停下的会话，原来看上去和正常做完一模一样：灯变 waiting，看不出活只干了一半、需要说"继续"。
 
-- **判断依据**：读 Claude 的对话记录，和上游判断用量超限（#1802，`usagelimit.go`）用的是同一个来源。主对话（不含子代理）里最新一条用户或助手记录，如果是 `isApiErrorMessage: true` 的助手消息，就是异常中断；之后只要出现任何用户记录（手打的"继续"、用量重置后自动续跑的提示），就算已经过去了。2026-10-09 用本机全部对话记录核对过：83 条 API 错误记录，每条后面紧跟的都是用户记录；每个错误点都能识别；完整文件里只有 2 段早已放下的旧对话仍停在错误上。
-- **新子状态** `api-interrupted`，粗状态（running/waiting/idle…）不变。`substate_detail` 是错误种类加信息，例如 `server_error: Connection lost mid-response.`、`rate_limit: You've hit your session limit · resets 11:30pm (Asia/Shanghai)`。错误种类就是记录里的 `error` 字段（Claude Code 2.1.295 的枚举：authentication_failed、oauth_org_not_allowed、account_on_hold、verification_required、billing_error、rate_limit、overloaded、invalid_request、model_not_found、server_error、unknown、max_output_tokens、cloud_credential_error）。
-- **优先级**：只在窗格没有更具体结论时套用（窗格是 none、`idle-at-empty-prompt` 或 `hook-lag`）。窗格显示正在运行、打开的菜单、后台任务、401 或模型不可用横幅时，保留窗格的结论。实时的 `Substate()` 里上游的 `usage-limit`（5 小时内的 429）仍然优先。
-- **显示**：TUI 列表里 waiting/idle 的行显示红色 `↯`（running 行不显示：判断结果每几秒才刷新一次，新回合可能已经开始）；内嵌侧栏显示子状态名；`agent-deck status -v` 显示 `[interrupted by API error: <详情>]`；`list --json`、`session show --json`、web 接口带 `substate`/`substateDetail`；web 指挥中心面板显示 `interrupted (API error)`。
-- **开销**：`updateStatus` 释放锁之后（defer）刷新，每个会话最多 5 秒读一次，从文件末尾往回读，碰到第一条用户或助手记录就停（最多回读 8 MiB，超过 1 MiB 的行不读，直接当作"无法判断"）。TUI 渲染路径（`CachedSubstate`）只读内存里的结果。只对本地 Claude 会话做；SSH 会话和其它工具跳过。
-- **已知局限**：错误之后在 Claude 里执行本地斜杠命令（`/cost`、`/model`）也会写一条用户记录，会把标记清掉，尽管任务并没有继续。没有改通知：父会话收到的"子会话完成"事件里带着 `substate`，但投递逻辑没有因此改变。
-- **改动地图**：`internal/session/matrix_turn_interrupt.go`（新文件：扫描、缓存、`SubstateAPIInterrupted`）；`internal/session/instance.go`（`matrixInterrupt` 字段、`updateStatus` 的 defer、`Substate`/`CachedSubstate` 套用、`SubstateDetail`，共 4 处）；`internal/ui/connection_status.go`（`↯`）；`cmd/agent-deck/cli_utils.go`（`SubstateLabel`）；`cmd/agent-deck/main.go`（`status -v` 附详情）；`internal/web/static/app/panes/CommandCenterPane.js`（标签）。
-- **测试**：`internal/session/matrix_turn_interrupt_test.go`（真实记录的形状：错误后跟 `turn_duration`、之后有用户记录、子代理错误、超长行、跨多个读取块、改名后缓存失效、非本地 Claude 跳过）、`internal/ui/matrix_turn_interrupt_glyph_test.go`。
+- **Claude**：回合因 API 错误中途结束时（`API Error: Connection lost mid-response`、`Connection dropped (ECONNRESET)`、`Can't reach the API server (ENOTFOUND)`、过载、账号被暂停等），Claude Code 不触发 `Stop`，只重画一个空输入框。窗格上那行横幅认不出来：它是普通的 `⏺` 回复行，没有 #1400 要求的 ` · ` 分隔符，措辞也和普通文字重合。改读对话记录，和上游判断用量超限（#1802，`usagelimit.go`）是同一个来源：主对话（不含子代理）里最新一条用户或助手记录，如果是 `isApiErrorMessage: true` 的助手消息，就是中断；之后只要出现任何用户记录（手打的"继续"、用量重置后自动续跑的提示），就算已经过去了。2026-10-09 用本机全部对话记录核对过：83 条 API 错误记录，每条后面紧跟的都是用户记录；每个错误点都能识别。
+- **Codex**：窗格显示 `■ Conversation interrupted - use /feedback if something went wrong`，rollout 里记的是 `event_msg` 的 `turn_aborted`（`reason: "interrupted"`）。Codex 不往 rollout 里写错误事件，被打断是它唯一会记下的异常结束。判断：最新一个回合事件（`task_started`/`turn_started`、`task_complete`/`turn_complete`、`turn_aborted`、`user_message`）是 `turn_aborted`。插话（steer）打断后会马上开下一轮，回"继续"会写 `user_message` 和 `task_started`，两种都会清掉标记。rollout 不记是谁打断的（按 Esc、共享对话的另一个客户端、app server），所以详情只写 Codex 给的原因。子代理线程跳过：父代理打断它们是正常调度。rollout 用 `CodexRolloutPathForInstance` 找（按会话的 `CodexSessionID` 和 Codex 主目录）。2026-10-11 核对本机 2634 个 rollout：22 个主线程停在被打断上，201 个子代理线程按设计跳过。
+- **子状态** `turn-interrupted`（`matrix.18` 时叫 `api-interrupted`，只管 Claude），粗状态（running/waiting/idle…）不变。`substate_detail` 是原因：Claude 是错误种类加信息，例如 `server_error: Connection lost mid-response.`、`rate_limit: You've hit your session limit · resets 11:30pm (Asia/Shanghai)`；错误种类就是记录里的 `error` 字段（Claude Code 2.1.295 的枚举：authentication_failed、oauth_org_not_allowed、account_on_hold、verification_required、billing_error、rate_limit、overloaded、invalid_request、model_not_found、server_error、unknown、max_output_tokens、cloud_credential_error）。Codex 是 `turn_aborted: interrupted`。
+- **优先级**：只在窗格没有更具体结论时套用（窗格是 none、`idle-at-empty-prompt` 或 `hook-lag`）。窗格显示正在运行、打开的菜单、后台任务、401 或模型不可用横幅、Codex 的用量或登录横幅时，保留窗格的结论。实时的 `Substate()` 里上游的 `usage-limit`（5 小时内的 429）仍然优先。
+- **在哪里看**：
+  - TUI 列表里 waiting/idle 的行显示红色 `↯`。running 行不显示：判断结果每几秒才刷新一次，新回合可能已经开始。
+  - 顶部筛选栏固定有一个 `↯ N` 计数（没有时是灰色的 `↯ 0`，有时变红），按 `~` 只列出被中断的会话，再按一次 `~` 或按 `0` 回到全部。没有时显示 "No interrupted turns"。帮助页（SEARCH & FILTER）和筛选栏的按键提示（`!@#&~ filter`）里都有 `~`。归档的会话不算。
+  - `agent-deck status -v` 显示 `[turn interrupted: <原因>]`；`list --json`、`session show --json`、web 接口带 `substate`/`substateDetail`；web 指挥中心面板显示 `turn interrupted`；内嵌侧栏显示子状态名。
+- **开销**：`updateStatus` 释放锁之后（defer）刷新，每个会话最多 5 秒读一次，从文件末尾往回读，碰到第一条起决定作用的记录就停（最多回读 8 MiB，超过 1 MiB 的行不读，直接当作"无法判断"）。TUI 渲染路径（`CachedSubstate`）、筛选和计数只读内存里的结果。只对本地 Claude 和 Codex 会话做；SSH 会话和其它工具跳过。和上游的状态筛选一样，筛选开着时列表不会因为后台状态变化自动重排，计数每 0.5 秒更新。
+- **已知局限**：Claude 中断后执行本地斜杠命令（`/cost`、`/model`）也会写一条用户记录，会把标记清掉，尽管任务并没有继续。Codex 的"被打断"包括你自己按 Esc。没有改通知：父会话收到的"子会话完成"事件里带着 `substate`，但投递逻辑没有因此改变。`tools/visualcheck` 的快照没有重新生成（我们分支一直没维护它）。
+- **改动地图**：`internal/session/matrix_turn_interrupt.go`（新文件：Claude/Codex 扫描、缓存、`SubstateTurnInterrupted`）；`internal/session/instance.go`（`matrixInterrupt` 字段、`updateStatus` 的 defer、`Substate`/`CachedSubstate` 套用、`SubstateDetail`，共 4 处）；`internal/ui/matrix_turn_interrupt_filter.go`（新文件：`~`、`↯ N`、空列表提示、`matrixShowsTurnInterrupted`）；`internal/ui/connection_status.go`（`↯`）；`internal/ui/home.go`（渲染快照的 `matrixArchived`、三处筛选改调 `matchesSessionFilter`、`~` 键、筛选栏计数和按键提示、`statusFilterLabel`、空列表，共 9 处）；`internal/ui/help.go`；`cmd/agent-deck/cli_utils.go`（`SubstateLabel`）；`cmd/agent-deck/main.go`（`status -v` 附原因）；`internal/web/static/app/panes/CommandCenterPane.js`（标签）。
+- **测试**：`internal/session/matrix_turn_interrupt_test.go`（Claude 和 Codex 的真实记录形状：错误后跟 `turn_duration`、之后有用户记录、子代理错误、超长行、跨多个读取块、改名后缓存失效、插话、Codex 子代理线程、经 `CODEX_HOME` 的完整刷新）、`internal/ui/matrix_turn_interrupt_glyph_test.go`、`internal/ui/matrix_turn_interrupt_filter_test.go`（计数不含 running 和归档、`~` 来回切换、空列表）。筛选栏多了 `↯ 0` 和 `~`，`internal/ui/testdata` 下的 active_filter、update_banner、runtime_health_warning、devanagari 快照已用 `UPDATE_GOLDEN=1` 重新生成，差别只有这两处。
 
 ## 16. 网页终端的图片按钮（我们自己加的功能）
 

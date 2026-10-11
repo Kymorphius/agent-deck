@@ -109,12 +109,12 @@ func TestMatrixInterruptMessage_Truncates(t *testing.T) {
 
 func TestMatrixOverlayTurnInterrupt(t *testing.T) {
 	inst := &Instance{Tool: "claude", ClaudeSessionID: "sid"}
-	inst.matrixInterrupt = matrixTurnInterruptMemo{sessionID: "sid", found: true,
+	inst.matrixInterrupt = matrixTurnInterruptMemo{key: "claude:sid", found: true,
 		verdict: matrixTurnInterrupt{Kind: "server_error", Message: "Connection lost mid-response."}}
 
 	for _, sub := range []Substate{SubstateNone, SubstateIdleAtEmptyPrompt, SubstateHookLag} {
-		if got := inst.matrixOverlayTurnInterrupt(sub); got != SubstateAPIInterrupted {
-			t.Errorf("overlay(%q) = %q, want api-interrupted", sub, got)
+		if got := inst.matrixOverlayTurnInterrupt(sub); got != SubstateTurnInterrupted {
+			t.Errorf("overlay(%q) = %q, want turn-interrupted", sub, got)
 		}
 	}
 	// A pane that says something more specific keeps it.
@@ -132,18 +132,92 @@ func TestMatrixOverlayTurnInterrupt(t *testing.T) {
 	}
 }
 
-// Non-Claude and SSH sessions have no local transcript; the refresh clears any
-// memo instead of reading files.
-func TestMatrixRefreshTurnInterrupt_SkipsNonLocalClaude(t *testing.T) {
+// Sessions with no local transcript (other tools, SSH, unbound) clear any memo
+// instead of reading files.
+func TestMatrixRefreshTurnInterrupt_SkipsNonLocal(t *testing.T) {
 	for _, inst := range []*Instance{
-		{Tool: "codex", ClaudeSessionID: "sid"},
+		{Tool: "gemini", ClaudeSessionID: "sid", CodexSessionID: "sid"},
 		{Tool: "claude", ClaudeSessionID: "sid", SSHHost: "dev"},
+		{Tool: "codex", CodexSessionID: "sid", SSHHost: "dev"},
 		{Tool: "claude"},
+		{Tool: "codex", ClaudeSessionID: "sid"},
 	} {
-		inst.matrixInterrupt = matrixTurnInterruptMemo{sessionID: "sid", found: true}
+		inst.matrixInterrupt = matrixTurnInterruptMemo{key: "claude:sid", found: true}
 		inst.matrixRefreshTurnInterrupt()
 		if _, ok := inst.matrixTurnInterruptCached(); ok {
-			t.Errorf("tool=%q ssh=%q sid=%q: verdict kept", inst.Tool, inst.SSHHost, inst.ClaudeSessionID)
+			t.Errorf("tool=%q ssh=%q: verdict kept", inst.Tool, inst.SSHHost)
 		}
+	}
+}
+
+// Codex rollout shapes copied from codex 0.161/0.162 rollouts (2026-10-10).
+const (
+	cxMeta     = `{"timestamp":"2026-10-10T16:45:48.000Z","type":"session_meta","payload":{"id":"cxid","source":"cli","thread_source":"user"}}`
+	cxSubMeta  = `{"timestamp":"2026-10-10T16:45:48.000Z","type":"session_meta","payload":{"id":"cxid","thread_source":"subagent","parent_thread_id":"parent"}}`
+	cxStarted  = `{"timestamp":"2026-10-10T17:42:02.242Z","type":"event_msg","payload":{"type":"task_started","turn_id":"t1"}}`
+	cxUserMsg  = `{"timestamp":"2026-10-10T17:42:02.300Z","type":"event_msg","payload":{"type":"user_message","message":"继续"}}`
+	cxDevAbort = `{"timestamp":"2026-10-10T17:42:04.620Z","type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"<turn_aborted>The previous turn was interrupted on purpose.</turn_aborted>"}]}}`
+	cxAborted  = `{"timestamp":"2026-10-10T17:42:04.627Z","type":"event_msg","payload":{"type":"turn_aborted","turn_id":"t1","reason":"interrupted","duration_ms":2387}}`
+	cxDone     = `{"timestamp":"2026-10-10T16:47:44.101Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"t0","last_agent_message":"ok"}}`
+	cxTokens   = `{"timestamp":"2026-10-10T17:42:04.700Z","type":"event_msg","payload":{"type":"token_count","info":null}}`
+)
+
+func TestMatrixLatestCodexTurnInterrupt(t *testing.T) {
+	tests := []struct {
+		name       string
+		lines      []string
+		wantFound  bool
+		wantDetail string
+	}{
+		{"aborted and left", []string{cxMeta, cxDone, cxUserMsg, cxStarted, cxDevAbort, cxAborted, cxTokens}, true, "turn_aborted: interrupted"},
+		{"continued after the abort", []string{cxMeta, cxStarted, cxAborted, cxUserMsg, cxStarted}, false, ""},
+		{"steer: next turn starts at once", []string{cxMeta, cxStarted, cxAborted, cxStarted}, false, ""},
+		{"finished turn", []string{cxMeta, cxStarted, cxDone, cxTokens}, false, ""},
+		{"turn in progress", []string{cxMeta, cxDone, cxStarted, cxTokens}, false, ""},
+		{"no turns yet", []string{cxMeta}, false, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, found := matrixLatestCodexTurnInterrupt(matrixWriteTranscript(t, tt.lines...))
+			if found != tt.wantFound {
+				t.Fatalf("found = %v, want %v", found, tt.wantFound)
+			}
+			if found && got.Detail() != tt.wantDetail {
+				t.Errorf("Detail() = %q, want %q", got.Detail(), tt.wantDetail)
+			}
+		})
+	}
+}
+
+// End to end through the refresh: the rollout is found under CODEX_HOME by
+// the session's CodexSessionID; a subagent thread is never marked.
+func TestMatrixRefreshTurnInterrupt_Codex(t *testing.T) {
+	const id = "01a126b4-d738-7dc3-a840-6bce2b002dae"
+	for _, tc := range []struct {
+		name string
+		meta string
+		want bool
+	}{{"user thread", cxMeta, true}, {"subagent thread", cxSubMeta, false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("CODEX_HOME", home)
+			dir := filepath.Join(home, "sessions", "2026", "10", "10")
+			if err := os.MkdirAll(dir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			body := strings.Join([]string{tc.meta, cxStarted, cxAborted}, "\n") + "\n"
+			if err := os.WriteFile(filepath.Join(dir, "rollout-2026-10-10T09-45-48-"+id+".jsonl"), []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			inst := &Instance{Tool: "codex", CodexSessionID: id}
+			inst.matrixRefreshTurnInterrupt()
+			v, ok := inst.matrixTurnInterruptCached()
+			if ok != tc.want {
+				t.Fatalf("interrupted = %v, want %v", ok, tc.want)
+			}
+			if ok && v.Detail() != "turn_aborted: interrupted" {
+				t.Errorf("Detail() = %q", v.Detail())
+			}
+		})
 	}
 }

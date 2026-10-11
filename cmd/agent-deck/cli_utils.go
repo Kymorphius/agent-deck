@@ -921,8 +921,8 @@ func SubstateLabel(sub session.Substate) string {
 		return "auth (login)"
 	case session.SubstateUsageLimit:
 		return "usage limit"
-	case session.SubstateAPIInterrupted: // matrix/hardened: see matrix_turn_interrupt.go
-		return "interrupted by API error"
+	case session.SubstateTurnInterrupted: // matrix/hardened: see matrix_turn_interrupt.go
+		return "turn interrupted"
 	case session.SubstateIdleAtEmptyPrompt:
 		return "idle at prompt"
 	case session.SubstateInteractiveMenu:

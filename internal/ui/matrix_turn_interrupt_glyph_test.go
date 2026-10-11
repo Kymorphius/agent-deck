@@ -9,7 +9,7 @@ import (
 // matrix/hardened: a turn that ended on an API error shows ↯ instead of the
 // finished-turn glyph, only on waiting/idle rows.
 func TestRowStatusGlyph_MatrixAPIInterrupted(t *testing.T) {
-	sub := session.SubstateAPIInterrupted
+	sub := session.SubstateTurnInterrupted
 	tests := []struct {
 		name     string
 		status   session.Status
