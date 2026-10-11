@@ -84,18 +84,16 @@ scripts/matrix-install.sh 1
 scripts/run-isolated.py go test ./internal/update/... ./internal/telemetry/... ./internal/feedback/... ./internal/session/... ./cmd/agent-deck/...
 ```
 
-- **matrix/hardened: 统一使用 `scripts/run-isolated.py`**（需要 Python 3）。入口在隔离配置前解析并复用 GOPATH、GOMODCACHE、GOCACHE 和工具链设置；正常结束、失败及 INT/TERM/HUP 后回收临时 HOME。不要再手写 `HOME=$(mktemp -d)` 或裸 `T=$(mktemp -d)` 测试命令。SIGKILL、断电无法触发清理；旧遗留目录需另行审核，入口不会自动删除它们。此隔离不覆盖 launchd/tmux。
+- **matrix/hardened: 统一使用 `scripts/run-isolated.py`**（需要 Python 3）。入口在隔离配置前解析并复用 GOPATH、GOMODCACHE、GOCACHE 和工具链设置；每次运行创建临时 HOME 和短的私有 `TMUX_TMPDIR`（`/tmp/ad-it-*`，兼容 macOS 的 Unix socket 路径长度限制），裸 `tmux` 和命名 socket 都落在本次私有目录。正常结束、失败及 INT/TERM/HUP 后，先核对创建时记录的根目录设备号和 inode，通过私有目录内实际 socket 的绝对路径执行 `tmux -S ... kill-server`，确认 socket 无法连接后再回收该目录。目录被替换、socket 有多个硬链接、关停非零/超时或仍可连接时，保留目录/socket 并输出准确路径及身份信息供审核；不扫描 PID/argv 找回或强杀。清理失败时原来成功的命令返回 1，原来非零或信号退出码照常保留。不要再手写 `HOME=$(mktemp -d)` 或裸 `T=$(mktemp -d)` 测试命令。SIGKILL、断电无法触发清理；旧遗留目录需另行审核，入口不会自动删除它们。此隔离不覆盖 launchd 或显式指向私有目录之外的 `tmux -S`。
 
 - 本机 Go 是 1.25.5，`go.mod` 要求 1.25.13，用 `GOTOOLCHAIN=go1.25.13`（会自动下载）。
 - 代码规范检查：golangci-lint v2.14.0（Makefile 里固定的版本），要用 `GOTOOLCHAIN=go1.26.0` 运行；当前结果是 0 个问题。
 - **已知的、与我们无关的测试失败**（上游 v1.16.26 原版同样失败）：`internal/ui` 的 TestMCPDialogFitsScreenAndNamesItsKey；`cmd/agent-deck` 的 TestCLIGoldens、TestConfigShowEffective、TestRecallHookTrigger、TestRecallSearch_Federated、两个 TestSessionHandoff* 和 TestStartupCreationRollback；`internal/session` 约 80 个，其中个别是受负载影响、时好时坏的测试。判断是不是我们引入的问题，要和上游原版的测试结果对比。
-- **⚠️ 隔离 HOME 挡不住 launchd 和 tmux。** 测试会以当前用户身份注册 `launchctl` 任务（曾经把测试版 notify-daemon 注册成了 `com.agentdeck.transition-notifier`），还会留下 tmux 会话。每次跑完测试都要检查并清理：
+- **matrix/hardened: 隔离 HOME 挡不住 launchd。** 测试可能以当前用户身份注册 `launchctl` 任务（曾经把测试版 notify-daemon 注册成了 `com.agentdeck.transition-notifier`），跑完先做只读检查：
   ```sh
-  launchctl list | grep -i agentdeck          # 不应有 transition-notifier / autoupdate
-  launchctl bootout gui/$(id -u)/com.agentdeck.transition-notifier 2>/dev/null
-  pkill -f 'agent-deck-channels-bin-[0-9]+/agent-deck-test'
-  ps -axo pid,args | grep -E '[t]mux .*(agent-deck-test|new-session.*/T/Test)' | awk '{print $1}' | xargs kill
+  launchctl list | grep -i agentdeck          # 检查是否出现本次测试注册的任务
   ```
+  若发现遗留任务，先核实注册来源与准确 label，只撤销本次测试创建的任务。tmux 由入口按私有 socket 自动收尾；遇到 SIGKILL 等异常中断，只有核实本次 `/tmp/ad-it-*` 目录的归属后，才可对其中仍存在的 socket 使用显式绝对路径 `tmux -S /absolute/private/socket kill-server`，随后删除该私有目录。禁止按进程名、PID 或 argv 扫描结果批量杀 tmux；真实 default/agentdeck socket 和其他运行的测试目录都不属于本次清理范围。
 
 ## 5. 合并上游新版本
 
