@@ -447,22 +447,36 @@ func firstNonZero(a, b int64) int64 {
 	return b
 }
 
-// MarkInAgentDeck marks results whose conversation a registered session
-// owns: by the bound deck id, or by the Claude session id the instance
-// carries.
-func (gs *GlobalSearch) MarkInAgentDeck(instances []*session.Instance) {
-	byID := map[string]*session.Instance{}
-	byClaude := map[string]*session.Instance{}
-	for _, inst := range instances {
-		byID[inst.ID] = inst
-		if inst.ClaudeSessionID != "" {
-			byClaude[inst.ClaudeSessionID] = inst
+// matrix/hardened: resolve the owner the same way for labels and Enter.
+// A bound deck id takes precedence over a harness conversation id, and
+// empty native ids must never match an instance's unset fields.
+func findGlobalSearchOwner(result *GlobalSearchResult, instances []*session.Instance) *session.Instance {
+	if result.DeckID != "" {
+		for _, inst := range instances {
+			if inst.ID == result.DeckID {
+				return inst
+			}
 		}
 	}
+	if result.SessionID == "" {
+		return nil
+	}
+	for _, inst := range instances {
+		if (result.Harness == reader.HarnessClaude && inst.ClaudeSessionID == result.SessionID) ||
+			(result.Harness == reader.HarnessCodex && inst.CodexSessionID == result.SessionID) {
+			return inst
+		}
+	}
+	return nil
+}
+
+// MarkInAgentDeck marks results owned by a session in the current list.
+// matrix/hardened: recompute on every render so imports/removals update the
+// label, including Codex threads without a persisted deck link.
+func (gs *GlobalSearch) MarkInAgentDeck(instances []*session.Instance) {
 	for _, r := range gs.results {
-		if inst := byID[r.DeckID]; inst != nil {
-			r.InAgentDeck, r.InstanceID = true, inst.ID
-		} else if inst := byClaude[r.SessionID]; inst != nil && r.Harness == reader.HarnessClaude {
+		r.InAgentDeck, r.InstanceID = false, ""
+		if inst := findGlobalSearchOwner(r, instances); inst != nil {
 			r.InAgentDeck, r.InstanceID = true, inst.ID
 		}
 	}
@@ -504,16 +518,20 @@ func (gs *GlobalSearch) View() string {
 		}
 		left.WriteString(lipgloss.NewStyle().Foreground(ColorComment).Render(summary))
 		for i, r := range gs.results {
-			title := clipCells(firstNonEmpty(r.Title, r.Snippet, r.SessionID), max(leftWidth-14, 20))
-			prefix := "  "
+			// matrix/hardened: a text label survives selection, unlike the old
+			// bullet. Put it below the title to preserve titles on narrow panes.
+			title := clipCells(firstNonEmpty(r.Title, r.Snippet, r.SessionID), max(leftWidth-8, 1))
+			label := "[未管理]"
 			if r.InAgentDeck {
-				prefix = "• "
+				label = "[已管理]"
 			}
+			meta := label + " " + clipCells(gs.resultMeta(r), max(leftWidth-19, 1))
 			if i == gs.cursor {
 				resultRows = append(resultRows, globalSelectedStyle.Render("› "+title)+"\n"+
-					lipgloss.NewStyle().Foreground(ColorPurple).Render("    "+gs.resultMeta(r)))
+					lipgloss.NewStyle().Foreground(ColorPurple).Render("    "+meta))
 			} else {
-				resultRows = append(resultRows, globalResultStyle.Render(prefix+title))
+				resultRows = append(resultRows, globalResultStyle.Render("  "+title)+"\n"+
+					lipgloss.NewStyle().Foreground(ColorComment).Render("    "+meta))
 			}
 		}
 	}
@@ -548,9 +566,25 @@ func (gs *GlobalSearch) View() string {
 		if sel.CWD != "" {
 			right.WriteString(lipgloss.NewStyle().Foreground(ColorComment).Render("📁 "+clipLeft(sel.CWD, rightWidth-5)) + "\n")
 		}
+		// matrix/hardened: the index spans profiles; these labels describe
+		// ownership in the current list, not a possibly stale recall deck id.
+		management := "未管理（当前列表）"
+		if sel.InAgentDeck {
+			management = "已管理（当前列表）"
+		}
+		for _, line := range gs.wrapText(management, rightWidth-2) {
+			right.WriteString(lipgloss.NewStyle().Foreground(ColorCyan).Render(line) + "\n")
+		}
+		if sel.InAgentDeck {
+			for _, line := range gs.wrapText("管理会话："+sel.InstanceID, rightWidth-2) {
+				right.WriteString(lipgloss.NewStyle().Foreground(ColorComment).Render(line) + "\n")
+			}
+		}
 		right.WriteString("\n")
 		lines := gs.previewLines(sel, rightWidth-2)
-		visible := previewHeight - 5
+		// matrix/hardened: reserve the actual header height, including the
+		// management label, so the preview never pushes out the footer.
+		visible := max(previewHeight+6-strings.Count(right.String(), "\n")-2, 1)
 		start := min(gs.previewScroll, max(len(lines)-visible, 0))
 		gs.previewScroll = start
 		end := min(start+visible, len(lines))

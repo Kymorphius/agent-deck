@@ -10413,16 +10413,13 @@ func (h *Home) openGlobalSearch() tea.Cmd {
 // how to read them.
 func (h *Home) handleGlobalSearchSelection(result *GlobalSearchResult) tea.Cmd {
 	h.instancesMu.RLock()
-	for _, inst := range h.instances {
-		// matrix/hardened: a Codex hit also jumps to the session already on its thread.
-		if (result.DeckID != "" && inst.ID == result.DeckID) || (result.Harness == reader.HarnessClaude && inst.ClaudeSessionID == result.SessionID) ||
-			(result.Harness == reader.HarnessCodex && inst.CodexSessionID == result.SessionID) {
-			h.instancesMu.RUnlock()
-			h.jumpToSession(inst)
-			return nil
-		}
-	}
+	// matrix/hardened: the label and Enter must resolve the same owner.
+	owner := findGlobalSearchOwner(result, h.instances)
 	h.instancesMu.RUnlock()
+	if owner != nil {
+		h.jumpToSession(owner)
+		return nil
+	}
 	switch {
 	case result.Sidechain:
 		h.setError(fmt.Errorf("a subagent transcript cannot be resumed; open its parent session (agent-deck recall show %s)", query.Ref(result.SessID)))
@@ -19054,6 +19051,11 @@ func (h *Home) renderFrame() string {
 		return h.search.View()
 	}
 	if h.globalSearch.IsVisible() {
+		// matrix/hardened: wire management labels to the current registry on
+		// every render, including changes while the search overlay stays open.
+		h.instancesMu.RLock()
+		h.globalSearch.MarkInAgentDeck(h.instances)
+		h.instancesMu.RUnlock()
 		return h.globalSearch.View()
 	}
 	if h.newDialog.IsVisible() {
