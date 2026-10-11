@@ -34,6 +34,9 @@ type SyncSession struct {
 	ClaudeSessionID string
 	ProjectPath     string
 	Tool            string
+	// matrix/hardened: resolved by the session's account-aware artifact resolver.
+	CodexPath      string
+	CodexSessionID string
 }
 
 // SyncFromTranscripts reads historical usage from Claude transcript files
@@ -49,6 +52,20 @@ func SyncFromTranscripts(store *Store, pricer *Pricer, sessions []SyncSession) S
 
 	importer := NewUsageImporter(store, pricer)
 	for _, sess := range sessions {
+		// matrix/hardened: native Codex per-response usage, not terminal text.
+		if sess.CodexPath != "" && sess.CodexSessionID != "" {
+			result.SessionsScanned++
+			events, err := reader.ScanCodexUsage(context.Background(), sess.CodexPath, sess.CodexSessionID)
+			if err != nil {
+				result.Errors = append(result.Errors, fmt.Sprintf("scan Codex %s: %v", sess.InstanceID, err))
+				continue
+			}
+			imported, skipped, errs := importer.Import(sess.InstanceID, events)
+			result.EventsImported += imported
+			result.EventsSkipped += skipped
+			result.Errors = append(result.Errors, errs...)
+			continue
+		}
 		if sess.Tool != "claude" || sess.ClaudeSessionID == "" {
 			continue
 		}
@@ -94,7 +111,7 @@ func NewUsageImporter(store *Store, pricer *Pricer) *UsageImporter {
 // imported, how many already existed, and the write errors.
 func (u *UsageImporter) Import(instanceID string, events []reader.Usage) (imported, skipped int, errs []string) {
 	for _, ev := range events {
-		if ev.In == 0 && ev.Out == 0 {
+		if ev.In == 0 && ev.Out == 0 && ev.CacheR == 0 && ev.CacheW == 0 {
 			continue
 		}
 		key := ev.UUID
@@ -102,12 +119,18 @@ func (u *UsageImporter) Import(instanceID string, events []reader.Usage) (import
 			key = uuid.NewString()
 		}
 		dedupKey := fmt.Sprintf("%s_%s", instanceID, key)
+		// matrix/hardened: a response replayed into a fork or linked twice
+		// is still one request, shared by recall, sync and live collection.
+		if strings.HasPrefix(key, "codex:") {
+			dedupKey = key
+		}
 		if u.existing[dedupKey] {
 			skipped++
 			continue
 		}
 		var count int
 		if err := u.store.db.QueryRow("SELECT COUNT(*) FROM cost_events WHERE id = ?", dedupKey).Scan(&count); err != nil {
+			errs = append(errs, fmt.Sprintf("check event: %v", err))
 			continue
 		}
 		if count > 0 {
@@ -130,12 +153,23 @@ func (u *UsageImporter) Import(instanceID string, events []reader.Usage) (import
 			CacheWriteTokens: ev.CacheW,
 			CostMicrodollars: u.pricer.ComputeCost(ev.Model, ev.In, ev.Out, ev.CacheR, ev.CacheW),
 		}
-		if err := u.store.WriteCostEvent(costEvent); err != nil {
+		// matrix/hardened: concurrent TUI/web/recall writers can race the
+		// existence check. The unique response key makes insertion atomic.
+		res, err := u.store.db.Exec(`INSERT INTO cost_events
+			(id, session_id, timestamp, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_microdollars)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING`,
+			costEvent.ID, costEvent.SessionID, costEvent.Timestamp.UTC().Format(time.RFC3339), costEvent.Model,
+			costEvent.InputTokens, costEvent.OutputTokens, costEvent.CacheReadTokens, costEvent.CacheWriteTokens, costEvent.CostMicrodollars)
+		if err != nil {
 			errs = append(errs, fmt.Sprintf("write event: %v", err))
 			continue
 		}
 		u.existing[dedupKey] = true
-		imported++
+		if n, _ := res.RowsAffected(); n == 0 {
+			skipped++
+		} else {
+			imported++
+		}
 	}
 	return imported, skipped, errs
 }

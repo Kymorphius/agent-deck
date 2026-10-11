@@ -45,6 +45,9 @@ func (d costDashboard) View() string {
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(ColorAccent)
 	b.WriteString(titleStyle.Render(" Cost Dashboard"))
 	b.WriteString("\n\n")
+	// matrix/hardened: subscription users see a standard API-equivalent
+	// estimate, rather than their subscription bill or quota consumption.
+	b.WriteString("  API-equivalent estimate (standard rates; not subscription charges)\n\n")
 
 	// Summary cards
 	labelStyle := lipgloss.NewStyle().Foreground(ColorText)

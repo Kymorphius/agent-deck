@@ -69,6 +69,16 @@ func priceFromUSD(input, output, cacheRead, cacheWrite float64) ModelPrice {
 func NewPricer(cfg PricerConfig) *Pricer {
 	p := &Pricer{
 		defaults: map[string]ModelPrice{
+			// matrix/hardened: standard API estimates verified 2026-10-11 at
+			// https://developers.openai.com/api/docs/pricing . Service-tier
+			// and regional premiums are excluded from this equivalent estimate.
+			"gpt-6.1-sol":   priceFromUSD(2, 10, 0.10, 2.50),
+			"gpt-6-sol":     priceFromUSD(2, 10, 0.20, 2.50),
+			"gpt-6-astra":   priceFromUSD(10, 50, 1, 12.50),
+			"gpt-6-luna":    priceFromUSD(0.10, 0.50, 0.01, 0.125),
+			"gpt-5.6-sol":   priceFromUSD(4, 20, 0.40, 5),
+			"gpt-5.6-luna":  priceFromUSD(0.20, 1.20, 0.02, 0.25),
+			"gpt-5.3-codex": priceFromUSD(1.75, 14, 0.175, 0),
 			// Anthropic rates: https://docs.anthropic.com/en/docs/about-claude/pricing
 			"claude-opus-4-7":   priceFromUSD(5.0, 25.0, 0.50, 6.25),
 			"claude-opus-4-6":   priceFromUSD(5.0, 25.0, 0.50, 6.25),
@@ -178,6 +188,17 @@ func (p *Pricer) ComputeCost(model string, input, output, cacheRead, cacheWrite 
 	mp, ok := p.GetPrice(model)
 	if !ok {
 		return 0
+	}
+	// matrix/hardened: >272K input applies the long-context rate to the
+	// entire request. Custom overrides remain exactly as configured.
+	name := normalizeModel(model)
+	_, overridden := p.overrides[name]
+	if !overridden && input+cacheRead+cacheWrite > 272_000 &&
+		(name == "gpt-6.1-sol" || name == "gpt-6-sol" || name == "gpt-6-astra" || name == "gpt-6-luna" || name == "gpt-5.6-sol" || name == "gpt-5.6-luna") {
+		mp.InputPerMtokMicro *= 2
+		mp.CacheReadPerMtokMicro *= 2
+		mp.CacheWritePerMtokMicro *= 2
+		mp.OutputPerMtokMicro = mp.OutputPerMtokMicro * 3 / 2
 	}
 	cost := float64(input)*float64(mp.InputPerMtokMicro)/1_000_000 +
 		float64(output)*float64(mp.OutputPerMtokMicro)/1_000_000 +

@@ -89,25 +89,18 @@ func handleCostsSync(profile string) {
 		os.Exit(1)
 	}
 
-	var syncSessions []costs.SyncSession
-	for _, inst := range instances {
-		if inst.Tool != "claude" || inst.ClaudeSessionID == "" {
-			continue
-		}
-		syncSessions = append(syncSessions, costs.SyncSession{
-			InstanceID:      inst.ID,
-			ClaudeSessionID: inst.ClaudeSessionID,
-			ProjectPath:     inst.ProjectPath,
-			Tool:            inst.Tool,
-		})
+	// matrix/hardened: exact native Codex artifacts join Claude transcripts.
+	syncSessions, resolveErrors := costSyncSessions(instances)
+	for _, err := range resolveErrors {
+		fmt.Fprintln(os.Stderr, err)
 	}
 
 	if len(syncSessions) == 0 {
-		fmt.Println("No Claude sessions found to sync.")
+		fmt.Println("No readable Claude/Codex sessions found to sync.")
 		return
 	}
 
-	fmt.Printf("Syncing cost data for %d Claude session(s)...\n", len(syncSessions))
+	fmt.Printf("Syncing cost data for %d Claude/Codex session(s)...\n", len(syncSessions))
 	result := costs.SyncFromTranscripts(costStore, pricer, syncSessions)
 
 	fmt.Printf("\nResults:\n")

@@ -858,12 +858,12 @@ env_file = "~/.config/agent-deck/claude-token.env"
 
 Track token usage and costs across all your AI agent sessions in real-time.
 
-- **Automatic collection** — Claude Code hook integration reads transcript files on each turn. Gemini/Codex/MiniMax support via output parsing (untested)
+- **Automatic collection** — Claude Code hook integration reads transcript files on each turn. Codex uses native per-response rollout usage; Gemini/MiniMax support via output parsing (untested)
 - **15 models priced** — Claude Opus 4.6/4.7, Sonnet 4.6, Haiku 4.5, Gemini Pro/Flash, GPT-4o/4.1, o3, o4-mini, MiniMax M3/M2.7/M2.7-highspeed/M2.5/M2.5-highspeed with daily price refresh
 - **TUI dashboard** — press `$` to view today/week/month costs, top sessions, model breakdown
 - **Web dashboard** — `/costs` page with Chart.js charts, group drill-down, session detail views, SSE live updates
 - **Budget limits** — configurable daily/weekly/monthly/per-group/per-session limits with 80% warning and 100% hard stop (untested)
-- **Historical sync** — `agent-deck costs sync` backfills cost data from existing Claude transcript files
+- **Historical sync** — `agent-deck costs sync` backfills cost data from managed Claude transcripts and locally readable Codex rollouts
 - **Recompute costs** — `agent-deck costs recompute` recalculates `cost_microdollars` for every cost event using current pricing data. Useful after a pricing-data update to retroactively price events that landed at $0 because the model was missing from the pricer. Pass `--dry-run` to preview.
 - **Export** — CSV/JSON export from web dashboard
 
@@ -897,6 +897,22 @@ pricing modifiers are excluded. Run `agent-deck costs recompute --dry-run`, then
 `agent-deck costs recompute` to apply the estimate to existing records. Close and
 reopen `$` to read the updated totals. Processes that loaded pricing before the
 configuration change need a restart to use the override for new collection.
+
+<!-- matrix/hardened: Codex cost accounting shares response IDs across readers. -->
+Codex collection reads `token_usage_record` entries from each managed session's
+exact rollout, honoring its account and `CODEX_HOME`. TUI and headless web tail
+new complete records every 30 seconds; `costs sync` backfills the same records.
+Cached input is subtracted from input before pricing; reasoning tokens are
+already included in output. Response IDs prevent repeated syncs, recall sweeps,
+and replayed fork history from charging the same response twice. Older rollouts
+containing only cumulative `token_count` snapshots are not imported. Remote or
+sandbox rollouts must be collected on their own host.
+
+Built-in Codex estimates use [OpenAI's standard API rates](https://developers.openai.com/api/docs/pricing),
+including the long-context premium above 272K input tokens for GPT-6 and
+GPT-5.6 Sol/Luna. Fast/Ultrafast and regional premiums are excluded. Pricing overrides
+are applied exactly as configured. The estimate covers managed sessions only;
+it is not the subscription bill or remaining quota.
 
 #### Customizing the status-line cost segment
 
