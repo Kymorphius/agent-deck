@@ -557,6 +557,9 @@ See the [Docker Sandbox Guide](skills/agent-deck/references/sandbox.md) for the 
 
 Press `f` to **quick-fork** the selected session, or `Shift+F` for the fork **dialog** (customize title, group, branch, and toggles). A fork inherits the parent's conversation context through each tool's native fork — supported for **Claude, OpenCode, Pi, Codex, and Oh My Pi** (and Codex-compatible custom tools) across the TUI, CLI (`agent-deck session fork <id>`), and Web UI.
 
+<!-- matrix/hardened: an explicit conversation fork without workspace creation. -->
+Press `Alt+F` to fork **in the same directory**, without creating a worktree or branch. The new session inherits the conversation context and launch options and shares the source directory's files. This overrides `[fork]` worktree/state defaults for that action; `f` and `Shift+F` keep their existing behavior. Rebind or disable it with `[hotkeys].fork_in_place` (default `"alt+f"`). On the CLI, `agent-deck session fork <id>` already uses the same directory when no `-w/--worktree` branch is supplied; the Web Fork action also uses the same directory.
+
 Quick fork (`f`) is **comprehensive by default**: it creates a new git worktree + branch, carries the parent's uncommitted working-tree state, matches the parent's Docker isolation, and inherits the parent's Claude launch options. The `Shift+F` dialog opens pre-seeded from the same defaults ("comprehensive, tweak down"). Jujutsu (jj) repos are supported too — the fork materializes the parent's working state into a new jj workspace.
 
 Tune the defaults in `$XDG_CONFIG_HOME/agent-deck/config.toml` (default `~/.config/agent-deck/config.toml`):

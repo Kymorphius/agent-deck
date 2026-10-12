@@ -80,6 +80,7 @@ panes are untouched: they receive the raw bytes exactly as typed.
 | `Shift+→` / `Shift+←` | Indent / outdent within current group (single-level nesting) |
 | `,` | Pin (cycles off -> top -> bottom -> off) |
 | `f` / `F` | Quick fork / fork with options (Claude/OpenCode/Pi/Codex/Oh My Pi) (**rebindable**) |
+| `Alt+F` | Fork in the same directory, with no new worktree or branch (**rebindable** as `fork_in_place`) <!-- matrix/hardened --> |
 | `x` | Send output to another session (**rebindable**) |
 | `E` | Exec shell in sandbox container (**rebindable**) |
 | `H` | Open shell in session's worktree, split pane / window (**rebindable**) |

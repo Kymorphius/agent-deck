@@ -99,7 +99,7 @@ func handleSessionRemove(profile string, args []string) {
 	inst.RecordTelemetryEnd(telemetry.EndDelete)
 
 	if *pruneWorktree {
-		pruneSessionWorktree(inst)
+		pruneSessionWorktree(inst, instances)
 	}
 
 	// v1.9.1 (#909): RemoveSessionAndVerify replaces the
@@ -202,32 +202,25 @@ func bulkRemoveSessions(
 	doomed []*session.Instance,
 	pruneWorktree bool,
 ) []removedSessionRow {
-	doomedIDs := make(map[string]bool, len(doomed))
-	for _, inst := range doomed {
-		doomedIDs[inst.ID] = true
-	}
-
+	// matrix/hardened: each successful deletion releases one shared-worktree
+	// reference. Keep failed or not-yet-deleted users in the cleanup snapshot.
+	remaining := append([]*session.Instance(nil), instances...)
 	removed := make([]removedSessionRow, 0, len(doomed))
 	removedIDs := make([]string, 0, len(doomed))
 	for _, inst := range doomed {
 		_ = inst.KillAndWait()
 		if pruneWorktree {
-			pruneSessionWorktree(inst)
+			pruneSessionWorktree(inst, remaining)
 		}
 		if err := storage.DeleteInstance(inst.ID); err != nil {
 			out.Error(fmt.Sprintf("failed to remove session %s: %v", inst.ID, err), ErrCodeInvalidOperation)
 			os.Exit(1)
 		}
+		remaining = dropInstance(remaining, inst.ID)
 		removedIDs = append(removedIDs, inst.ID)
 		removed = append(removed, map[string]interface{}{"id": inst.ID, "title": inst.Title})
 	}
 
-	remaining := make([]*session.Instance, 0, len(instances)-len(removedIDs))
-	for _, inst := range instances {
-		if !doomedIDs[inst.ID] {
-			remaining = append(remaining, inst)
-		}
-	}
 	groupTree := session.NewGroupTreeWithGroups(remaining, groups)
 	if err := storage.SaveGroupsOnly(groupTree); err != nil {
 		out.Error(fmt.Sprintf("failed to save session state: %v", err), ErrCodeInvalidOperation)
@@ -250,9 +243,11 @@ func bulkRemoveSessions(
 //
 // Uses KillAndWait so the SIGTERM→SIGKILL escalation completes before
 // this short-lived CLI exits (issue #59, v1.7.68).
-func pruneSessionWorktree(inst *session.Instance) {
+func pruneSessionWorktree(inst *session.Instance, instances []*session.Instance) {
 	_ = inst.KillAndWait()
-	if inst.IsWorktree() {
+	// matrix/hardened: pruning one session must leave a shared worktree usable
+	// by its in-place forks; bulk deletion passes its current surviving list.
+	if inst.IsWorktree() && !session.OtherSessionsShareWorktree(inst, instances) {
 		if backend, err := detectAndCreateBackend(inst.WorktreeRepoRoot); err == nil {
 			if err := backend.RemoveWorktree(inst.WorktreePath, true); err != nil {
 				fmt.Fprintf(os.Stderr, "warn: worktree remove failed for %s: %v\n", inst.ID, err)

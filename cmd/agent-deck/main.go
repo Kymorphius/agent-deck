@@ -45,7 +45,7 @@ import (
 )
 
 // matrix/hardened: identifies our hardened build.
-var Version = "1.16.26+matrix.45" // overridden at build time via -ldflags "-X main.Version=..."
+var Version = "1.16.26+matrix.46" // overridden at build time via -ldflags "-X main.Version=..."
 
 // Table column widths for list command output
 const (
@@ -3417,8 +3417,9 @@ func handleRemove(profile string, args []string) {
 	// this removal was never allowed to touch.
 	_ = inst.RetireServiceUnit(serviceUnitOwnership)
 
-	// Clean up worktree directory if this is a worktree session
-	if inst.IsWorktree() {
+	// matrix/hardened: an in-place fork may still use this worktree after its
+	// parent is removed. Only the final registered user may clean it up.
+	if inst.IsWorktree() && !session.OtherSessionsShareWorktree(inst, instances) {
 		if backend, err := detectAndCreateBackend(inst.WorktreeRepoRoot); err == nil {
 			if err := backend.RemoveWorktree(inst.WorktreePath, false); err != nil {
 				if !*jsonOutput {

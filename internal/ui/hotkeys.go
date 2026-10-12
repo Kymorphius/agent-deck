@@ -32,6 +32,7 @@ const (
 	hotkeyPromptSession    = "prompt_session" // #1410: prompt the highlighted session without attaching
 	hotkeyToggleYolo       = "toggle_yolo"
 	hotkeyQuickFork        = "quick_fork"
+	hotkeyForkInPlace      = "fork_in_place" // matrix/hardened: fork conversation in the same directory.
 	hotkeyForkWithOptions  = "fork_with_options"
 	hotkeyCopyOutput       = "copy_output"
 	hotkeyCopyPane         = "copy_pane"
@@ -140,6 +141,7 @@ var hotkeyActionOrder = []string{
 	hotkeyPromptSession,
 	hotkeyToggleYolo,
 	hotkeyQuickFork,
+	hotkeyForkInPlace, // matrix/hardened
 	hotkeyForkWithOptions,
 	hotkeyCopyOutput,
 	hotkeyCopyPane,
@@ -200,6 +202,7 @@ var defaultHotkeyBindings = map[string]string{
 	hotkeyPromptSession:    "o",
 	hotkeyToggleYolo:       "y",
 	hotkeyQuickFork:        "f",
+	hotkeyForkInPlace:      "alt+f", // matrix/hardened: explicit fork without a new worktree.
 	hotkeyForkWithOptions:  "F",
 	hotkeyCopyOutput:       "c",
 	hotkeyCopyPane:         "V",

@@ -12249,7 +12249,7 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return h, nil
 
-	case "f":
+	case "f", "alt+f": // matrix/hardened: same guards for quick and same-directory forks.
 		// Quick fork session (same title with " (fork)" suffix)
 		// Only available when the selected tool supports Agent Deck forking
 		if h.cursor < len(h.flatItems) {
@@ -12265,6 +12265,11 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					return h, nil
 				}
 				if item.Session.CanFork() {
+					// matrix/hardened: Alt+F explicitly keeps the source directory,
+					// regardless of the configured quick-fork worktree defaults.
+					if key == "alt+f" {
+						return h, h.quickForkSessionInPlace(item.Session)
+					}
 					return h, h.quickForkSession(item.Session)
 				}
 			} else if item.Type == session.ItemTypeRemoteSession && item.RemoteSession != nil {
@@ -16102,6 +16107,12 @@ func backendSupportsWithState(t vcs.Type) bool {
 // placement. Defaults come from [fork] config (comprehensive when unset).
 // Non-fatal degradation notices are reported after the async fork succeeds.
 func (h *Home) quickForkSession(source *session.Instance) tea.Cmd {
+	// matrix/hardened: share the launch pipeline with the explicit in-place action.
+	return h.quickForkSessionWithMode(source, false)
+}
+
+// matrix/hardened: inPlace overrides structural defaults before any VCS lookup.
+func (h *Home) quickForkSessionWithMode(source *session.Instance, inPlace bool) tea.Cmd {
 	if source == nil {
 		return nil
 	}
@@ -16110,7 +16121,12 @@ func (h *Home) quickForkSession(source *session.Instance) tea.Cmd {
 	if cfg != nil {
 		fork = cfg.Fork
 	}
-	in := resolveQuickForkSpec(source, fork)
+	var in quickForkSpec
+	if inPlace {
+		in = resolveInPlaceForkSpec(source, fork)
+	} else {
+		in = resolveQuickForkSpec(source, fork)
+	}
 
 	// Repeated quick forks of the same source would otherwise collide on the
 	// deterministic branch name (comprehensive fork forces a fresh worktree+branch),
@@ -16132,10 +16148,12 @@ func (h *Home) quickForkSession(source *session.Instance) tea.Cmd {
 			WithState:   in.Plan.WithState,
 			WithIgnored: in.Plan.WithIgnored,
 			Sandbox:     in.Plan.Sandbox,
-			// ExplicitWorktree stays false: quick fork worktree is
-			// config-default, not an explicit toggle (#1185). LockTitle stays
-			// false: the auto-generated "<title> (fork)" name is not user
-			// intent, so the #572 name sync stays enabled.
+			// matrix/hardened: the same-directory action is an explicit choice.
+			ExplicitWorktree: inPlace,
+			InPlace:          inPlace, // matrix/hardened: also reuse a multi-repo container.
+			// Regular quick fork keeps the config-default fallback (#1185).
+			// LockTitle stays false: the auto-generated "<title> (fork)"
+			// name is not user intent, so the #572 name sync stays enabled.
 		},
 		opts,
 		source.ParentSessionID, source.ParentProjectPath,
@@ -16602,6 +16620,11 @@ func defaultForkInstanceDeps() forkInstanceDeps {
 				var newAdditionalPaths []string
 				for i, p := range allPaths {
 					linkPath := filepath.Join(parentDir, dirnames[i])
+					// matrix/hardened: link the actual checkout directly, so removing
+					// a parent's symlink-only container cannot break this fork.
+					if resolved, err := filepath.EvalSymlinks(p); err == nil {
+						p = resolved
+					}
 					_ = os.Symlink(p, linkPath)
 					if i == 0 {
 						newProjectPath = linkPath
@@ -16664,7 +16687,11 @@ func completeFork(
 		inst.Sandbox = session.NewSandboxConfig("")
 	}
 
-	if err := deps.createMultiRepoDir(inst, source); err != nil {
+	// matrix/hardened: an explicit in-place fork reuses the multi-repo directory,
+	// rather than creating another container whose links depend on the parent.
+	if toggles.InPlace && source.IsMultiRepo() {
+		inheritInPlaceMultiRepo(inst, source)
+	} else if err := deps.createMultiRepoDir(inst, source); err != nil {
 		if withStateWorktreeCreated {
 			deps.rollback(opts.WorktreeRepoRoot, opts.WorktreePath, opts.WorktreeBranch)
 		}
@@ -16700,6 +16727,8 @@ type forkBuildResult struct {
 // forkToggles groups the fork pipeline's boolean knobs so call sites stay
 // self-documenting instead of a positional true/false list.
 type forkToggles struct {
+	// matrix/hardened: reuse the existing multi-repo directory as well as its files.
+	InPlace bool
 	// Worktree creates the fork in a new worktree on a new branch.
 	Worktree bool
 	// WithState materializes the parent's working-tree state into the worktree.
@@ -16732,6 +16761,12 @@ func (h *Home) buildForkCmd(
 ) forkBuildResult {
 	worktreeApplied := false
 	notice := ""
+	// matrix/hardened: native fork builders bake their cd command before start.
+	// Generate it for the shared multi-repo container, then restore the primary
+	// project metadata in inheritInPlaceMultiRepo after creating the instance.
+	if toggles.InPlace && source.IsMultiRepo() {
+		opts = prepareInPlaceForkOptions(source, opts)
+	}
 	if toggles.Worktree && branchName != "" {
 		worktreePath, repoRoot, fallback, errMsg := resolveWorktreeTarget(source.ProjectPath, branchName, toggles.ExplicitWorktree)
 		if errMsg != "" {
@@ -17142,12 +17177,26 @@ func (h *Home) deleteSession(inst *session.Instance) tea.Cmd {
 	// h.instances). When shared, the worktree dir + branch are left intact and
 	// only this session's record is dropped.
 	sharedWorktree := false
-	if isWorktree {
+	sharedMultiRepoDir := false
+	// matrix/hardened: snapshot each multi-repo reference before asynchronous
+	// cleanup; only directories with no remaining user may be removed.
+	unsharedMultiRepoWorktrees := make([]session.MultiRepoWorktree, 0, len(multiRepoWorktrees))
+	if isWorktree || isMultiRepo {
 		h.instancesMu.RLock()
-		sharedWorktree = session.OtherSessionsShareWorktree(
-			&session.Instance{ID: id, WorktreePath: worktreePath, WorktreeRepoRoot: worktreeRepoRoot},
-			h.instances,
-		)
+		if isWorktree {
+			sharedWorktree = session.OtherSessionsShareWorktree(
+				&session.Instance{ID: id, WorktreePath: worktreePath, WorktreeRepoRoot: worktreeRepoRoot},
+				h.instances,
+			)
+		}
+		if isMultiRepo {
+			sharedMultiRepoDir = session.OtherSessionsShareMultiRepoTempDir(inst, h.instances)
+			for _, wt := range multiRepoWorktrees {
+				if !session.OtherSessionsShareWorktree(&session.Instance{ID: id, WorktreePath: wt.WorktreePath}, h.instances) {
+					unsharedMultiRepoWorktrees = append(unsharedMultiRepoWorktrees, wt)
+				}
+			}
+		}
 		h.instancesMu.RUnlock()
 	}
 	return func() tea.Msg {
@@ -17173,18 +17222,18 @@ func (h *Home) deleteSession(inst *session.Instance) tea.Cmd {
 			}
 		}
 		if isMultiRepo {
-			// Clean up multi-repo temp directory
-			if multiRepoTempDir != "" {
-				_ = os.RemoveAll(multiRepoTempDir)
-			}
-			// Clean up per-repo worktrees
-			for _, wt := range multiRepoWorktrees {
+			// matrix/hardened: remove per-repo worktrees before their container,
+			// while leaving every shared checkout usable by its other sessions.
+			for _, wt := range unsharedMultiRepoWorktrees {
 				if err := git.RemoveWorktree(wt.RepoRoot, wt.WorktreePath, true); err != nil {
 					uiLog.Warn("worktree_remove_err", slog.String("path", wt.WorktreePath), slog.String("err", err.Error()))
 				}
 				if err := git.PruneWorktrees(wt.RepoRoot); err != nil {
 					uiLog.Warn("worktree_prune_err", slog.String("repo", wt.RepoRoot), slog.String("err", err.Error()))
 				}
+			}
+			if multiRepoTempDir != "" && !sharedMultiRepoDir {
+				_ = os.RemoveAll(multiRepoTempDir)
 			}
 		}
 		return sessionDeletedMsg{deletedID: id, killErr: killErr}
@@ -20666,7 +20715,8 @@ func renderLaunchModelInfoLines(b *strings.Builder, inst *session.Instance) {
 func (h *Home) renderForkHintLine(b *strings.Builder) {
 	quickForkKey := h.actionKey(hotkeyQuickFork)
 	forkWithOptionsKey := h.actionKey(hotkeyForkWithOptions)
-	if quickForkKey == "" && forkWithOptionsKey == "" {
+	inPlaceKey := h.actionKey(hotkeyForkInPlace) // matrix/hardened
+	if quickForkKey == "" && forkWithOptionsKey == "" && inPlaceKey == "" {
 		return
 	}
 
@@ -20683,6 +20733,14 @@ func (h *Home) renderForkHintLine(b *strings.Builder) {
 	if forkWithOptionsKey != "" {
 		b.WriteString(keyStyle.Render(forkWithOptionsKey))
 		b.WriteString(hintStyle.Render(" fork with options"))
+	}
+	// matrix/hardened: a separate short row keeps this action visible in narrow previews.
+	if inPlaceKey != "" {
+		if quickForkKey != "" || forkWithOptionsKey != "" {
+			b.WriteString("\n         ")
+		}
+		b.WriteString(keyStyle.Render(inPlaceKey))
+		b.WriteString(hintStyle.Render(" same directory"))
 	}
 	b.WriteString("\n")
 }
@@ -24162,25 +24220,8 @@ func (h *Home) renderPreviewPane(width, height int) string {
 
 		// Fork hint when session can be forked
 		if selected.CanFork() {
-			quickForkKey := h.actionKey(hotkeyQuickFork)
-			forkWithOptionsKey := h.actionKey(hotkeyForkWithOptions)
-			if quickForkKey != "" || forkWithOptionsKey != "" {
-				hintStyle := lipgloss.NewStyle().Foreground(ColorText).Italic(true)
-				keyStyle := lipgloss.NewStyle().Foreground(ColorAccent).Bold(true)
-				b.WriteString(hintStyle.Render("Fork:    "))
-				if quickForkKey != "" {
-					b.WriteString(keyStyle.Render(quickForkKey))
-					b.WriteString(hintStyle.Render(" quick fork"))
-				}
-				if quickForkKey != "" && forkWithOptionsKey != "" {
-					b.WriteString(hintStyle.Render(", "))
-				}
-				if forkWithOptionsKey != "" {
-					b.WriteString(keyStyle.Render(forkWithOptionsKey))
-					b.WriteString(hintStyle.Render(" fork with options"))
-				}
-				b.WriteString("\n")
-			}
+			// matrix/hardened: use the shared hint so every supported tool advertises Alt+F.
+			h.renderForkHintLine(&b)
 		}
 	}
 
