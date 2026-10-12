@@ -640,6 +640,8 @@ type Home struct {
 	lastNavigationTime time.Time // When user last navigated (up/down/j/k)
 	isNavigating       bool      // True if user is rapidly navigating
 	lastAttachReturn   time.Time // When we returned from tea.Exec attach/detach
+	// matrix/hardened: absorb the old session scroll gesture across detach.
+	detachWheelUntil   time.Time
 	navigationHotUntil atomic.Int64
 	// Snapshot of status/tool used by render path to avoid per-row lock contention.
 	sessionRenderSnapshot atomic.Value // map[string]sessionRenderState
@@ -6206,6 +6208,7 @@ func (h *Home) markNavigationActivity() {
 }
 
 func (h *Home) beginAttachReturnGrace(now time.Time) {
+	h.beginDetachWheelGuard(now) // matrix/hardened: legacy/remote attach return.
 	h.lastAttachReturn = now
 	h.lastNavigationTime = now
 	h.isNavigating = true
@@ -7444,6 +7447,10 @@ func (h *Home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		defer input.FinishInput(receipt)
 	}
 	defer h.recordFocusedSession()
+	// matrix/hardened: terminal inertia belongs to the session we just left.
+	if h.suppressDetachWheel(msg, time.Now()) {
+		return h, nil
+	}
 	model, cmd := h.updateInner(msg)
 	if !h.fullRepaint {
 		return model, cmd

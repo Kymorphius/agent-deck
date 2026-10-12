@@ -263,6 +263,10 @@ func (h *Home) openInsertKeySender(target insertTargetRef) (insertKeySender, err
 // here, releasing the tmux -C
 // subprocess or SSH ControlMaster slot.
 func (h *Home) exitInsertMode() {
+	// matrix/hardened: delayed wheel reports must not navigate the overview.
+	if h.insertMode {
+		h.beginDetachWheelGuard(time.Now())
+	}
 	h.embeddedGeneration++
 	h.embeddedRefreshPending = false
 	if h.sessionInput != nil {
