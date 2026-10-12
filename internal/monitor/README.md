@@ -25,6 +25,13 @@ endpoints are:
 | GET | `/status` | Version, PID, epoch and operational counters only |
 | POST | `/stop` | Stop this observation process; AI panes remain running |
 
+`matrix/hardened:` status also includes bounded, fixed-category tmux execution
+counters for this process. Only real starts are counted. Completed synchronous
+wrappers report cumulative wall time and waited client CPU; asynchronous starts
+have no completion timing coverage. No command arguments, session names, socket
+names, paths or pane content are exposed. Client CPU excludes parent fork and
+the persistent tmux server; overlapping waits are not process CPU.
+
 Every successful source publication has a protocol version, random process
 epoch, monotonically increasing profile revision, profile and pass start time.
 Each session carries its launch identity, its own probe start time and the

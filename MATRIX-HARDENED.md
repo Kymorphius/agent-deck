@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.47`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.48`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -66,7 +66,7 @@
 - `internal/session/claude_hooks.go`：`isAgentDeckHookCommand` 的判断规则：先去掉开头的 `VAR=值`，再要求第二个词是 `hook-handler`、程序名的文件名部分是 `agent-deck`。`RemoveClaudeHooks` 会扫描全部事件，并做 UTC 时间戳备份（约 387–414 行）。
 - `cmd/agent-deck/main.go`（约 4845、5070 行）：`agent-deck uninstall` 会移除这些钩子。`uninstall.sh` 第 253 行附近的 jq 过滤用的是同一套规则（正则），写回时用 `cat >` 保持软链接和权限。
 
-**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.47`。
+**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.48`。
 
 **测试**：以 `_hardened_test.go` 结尾的文件、`update_check_disable_test.go`、`update_timer_wiring_test.go` 等是新增或调整过的测试；`testdata/goldens/*` 里的快照已经按加固后的输出更新。
 
@@ -445,3 +445,11 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 - **matrix/hardened:** 缓存只保存文本与结构事实。新的成功 capture 即使字节相同，仍执行分类、确认/历史状态和完成样本记录；捕获失败不会提供旧 busy 证据。
 - **matrix/hardened:** Claude 限额日志按实际 canonical 路径及文件身份、大小、mtime、mode 和可用 ctime 复用，最多 1024 项，同文件并发合并。打开的文件及读前后签名都匹配才缓存；未知、失败或不完整记录继续重试。每次按当前时间重新判断 5 小时有效期，保留原有 5 秒节流与会话代际防护。
 - 验证包含 14 项日志缓存与 7 项终端文本缓存回归及既有状态测试，使用第 4 节隔离入口；真实验收另外记录相同窗口配置下的稳定 CPU、采集次数、加载构建、WebSocket 连接及 AI pane 身份。组合测试中的既有后台任务 fixture 和短时 mutation 计时边界需与同一未修改基线对照，不把单例复测冒称整个组合通过。
+
+## 38. 本地 tmux 查询计数
+
+`1.16.26+matrix.48` 为共享采集服务提供实际 tmux 子进程的本地累计指标，用于核对批量查询前后的开销。
+
+- **matrix/hardened:** 既有命令执行入口只统计实际启动，以固定命令类别汇总启动、完成、错误、等待壁钟时间及已等待客户端的 CPU 时间。构造命令、缓存命中和重复执行同一 Cmd 不重复计启动；异步 Start 的完成耗时不在同步指标覆盖内。
+- **matrix/hardened:** 指标仅由同用户 Unix socket 的 `monitor status` 返回，不保存参数、会话、socket 名、路径或终端内容；不新增定时器、磁盘历史、外部遥测或网络接口。
+- 等待壁钟总和可能包含并行重叠，不能当成进程 CPU。客户端 CPU 不含父进程 fork 或常驻 tmux server 的开销；这些仍需分别采样。实际查询分类和 CPU 接受结论由运行计数验证，不能把采样栈命中当作调用次数。
