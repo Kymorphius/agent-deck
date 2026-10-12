@@ -119,6 +119,47 @@ func TestRuntimeAuthHoldOldHealthyProbeKeepsReplacementFailure(t *testing.T) {
 	}
 }
 
+// matrix/hardened: ordinary CLI probes have no monitor START/fence. Their
+// loaded launch must still be current before they can borrow a DB watermark.
+func TestRuntimeAuthHoldPlainOldCLIRejectsReplacementGeneration(t *testing.T) {
+	for _, replacementHold := range []bool{true, false} {
+		t.Run(map[bool]string{true: "new hold", false: "no sidecar yet"}[replacementHold], func(t *testing.T) {
+			owner, peer, seed := runtimeAuthHoldFixture(t, "auth-old-plain-cli")
+			old := runtimeAuthLoad(t, owner)
+			if old.isRuntimeProducer() || !old.RuntimeProducerObservedAt().IsZero() {
+				t.Fatal("old CLI fixture unexpectedly has producer timing")
+			}
+			replacement := runtimeAuthLoad(t, peer)
+			replacement.Command = "claude --model ordinary-cli-replacement"
+			replacement.LastStartedAt = time.Now().Truncate(time.Second)
+			if err := peer.SaveWithGroups([]*Instance{replacement}, nil); err != nil {
+				t.Fatal(err)
+			}
+			if replacementHold {
+				runtimeAuthProbe(t, peer, replacement, time.Now())
+				if !replacement.noteAuthHoldLocked(AuthHoldReasonDeath, "new generation 401") {
+					t.Fatal("replacement could not arm its hold")
+				}
+			}
+			// The old plain probe finishes after replacement save/write; no
+			// runtimeAuthProbe call supplies it with a producer timestamp.
+			if old.noteAuthHoldLocked(AuthHoldReasonDeath, "late old CLI 401") {
+				t.Fatal("old plain CLI obtained replacement write permission")
+			}
+			old.Status = StatusRunning
+			old.clearAuthHoldLocked()
+			rec := runtimeAuthLoad(t, peer).AuthHold()
+			if replacementHold {
+				if rec == nil || rec.Evidence != "new generation 401" {
+					t.Fatalf("old plain CLI changed replacement hold: %+v", rec)
+				}
+			} else if _, err := os.Stat(authHoldRecordPathForProfile(owner.profile, seed.ID)); !os.IsNotExist(err) {
+				t.Fatalf("old plain CLI recreated a replacement sidecar: %v", err)
+			}
+		})
+	}
+}
+
 func TestRuntimeAuthHoldGuardPinsWriterDuringSidecarCallback(t *testing.T) {
 	owner, peer, inst := runtimeAuthHoldFixture(t, "auth-writer-pin")
 	scope := runtimeAuthProbe(t, owner, inst, time.Now())

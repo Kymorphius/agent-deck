@@ -360,6 +360,13 @@ func (i *Instance) noteAuthHoldLocked(reason, evidence string) bool {
 	}
 	if existing != nil && existing.Reason == reason {
 		if observed := existing.ObservedAt(); !observed.IsZero() && now.Sub(observed) < authHoldObservationRefresh {
+			// matrix/hardened: a plain old CLI must not claim even a retained
+			// prior hold after the registry has replaced its launch.
+			if scope.profile != "" && !scope.producer {
+				if err := scope.guard(func() error { return nil }); authHoldObservationStale(err) {
+					return false
+				}
+			}
 			return true
 		}
 		existing.Timestamp = now.Unix()
