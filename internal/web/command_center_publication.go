@@ -54,7 +54,9 @@ func (s *Server) commandCenterForPublication(v menuPublication, tracker *ccPubli
 		return menuPublication{}, commandCenterPublication{}, v.Err
 	}
 	s.menuPublisher.mu.Lock()
-	v = s.menuPublisher.current.clone()
+	// matrix/hardened: this owned generation is immutable. Capture it directly
+	// for read-only synthesis instead of decoding a private menu for each client.
+	v = s.menuPublisher.current
 	if v.Err != nil {
 		s.menuPublisher.mu.Unlock()
 		return menuPublication{}, commandCenterPublication{}, v.Err
@@ -69,10 +71,10 @@ func (s *Server) commandCenterForPublication(v menuPublication, tracker *ccPubli
 		return menuPublication{}, commandCenterPublication{}, err
 	}
 	if len(completed) == 0 {
-		return v, base, nil
+		return v.wire(), base, nil
 	}
 	snapshot := *base.snapshot
 	snapshot.RecentlyCompleted = completed
 	encoded, err := json.Marshal(&snapshot)
-	return v, commandCenterPublication{&snapshot, base.fingerprint, encoded}, err
+	return v.wire(), commandCenterPublication{&snapshot, base.fingerprint, encoded}, err
 }

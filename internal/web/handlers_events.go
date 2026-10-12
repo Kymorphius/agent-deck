@@ -35,7 +35,7 @@ func (s *Server) handleMenuEvents(w http.ResponseWriter, r *http.Request) {
 
 	// matrix/hardened: subscribing creates demand for the single menu collector;
 	// a new tab receives the existing publication instead of loading another menu.
-	updates, release := s.menuPublisher.Subscribe(menuEventsPollInterval, nil)
+	updates, release := s.menuPublisher.subscribeWire(menuEventsPollInterval, nil)
 	defer release()
 	var publication menuPublication
 	select {

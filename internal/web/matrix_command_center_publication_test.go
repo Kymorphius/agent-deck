@@ -1,6 +1,7 @@
 package web
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -9,6 +10,66 @@ import (
 	"testing"
 	"time"
 )
+
+// matrix/hardened: live synthesis reads the owned immutable menu directly,
+// while REST callers can edit every nested result without changing live data.
+func TestMatrixCommandCenterWireOwnedInputAndPrivateRESTOutput(t *testing.T) {
+	source := &matrixPublisherIntegrationSource{snapshot: ccTestMenu()}
+	srv, _, _ := matrixPublisherIntegrationServer(t, source, "")
+	tracker := &ccPublicationTracker{}
+	updates, release := srv.menuPublisher.subscribeWire(time.Hour, tracker.observe)
+	defer release()
+	publication := matrixPublisherPublication(t, updates)
+	if publication.Snapshot != nil {
+		t.Fatal("wire subscriber received a mutable menu DTO")
+	}
+	srv.menuPublisher.mu.Lock()
+	owned := srv.menuPublisher.current.Snapshot
+	srv.menuPublisher.mu.Unlock()
+	srv.commandCenterBuilder = func(menu *MenuSnapshot) *CommandCenterSnapshot {
+		if menu != owned {
+			t.Error("live derived builder decoded another per-reader menu DTO")
+		}
+		return &CommandCenterSnapshot{
+			Profile:           "owned",
+			Conductors:        []CommandCenterConductor{{Name: "original", Sessions: []CommandCenterSession{{Title: "child"}}}},
+			DecisionsWaiting:  []CommandCenterDecision{{Question: "decision"}},
+			RecentlyCompleted: []CommandCenterCompletion{},
+			AskTargets:        []string{"maestro"},
+			FleetSummaries:    []CommandCenterSummary{{Markdown: "summary"}},
+		}
+	}
+	liveMenu, base, err := srv.commandCenterForPublication(publication, tracker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if liveMenu.Snapshot != nil || liveMenu.commandCenter != publication.commandCenter {
+		t.Fatal("live helper exposed the owned DTO or replaced the shared derived owner")
+	}
+	first, err := srv.loadCommandCenterSnapshot(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.Conductors[0].Name = "changed"
+	first.Conductors[0].Sessions[0].Title = "changed"
+	first.DecisionsWaiting[0].Question = "changed"
+	first.AskTargets[0] = "changed"
+	first.FleetSummaries[0].Markdown = "changed"
+	first.RecentlyCompleted = append(first.RecentlyCompleted, CommandCenterCompletion{ID: "changed"})
+	second, err := srv.loadCommandCenterSnapshot(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for label, snapshot := range map[string]*CommandCenterSnapshot{"owned base": base.snapshot, "second REST": second} {
+		encoded, err := json.Marshal(snapshot)
+		if err != nil || !bytes.Equal(encoded, base.encoded) {
+			t.Fatalf("REST caller mutated %s: %s, %v", label, encoded, err)
+		}
+	}
+	if srv.commandCenterBuilds.Load() != 1 || source.calls.Load() != 1 {
+		t.Fatalf("wire/REST repeated work: builds=%d source=%d", srv.commandCenterBuilds.Load(), source.calls.Load())
+	}
+}
 
 // matrix/hardened: use real conductor files and count the full base builder,
 // proving both disk-artifact reads and synthesis are shared per publication.

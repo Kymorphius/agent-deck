@@ -45,7 +45,7 @@ import (
 )
 
 // matrix/hardened: identifies our hardened build.
-var Version = "1.16.26+matrix.37" // overridden at build time via -ldflags "-X main.Version=..."
+var Version = "1.16.26+matrix.38" // overridden at build time via -ldflags "-X main.Version=..."
 
 // Table column widths for list command output
 const (

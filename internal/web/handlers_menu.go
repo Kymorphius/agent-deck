@@ -33,9 +33,9 @@ func (s *Server) handleMenu(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// matrix/hardened: REST reads the same owned publication as all live streams.
-	publication, err := s.menuPublisher.load(r.Context())
-	snapshot := publication.Snapshot
+	// matrix/hardened: plain menu HTTP output reuses the publication's encoding;
+	// callers needing mutable DTOs still use the default private load contract.
+	publication, err := s.menuPublisher.loadWire(r.Context())
 	if err == nil {
 		err = publication.Err
 	}
@@ -44,7 +44,10 @@ func (s *Server) handleMenu(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, snapshot)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(publication.encoded)
+	_, _ = w.Write([]byte("\n"))
 }
 
 func (s *Server) handleSessionByID(w http.ResponseWriter, r *http.Request) {
