@@ -18,8 +18,6 @@ import (
 	"encoding/json"
 	"log/slog"
 	"time"
-
-	"github.com/asheshgoplani/agent-deck/internal/statedb"
 )
 
 const toolDataLastActivityAtKey = "last_activity_at"
@@ -73,6 +71,10 @@ func ReadLastActivityAtFromToolData(td json.RawMessage) time.Time {
 // recorded. Zero means no activity has ever been recorded (legacy row or
 // genuinely never active). Thread-safe.
 func (i *Instance) LastActivityAt() time.Time {
+	// matrix/hardened: activity is observed once by the shared monitor.
+	if row, _ := i.runtimeView(); row != nil {
+		return row.ActivityAt
+	}
 	i.mu.RLock()
 	defer i.mu.RUnlock()
 	return i.lastActivityAt
@@ -117,11 +119,12 @@ func (i *Instance) persistLastActivity(force bool) {
 		return
 	}
 
-	db := statedb.GetGlobal()
+	// matrix/hardened: targeted writes stay in the instance owning profile.
+	db := i.stateDB()
 	if db == nil {
 		return
 	}
-	if err := db.WriteLastActivityAt(i.ID, to); err != nil {
+	if err := db.WriteLastActivityAt(i.ID, to, i.producerGuardArgs()...); err != nil {
 		sessionLog.Debug("last_activity_persist_failed",
 			slog.String("instance", i.ID),
 			slog.String("error", err.Error()),

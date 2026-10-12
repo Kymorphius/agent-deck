@@ -176,6 +176,11 @@ func (h *Home) enterEmbeddedMode() bool {
 			if db := statedb.GetGlobal(); db != nil {
 				_ = db.SetAcknowledged(inst.ID, true)
 			}
+			// matrix/hardened: focused input acknowledges the same shared
+			// verdict without resampling the fleet in this terminal.
+			if h.runtimeSource != nil {
+				h.requestRuntimeRefresh(inst)
+			}
 		}
 	}
 	return true

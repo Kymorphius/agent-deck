@@ -13,6 +13,31 @@ type staticMenuLoader struct {
 	snapshot *MenuSnapshot
 }
 
+type runtimeMemoryMenuLoader struct{ staticMenuLoader }
+
+func (*runtimeMemoryMenuLoader) RuntimeObservationConfigured() bool { return true }
+
+func TestRuntimeMemoryMenuDoesNotMaskSharedObservationAfterMutation(t *testing.T) {
+	fallback := &runtimeMemoryMenuLoader{staticMenuLoader{snapshot: &MenuSnapshot{Profile: "default", Items: []MenuItem{{Session: &MenuSession{ID: "runtime", Status: session.StatusRunning}}}}}}
+	data := NewMemoryMenuData(fallback)
+	data.SetSnapshot(&MenuSnapshot{Profile: "default", Items: []MenuItem{{Session: &MenuSession{ID: "runtime", Status: session.StatusStopped}}}})
+	got, err := data.LoadMenuSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Items[0].Session.Status != session.StatusRunning {
+		t.Fatal("local controller snapshot masked shared state")
+	}
+	fallback.snapshot.Items[0].Session.Status = session.StatusWaiting
+	got, err = data.LoadMenuSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Items[0].Session.Status != session.StatusWaiting {
+		t.Fatal("subsequent source observation remained masked")
+	}
+}
+
 type revisionedMenuLoader struct {
 	mu                sync.Mutex
 	revision          int64

@@ -415,8 +415,12 @@ func resolveClaudeConfigDir(opts resolveOpts) (path, source string) {
 				return groupDir, "group"
 			}
 		}
-		if envDir := envClaudeConfigDirIgnoringScratchLeak(); envDir != "" {
-			return envDir, "env"
+		// matrix/hardened: a multiplexed producer cannot inherit the native
+		// home of whichever profile happened to launch the collector.
+		if !opts.inst.isRuntimeProducer() {
+			if envDir := envClaudeConfigDirIgnoringScratchLeak(); envDir != "" {
+				return envDir, "env"
+			}
 		}
 	} else {
 		// Group chain: group beats env (#1508). A
@@ -445,6 +449,10 @@ func resolveClaudeConfigDir(opts resolveOpts) (path, source string) {
 		// GetEffectiveProfile("") recomputation that can still return an
 		// inferred-but-rejected CLAUDE_CONFIG_DIR-derived name.
 		profile := resolvedProcessProfile()
+		// matrix/hardened: each observed instance retains its storage profile.
+		if opts.inst != nil {
+			profile = opts.inst.runtimeProfileForResolution()
+		}
 		if profileDir := userConfig.GetProfileClaudeConfigDir(profile); profileDir != "" {
 			return profileDir, "profile"
 		}

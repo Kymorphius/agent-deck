@@ -45,7 +45,7 @@ import (
 )
 
 // matrix/hardened: identifies our hardened build.
-var Version = "1.16.26+matrix.38" // overridden at build time via -ldflags "-X main.Version=..."
+var Version = "1.16.26+matrix.39" // overridden at build time via -ldflags "-X main.Version=..."
 
 // Table column widths for list command output
 const (
@@ -549,6 +549,9 @@ func main() {
 		case "events":
 			handleEvents(profile, args[1:])
 			return
+		case "monitor": // matrix/hardened: read-only user runtime collector
+			handleMonitor(args[1:])
+			return
 		case "daemon":
 			handleDaemon(profile, args[1:])
 			return
@@ -1047,7 +1050,14 @@ func main() {
 	}
 
 	// Start TUI with the specified profile
-	homeModel := ui.NewHomeWithProfileAndMode(profile)
+	// matrix/hardened: configure the consumer before Home starts its workers.
+	runtimeSource, err := newRuntimeMonitor()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: runtime monitor setup: %v\n", err)
+		os.Exit(1)
+	}
+	defer runtimeSource.Close()
+	homeModel := ui.NewHomeWithRuntimeSource(profile, runtimeSource, webHeadless)
 	setTelemetrySignalClose(homeModel.CloseTelemetry)
 	// --group / --select were already extracted and validated above, before
 	// the no-TTY gate; apply them to the model now that it exists.
@@ -1176,6 +1186,8 @@ func main() {
 			os.Exit(1)
 		}
 		fallbackMenuData := web.NewSessionDataService(effectiveProfile)
+		fallbackMenuData.SetRuntimeObservationSource(runtimeSource)
+		webOptions.runtimeSource = runtimeSource
 		liveMenuData := web.NewMemoryMenuData(fallbackMenuData)
 		homeModel.SetWebMenuData(liveMenuData)
 
@@ -1184,9 +1196,8 @@ func main() {
 		// each mutation. Flag the model so WebMutator.ensureHydrated activates;
 		// otherwise delete/restart/close/group-mutate on pre-existing sessions
 		// fail ("session not found" / empty-sweep guard).
-		if webHeadless {
-			homeModel.SetHeadless(true)
-		}
+		// matrix/hardened: headless mode was supplied at construction, before
+		// any worker can read it or keep an otherwise idle profile active.
 
 		server, err := buildWebServerFromOptions(effectiveProfile, webOptions, liveMenuData, ui.NewWebMutator(homeModel))
 		if err != nil {
@@ -1504,7 +1515,7 @@ var commandRegistry = map[string]bool{
 	"tasks":           true, // matrix/hardened: World Store task board
 	"webservice":      true, // matrix/hardened: this host's own `agent-deck web` service
 	"telegram-doctor": true, "watcher": true, "openclaw": true, "oc": true,
-	"remote": true, "remote-agent": true, "system": true, "worktree": true, "wt": true, "costs": true, "events": true, "daemon": true, "usage": true, "web": true, "config": true, "recall": true,
+	"remote": true, "remote-agent": true, "system": true, "worktree": true, "wt": true, "costs": true, "events": true, "daemon": true, "monitor": true, "usage": true, "web": true, "config": true, "recall": true,
 	"uninstall": true, "migrate-paths": true, "hook-handler": true,
 	"codex-notify": true, "hooks": true, "codex-hooks": true, "gemini-hooks": true,
 	"hermes-hooks": true, "cursor-hooks": true, "tmux-hooks": true, "pi-hooks": true, "deepseek": true, "notify-daemon": true,

@@ -432,7 +432,11 @@ func (s *Server) handleArchivedSessions(w http.ResponseWriter, r *http.Request) 
 		writeAPIError(w, http.StatusInternalServerError, ErrCodeInternalError, "failed to load archived sessions")
 		return
 	}
-	refreshSnapshotHookStatuses(snapshot, s.hookStatusLoader)
+	// matrix/hardened: complete monitor verdicts must not be overwritten by a
+	// raw Stop hook, and archived records do not create new sampling demand.
+	if !s.runtimeObservationConfigured() {
+		refreshSnapshotHookStatuses(snapshot, s.hookStatusLoader)
+	}
 	applySnapshotAnnotations(snapshot, s.annotationLoader)
 	resp := archivedSessionsResponse{
 		Sessions: make([]*MenuSession, 0),

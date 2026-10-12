@@ -469,12 +469,16 @@ type instanceStorageSnapshot struct {
 }
 
 func (s *Storage) rememberInstanceSnapshot(inst *Instance, original, stored *statedb.InstanceRow) {
+	// matrix/hardened: monitor producers retain the database and profile owning each row.
 	inst.restartDB.Store(s.db)
+	inst.mu.Lock()
+	inst.setRuntimeProfileLocked(s.profile)
 	inst.storageSnapshot = &instanceStorageSnapshot{
 		dbPath:   s.dbPath,
 		original: statedb.CloneInstanceRow(original),
 		stored:   statedb.CloneInstanceRow(stored),
 	}
+	inst.mu.Unlock()
 }
 
 // CommitNativeHarnessSwitch persists a same-harness switch after its lifecycle
@@ -1759,6 +1763,9 @@ func (s *Storage) convertToInstances(data *StorageData) ([]*Instance, []*GroupDa
 			MultiRepoTempDir:      instData.MultiRepoTempDir,
 			tmuxSession:           tmuxSess,
 		}
+		// matrix/hardened: hydration binds every targeted monitor write to this profile.
+		inst.restartDB.Store(s.db)
+		inst.setRuntimeProfileLocked(s.profile)
 		// Restore configured detection without restarting the running harness.
 		inst.loadCustomPatternsFromConfig()
 

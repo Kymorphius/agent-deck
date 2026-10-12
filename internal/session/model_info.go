@@ -17,6 +17,12 @@ type ModelInfo struct {
 // LaunchModelID returns the exact per-session model override that will be
 // passed to the underlying tool on start/restart. Empty means tool default.
 func (i *Instance) LaunchModelID() string {
+	// matrix/hardened: preserve models captured with the shared runtime verdict.
+	if i != nil {
+		if row, _ := i.runtimeView(); row != nil {
+			return row.LaunchModel.ModelID
+		}
+	}
 	if i == nil {
 		return ""
 	}

@@ -256,6 +256,9 @@ type Home struct {
 
 	// Profile
 	profile string // The profile this Home is displaying
+	// matrix/hardened: configured before workers start; nil preserves legacy callers.
+	runtimeSource session.RuntimeObservationSource
+	runtimeState  runtimeHomeState
 
 	// Data (protected by instancesMu for background worker access)
 	instances          []*session.Instance
@@ -1556,6 +1559,7 @@ type loadSessionsMsg struct {
 	poolProxies       int          // Number of socket proxies started
 	poolError         error        // Pool initialization error
 	loadMtime         time.Time    // File mtime at load time (for external change detection)
+	runtimeFence      time.Time    // matrix/hardened: registry mutation watermark at hydration
 }
 
 type sessionCreatedMsg struct {
@@ -1967,6 +1971,12 @@ func claudeHooksStartupDecision(present, installed bool, prompted string) claude
 // NewHomeWithProfileAndMode creates a new Home with the specified profile.
 // All instances manage the notification bar equally via shared SQLite state.
 func NewHomeWithProfileAndMode(profile string) *Home {
+	return NewHomeWithRuntimeSource(profile, nil)
+}
+
+// NewHomeWithRuntimeSource makes the TUI a consumer of the profile monitor.
+// matrix/hardened: injection precedes every worker and watcher startup.
+func NewHomeWithRuntimeSource(profile string, source session.RuntimeObservationSource, headless ...bool) *Home {
 	// Read (and unset) what a predecessor left for us before anything else
 	// in this process can spawn a child (restart.go).
 	restartHandoff := consumeRestartEnv()
@@ -2006,8 +2016,11 @@ func NewHomeWithProfileAndMode(profile string) *Home {
 	}
 
 	h := &Home{
-		restartHandoff:            restartHandoff,
-		profile:                   actualProfile,
+		restartHandoff: restartHandoff,
+		profile:        actualProfile,
+		runtimeSource:  source,
+		// matrix/hardened: set controller mode before background workers start.
+		headless:                  len(headless) > 0 && headless[0],
 		storage:                   storage,
 		storageWarning:            storageWarning,
 		search:                    NewSearch(),
@@ -2229,6 +2242,10 @@ func NewHomeWithProfileAndMode(profile string) *Home {
 		// Control mode pipes provide event-driven, zero-subprocess status detection.
 		pm := tmux.NewPipeManager(h.ctx, outputCallback)
 		pm.SetWindowChangeCallback(func() {
+			if h.runtimeSource != nil {
+				h.queueRuntimeStatusRead()
+				return
+			}
 			tmux.RefreshSessionCache()
 		})
 		tmux.SetPipeManager(pm)
@@ -2277,7 +2294,7 @@ func NewHomeWithProfileAndMode(profile string) *Home {
 	// SSE-based status detection for OpenCode sessions (issue #1614).
 	// Connections are opened lazily by backgroundStatusUpdate's Sync() call,
 	// so creating the watcher here is free when no OpenCode sessions exist.
-	if homeBackgroundWorkersEnabled {
+	if homeBackgroundWorkersEnabled && source == nil {
 		h.sseWatcher = session.NewOpenCodeSSEWatcher(nil)
 	}
 
@@ -2287,7 +2304,7 @@ func NewHomeWithProfileAndMode(profile string) *Home {
 	// refreshes it on save so adding a slot lights the badges without a restart.
 	h.accountSlotsConfigured.Store(len(session.ConfiguredAccountNames(userConfig)) > 0)
 	hooksEnabled := userConfig == nil || userConfig.Claude.GetHooksEnabled()
-	if homeBackgroundWorkersEnabled && hooksEnabled {
+	if homeBackgroundWorkersEnabled && source == nil && hooksEnabled {
 		configDir := session.GetClaudeConfigDir()
 		prompted := ""
 		if db := statedb.GetGlobal(); db != nil {
@@ -2331,7 +2348,7 @@ func NewHomeWithProfileAndMode(profile string) *Home {
 	// not prompt. Any recorded decision suppresses future prompts; in particular,
 	// accepted hooks that are later removed stay removed because removal revokes
 	// consent rather than triggering a silent reinstall.
-	if hermesCmd := strings.TrimSpace(session.GetToolCommand("hermes")); homeBackgroundWorkersEnabled && hermesCmd != "" {
+	if hermesCmd := strings.TrimSpace(session.GetToolCommand("hermes")); homeBackgroundWorkersEnabled && source == nil && hermesCmd != "" {
 		// GetToolCommand may return a full command string with arguments
 		// (e.g. "hermes --gateway-url=..."). LookPath needs the binary name only.
 		// Trim first because Fields("") and Fields("   ") both return [], and
@@ -2364,7 +2381,7 @@ func NewHomeWithProfileAndMode(profile string) *Home {
 	// uninstall`, issue #1672). The opt-out gates the watcher too, matching the
 	// [claude] hooks_enabled gate above.
 	cursorCmd := strings.TrimSpace(session.GetToolCommand("cursor"))
-	if shouldAutoInstallCursorHooks(userConfig, cursorCmd) {
+	if source == nil && shouldAutoInstallCursorHooks(userConfig, cursorCmd) {
 		if cursorFields := strings.Fields(cursorCmd); len(cursorFields) > 0 {
 			cursorBin := cursorFields[0]
 			if _, err := exec.LookPath(cursorBin); err == nil {
@@ -3893,6 +3910,13 @@ func (h *Home) reconcileLivePipes() {
 	socketSeen := make(map[string]bool, len(h.instances))
 	for _, inst := range h.instances {
 		if ts := inst.GetTmuxSession(); ts != nil {
+			if h.runtimeSource != nil {
+				// matrix/hardened: confirmed dead panes do not acquire view
+				// pipes; transport disconnection never changes status.
+				if alive, known := inst.RuntimeTmuxAlive(); known && !alive {
+					continue
+				}
+			}
 			socketByName[ts.Name] = inst.TmuxSocketName
 			if nameToID != nil {
 				nameToID[ts.Name] = inst.ID
@@ -5163,6 +5187,13 @@ func (h *Home) sessionLoadCmd(restore *reloadState, initializePool bool) tea.Cmd
 		}
 		msg.loadMtime, _ = storage.GetFileMtime()
 		msg.instances, msg.groups, msg.persistedSnapshot, msg.err = storage.LoadWithGroupsSnapshot()
+		if h.runtimeSource != nil && msg.err == nil {
+			msg.runtimeFence, msg.err = storage.GetUpdatedAt()
+			for _, inst := range msg.instances {
+				inst.ExpectRuntimeSnapshot()
+				inst.SetRuntimeMutationFence(msg.runtimeFence)
+			}
+		}
 		if watcher != nil {
 			finished, err := watcher.endLoad(ticket)
 			msg.watcherTicket = &finished
@@ -5214,6 +5245,16 @@ func (h *Home) HydrateInstancesFromStorage() error {
 	instances, groups, err := h.storage.LoadWithGroups()
 	if err != nil {
 		return fmt.Errorf("hydrate instances from storage: %w", err)
+	}
+	if h.runtimeSource != nil {
+		fence, err := h.storage.GetUpdatedAt()
+		if err != nil {
+			return err
+		}
+		for _, inst := range instances {
+			inst.ExpectRuntimeSnapshot()
+			inst.SetRuntimeMutationFence(fence)
+		}
 	}
 
 	h.instancesMu.Lock()
@@ -6104,7 +6145,15 @@ func (h *Home) refreshSessionRenderSnapshot(instances []*session.Instance) {
 		// concurrent rebuild lands a fresher value while we're walking the
 		// instances slice, the fallback uses that value instead of stamping
 		// an even-older one back into the snapshot.
-		if tmuxSess := inst.GetTmuxSession(); tmuxSess != nil {
+		if h.runtimeSource != nil {
+			// matrix/hardened: pane metadata belongs to the shared verdict;
+			// a consumer's local control cache cannot replace it.
+			if row, ok := inst.RuntimeReplica(); ok && row.PaneTitleKnown {
+				state.paneTitle = cleanPaneTitle(row.PaneTitle)
+			} else if prev := h.getSessionRenderSnapshot(); prev != nil {
+				state.paneTitle = prev[inst.ID].paneTitle
+			}
+		} else if tmuxSess := inst.GetTmuxSession(); tmuxSess != nil {
 			if paneInfo, ok := tmux.GetCachedPaneInfo(tmuxSess.Name); ok {
 				state.paneTitle = cleanPaneTitle(paneInfo.Title)
 				if state.paneTitle == tmuxSess.Name {
@@ -6300,6 +6349,12 @@ func (h *Home) logWorker() {
 						uiLog.Error("log_worker_panic", slog.Any("panic", r))
 					}
 				}()
+				if h.runtimeSource != nil {
+					// matrix/hardened: output alone is no registry mutation;
+					// read cached observations without forcing extra fleet passes.
+					h.queueRuntimeStatusRead()
+					return
+				}
 				_ = inst.UpdateStatus()
 			}()
 		}
@@ -6440,6 +6495,13 @@ func (h *Home) backgroundStatusUpdate() {
 		}
 	}()
 
+	// matrix/hardened: shared mode has no local fleet-status fallback, even
+	// when the monitor is down. Window maintenance continues independently.
+	if h.runtimeSource != nil {
+		h.backgroundRuntimeStatusUpdate(instances)
+		return
+	}
+
 	// Claim reconciliation: decide which sessions THIS instance polls. This
 	// runs BEFORE the tmux-alive and empty-instances early returns below:
 	// claims lifecycle (heartbeats, orphan sweep, primary election) is
@@ -6544,47 +6606,8 @@ func (h *Home) backgroundStatusUpdate() {
 		h.sseWatcher.Sync(targets)
 	}
 
-	// Proactive context-% monitoring: send /clear before auto-compact triggers
-	// For conductor sessions with clear_on_compact enabled, check cached analytics
-	for _, inst := range instances {
-		if !session.IsClaudeCompatible(inst.Tool) || inst.GroupPath != "conductor" {
-			continue
-		}
-		if !inst.ConductorClearOnCompact() {
-			continue
-		}
-		// Debounce: skip if /clear was recently sent for this session
-		if lastSent, ok := h.clearOnCompactSent[inst.ID]; ok {
-			if time.Since(lastSent) < clearOnCompactCooldown {
-				continue
-			}
-		}
-		// Check cached analytics for context usage. The gate fails closed on
-		// a window that is inferred, unknown or disproved (issue #2026); the
-		// reason is logged once per session so a disarmed trigger is visible.
-		cached := h.getAnalyticsForSession(inst)
-		if cached == nil {
-			continue
-		}
-		due, reason := clearOnCompactDue(cached)
-		if !due {
-			h.noteClearOnCompactDisarmed(inst.ID, reason)
-			continue
-		}
-		if tmuxSess := inst.GetTmuxSession(); tmuxSess != nil {
-			h.clearOnCompactSent[inst.ID] = time.Now()
-			conductorName := strings.TrimPrefix(inst.Title, "conductor-")
-			safego.Go(uiLog, "conductor_clear_and_heartbeat", func() {
-				time.Sleep(500 * time.Millisecond)
-				msg := fmt.Sprintf("Heartbeat: Check sessions in your group (%s). List any that are waiting, auto-respond where safe, and report what needs my attention.", conductorName)
-				if err := clearConductorAndHeartbeat(func(body string) error {
-					return deliverToConductorPane(tmuxSess, body)
-				}, msg, 3*time.Second); err != nil {
-					uiLog.Warn("conductor_clear_heartbeat_refused", slog.String("error", err.Error()))
-				}
-			})
-		}
-	}
+	// matrix/hardened: the legacy path retains its existing side-effect cadence.
+	h.checkConductorClearOnCompact(instances)
 
 	// Two tiers per periodic pass. Tier one, unbudgeted but screen-bounded:
 	// every visible or focused row, and every row whose hook/SSE evidence
@@ -6879,7 +6902,7 @@ func (h *Home) backgroundStatusUpdate() {
 // registry: #2222 was a hand-written allowlist here that missed pi, so a pi
 // instance's hookStatus was set once at cold load and never refreshed.
 func (h *Home) feedHookStatuses(instances []*session.Instance) {
-	if h.hookWatcher == nil {
+	if h.runtimeSource != nil || h.hookWatcher == nil {
 		return
 	}
 	for _, inst := range instances {
@@ -6936,7 +6959,13 @@ func (h *Home) syncNotificationsBackground() {
 				if db := statedb.GetGlobal(); db != nil {
 					_ = db.SetAcknowledged(inst.ID, true)
 				}
-				_ = inst.UpdateStatus()
+				// matrix/hardened: acknowledgment changes the registry watermark;
+				// request one new shared observation without a local status probe.
+				if h.runtimeSource != nil {
+					h.requestRuntimeRefresh(inst)
+				} else {
+					_ = inst.UpdateStatus()
+				}
 				notifLog.Debug(
 					"session_acknowledged",
 					slog.String("title", inst.Title),
@@ -7142,6 +7171,10 @@ func (h *Home) attachReturnSyncCmd(sessionID string) tea.Cmd {
 // as attachReturnSyncCmd: tmux work here, row rebuild on the event loop.
 func (h *Home) attachReturnRefreshCmd() tea.Cmd {
 	return func() tea.Msg {
+		if h.runtimeSource != nil {
+			h.requestRuntimeRefresh(nil)
+			return attachReturnSyncedMsg{}
+		}
 		tmux.RefreshSessionCache()
 		tmux.RefreshPaneInfoCache()
 		h.refreshSessionRenderSnapshot(nil)
@@ -7158,6 +7191,12 @@ func (h *Home) refreshAttachedSessionStatus(sessionID string) {
 	inst := h.instanceByID[sessionID]
 	h.instancesMu.RUnlock()
 	if inst == nil {
+		return
+	}
+	// matrix/hardened: invalidate stale pre-attach observations and refresh
+	// asynchronously; the UI returns immediately from its existing command.
+	if h.runtimeSource != nil {
+		h.requestRuntimeRefresh(inst)
 		return
 	}
 
@@ -7214,6 +7253,12 @@ func (h *Home) publishCurrentSessionStates() {
 // Performance: With 10 sessions, updating all takes ~1-2s of cumulative time per tick.
 // With batching (3 visible + 2 non-visible per tick), we keep each tick under 100ms.
 func (h *Home) processStatusUpdate(req statusUpdateRequest) {
+	// matrix/hardened: rendering can reuse the last monitor observation;
+	// periodic worker collection is shared, never replaced by local probing.
+	if h.runtimeSource != nil {
+		h.refreshRuntimeObservations()
+		return
+	}
 	const batchSize = 2 // Reduced from 5 to 2 - fewer CapturePane() calls per tick
 	// Visible rows are budgeted too (#1753): see Step 1 below. 4 rows per pass
 	// keeps a screenful fresh within a few passes while bounding the worst case
@@ -7829,12 +7874,14 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			// Deduplicate Claude session IDs on load to fix any existing duplicates
 			// This ensures no two sessions share the same Claude session ID
-			session.UpdateClaudeSessionsWithDedup(h.instances)
+			if h.runtimeSource == nil {
+				session.UpdateClaudeSessionsWithDedup(h.instances)
+			}
 			// Collect OpenCode detection commands for restored sessions without IDs
 			// Using tea.Cmd pattern ensures save is triggered after detection completes
 			var detectionCmds []tea.Cmd
 			for _, inst := range h.instances {
-				if inst.Tool == "opencode" && inst.OpenCodeSessionID == "" && (msg.restoreState == nil || inst.OpenCodeDetectedAt.IsZero()) {
+				if h.runtimeSource == nil && inst.Tool == "opencode" && inst.OpenCodeSessionID == "" && (msg.restoreState == nil || inst.OpenCodeDetectedAt.IsZero()) {
 					detectionCmds = append(detectionCmds, h.detectOpenCodeSessionCmd(inst))
 				}
 			}
@@ -9068,6 +9115,11 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return h, nil
 
 	case reviverTickMsg:
+		// matrix/hardened: the local pipe reconciler repairs view transports.
+		// A missing consumer pipe cannot overwrite the monitor's verdict.
+		if h.runtimeSource != nil {
+			return h, h.reviverTick()
+		}
 		// Fire-and-forget reviver sweep for instances whose tmux server
 		// survived an SSH scope cleanup but whose pipe was reaped. Runs in
 		// a goroutine so it never blocks the Bubble Tea update loop.
@@ -12807,9 +12859,15 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 						}
 					}
 					// Clear idle optimization so UpdateStatus does a full check
-					item.Session.ForceNextStatusCheck()
-					_ = item.Session.UpdateStatus()
-					h.saveInstances()
+					if h.runtimeSource != nil {
+						h.requestRuntimeRefresh(item.Session)
+					} else {
+						item.Session.ForceNextStatusCheck()
+						_ = item.Session.UpdateStatus()
+					}
+					if h.runtimeSource == nil {
+						h.saveInstances()
+					}
 				}
 			}
 		}
@@ -13363,6 +13421,9 @@ func (h *Home) attachSelectedLegacy() tea.Cmd {
 			if db := statedb.GetGlobal(); db != nil {
 				_ = db.SetAcknowledged(parentInst.ID, true)
 			}
+			if h.runtimeSource != nil {
+				h.requestRuntimeRefresh(parentInst)
+			}
 		}
 		h.isAttaching.Store(true)
 		return tea.Exec(attachWindowCmd{
@@ -13762,12 +13823,16 @@ func (h *Home) confirmInstallHooks() tea.Cmd {
 		logUsageFeedResults(session.HealUsageFeeds(config))
 	}
 	// Start the status file watcher
-	hookWatcher, err := session.NewStatusFileWatcher(nil)
-	if err != nil {
-		uiLog.Warn("hook_watcher_init_failed", slog.String("error", err.Error()))
+	if h.runtimeSource == nil {
+		hookWatcher, err := session.NewStatusFileWatcher(nil)
+		if err != nil {
+			uiLog.Warn("hook_watcher_init_failed", slog.String("error", err.Error()))
+		} else {
+			h.hookWatcher = hookWatcher
+			go hookWatcher.Start()
+		}
 	} else {
-		h.hookWatcher = hookWatcher
-		go hookWatcher.Start()
+		h.requestRuntimeRefresh(nil)
 	}
 	// Remember user's choice
 	if db := statedb.GetGlobal(); db != nil {
@@ -13811,7 +13876,7 @@ func (h *Home) confirmInstallHermesHooks() tea.Cmd {
 	if db := statedb.GetGlobal(); db != nil {
 		_ = db.SetMeta("hermes_hooks_prompted", "accepted")
 	}
-	if h.hookWatcher == nil {
+	if h.runtimeSource == nil && h.hookWatcher == nil {
 		if hookWatcher, err := session.NewStatusFileWatcher(nil); err != nil {
 			uiLog.Warn("hook_watcher_init_failed", slog.String("error", err.Error()))
 		} else {
@@ -13896,6 +13961,9 @@ func (h *Home) performFinalShutdown(shutdownPool bool) tea.Cmd {
 		case <-time.After(5 * time.Second):
 			uiLog.Warn("log_workers_stop_timeout")
 		}
+		// matrix/hardened: canceled asynchronous monitor requests must finish
+		// before this Home closes its storage and view transports.
+		h.stopRuntimeRefreshWorkers()
 
 		// Close PipeManager (shuts down all control mode pipes)
 		if pm := tmux.GetPipeManager(); pm != nil {
@@ -17926,6 +17994,9 @@ func (h *Home) attachSession(inst *session.Instance) tea.Cmd {
 		if db := statedb.GetGlobal(); db != nil {
 			_ = db.SetAcknowledged(inst.ID, true)
 		}
+		if h.runtimeSource != nil {
+			h.requestRuntimeRefresh(inst)
+		}
 		statusLog.Debug("acknowledged_on_attach", slog.String("title", inst.Title))
 	}
 
@@ -19484,6 +19555,11 @@ func (h *Home) renderFrame() string {
 	}
 	if warning := h.renderHealthWarning(); warning != "" {
 		helpBar = warning
+	}
+	// matrix/hardened: source outages are visible while accepted state remains
+	// usable; showing this in the help bar avoids clipping a trailing warning.
+	if warning := h.runtimeWarning(); warning != "" {
+		helpBar = lipgloss.NewStyle().Foreground(ColorYellow).MaxWidth(max(h.width, 1)).Render(warning)
 	}
 	b.WriteString(helpBar)
 
@@ -26182,4 +26258,50 @@ func (h *Home) remoteAccountsLine(remoteName, account string, now time.Time) str
 		}
 	}
 	return fmt.Sprintf("account unknown (slot %q not reported by remote)", slot)
+}
+
+// matrix/hardened: shared consumers run this existing action only on the elected TUI.
+func (h *Home) checkConductorClearOnCompact(instances []*session.Instance) {
+	// Proactive context-% monitoring: send /clear before auto-compact triggers
+	// For conductor sessions with clear_on_compact enabled, check cached analytics
+	for _, inst := range instances {
+		if !session.IsClaudeCompatible(inst.Tool) || inst.GroupPath != "conductor" {
+			continue
+		}
+		if !inst.ConductorClearOnCompact() {
+			continue
+		}
+		// Debounce: skip if /clear was recently sent for this session
+		if lastSent, ok := h.clearOnCompactSent[inst.ID]; ok {
+			if time.Since(lastSent) < clearOnCompactCooldown {
+				continue
+			}
+		}
+		// Check cached analytics for context usage. The gate fails closed on
+		// a window that is inferred, unknown or disproved (issue #2026); the
+		// reason is logged once per session so a disarmed trigger is visible.
+		cached := h.getAnalyticsForSession(inst)
+		if cached == nil {
+			continue
+		}
+		due, reason := clearOnCompactDue(cached)
+		if !due {
+			h.noteClearOnCompactDisarmed(inst.ID, reason)
+			continue
+		}
+		if tmuxSess := inst.GetTmuxSession(); tmuxSess != nil {
+			h.clearOnCompactSent[inst.ID] = time.Now()
+			conductorName := strings.TrimPrefix(inst.Title, "conductor-")
+			safego.Go(uiLog, "conductor_clear_and_heartbeat", func() {
+				time.Sleep(500 * time.Millisecond)
+				msg := fmt.Sprintf("Heartbeat: Check sessions in your group (%s). List any that are waiting, auto-respond where safe, and report what needs my attention.", conductorName)
+				if err := clearConductorAndHeartbeat(func(body string) error {
+					return deliverToConductorPane(tmuxSess, body)
+				}, msg, 3*time.Second); err != nil {
+					uiLog.Warn("conductor_clear_heartbeat_refused", slog.String("error", err.Error()))
+				}
+			})
+		}
+	}
+
 }

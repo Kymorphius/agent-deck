@@ -71,7 +71,17 @@ func TestInstanceSnapshotsToolDataAndAcknowledgement(t *testing.T) {
 	desired.Title = "alice"
 	committed, err := db.MergeInstanceSnapshots([]InstanceSnapshot{{Original: base, Stored: base, Desired: desired}}, nil)
 	require.NoError(t, err)
-	require.JSONEq(t, string(other.ToolData), string(committed[0].ToolData))
+	// matrix/hardened: targeted ACK now carries an exact timestamp alongside
+	// its flag; stale metadata saves must preserve it and every original field.
+	var toolData map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(committed[0].ToolData, &toolData))
+	var ackAt int64
+	require.NoError(t, json.Unmarshal(toolData["runtime_ack_at"], &ackAt))
+	require.Greater(t, ackAt, int64(0))
+	delete(toolData, "runtime_ack_at")
+	remaining, err := json.Marshal(toolData)
+	require.NoError(t, err)
+	require.JSONEq(t, string(other.ToolData), string(remaining))
 	var ack int
 	require.NoError(t, db.DB().QueryRow("SELECT acknowledged FROM instances WHERE id='shared'").Scan(&ack))
 	require.Equal(t, 1, ack, "saving metadata must not reset a targeted acknowledgement")

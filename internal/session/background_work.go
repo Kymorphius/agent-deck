@@ -445,6 +445,12 @@ func (i *Instance) probeBackgroundWork(pane tmux.BackgroundWork) tmux.Background
 // (issue #2473): non-zero only while the status is running BECAUSE of work in
 // flight past an ended foreground turn. Never captures the pane.
 func (i *Instance) BackgroundWork() tmux.BackgroundWork {
+	// matrix/hardened: preserve the shared background-work verdict.
+	if row, consumer := i.runtimeView(); row != nil {
+		return row.BackgroundWork
+	} else if consumer {
+		return tmux.BackgroundWork{}
+	}
 	i.mu.RLock()
 	defer i.mu.RUnlock()
 	if i.bgWorkActive && i.Status == StatusRunning {
@@ -469,6 +475,12 @@ func (i *Instance) BackgroundWorkJSON() *tmux.BackgroundWork {
 // a hook candidate is only fresh for hookFreshWindow, well inside the hold).
 func backgroundWorkHoldsTurn(inst *Instance) bool {
 	if inst == nil {
+		return false
+	}
+	// matrix/hardened: consumers already have the complete foreground/background verdict.
+	if row, consumer := inst.runtimeView(); row != nil {
+		return row.BackgroundWork.InFlight()
+	} else if consumer {
 		return false
 	}
 	if backgroundWorkOutrankedBySubstate(inst.GetTmuxSession()) {

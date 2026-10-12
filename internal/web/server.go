@@ -38,13 +38,15 @@ type Config struct {
 	// ConfirmLinkOpen gates the web terminal's link-open confirm for hosts
 	// that are NOT trusted. nil means "confirm" — the safe default, so a
 	// Config built without this field never silently disables the prompt.
-	ConfirmLinkOpen     *bool
-	MenuData            MenuDataLoader
-	PushVAPIDPublicKey  string
-	PushVAPIDPrivateKey string
-	PushVAPIDSubject    string
-	PushTestInterval    time.Duration
-	RemoteFleet         RemoteFleetLoader
+	ConfirmLinkOpen *bool
+	MenuData        MenuDataLoader
+	// matrix/hardened: one user-level source owns runtime sampling across Web/TUI.
+	RuntimeObservationSource session.RuntimeObservationSource
+	PushVAPIDPublicKey       string
+	PushVAPIDPrivateKey      string
+	PushVAPIDSubject         string
+	PushTestInterval         time.Duration
+	RemoteFleet              RemoteFleetLoader
 }
 
 // confirmLinkOpen resolves Config.ConfirmLinkOpen, defaulting to true so an
@@ -229,6 +231,14 @@ func NewServer(cfg Config) *Server {
 	if menuData == nil {
 		menuData = NewSessionDataService(cfg.Profile)
 	}
+	// matrix/hardened: inject before any publisher or push worker starts.
+	if cfg.RuntimeObservationSource != nil {
+		if consumer, ok := menuData.(interface {
+			SetRuntimeObservationSource(session.RuntimeObservationSource)
+		}); ok {
+			consumer.SetRuntimeObservationSource(cfg.RuntimeObservationSource)
+		}
+	}
 
 	mutationLimiter := rate.NewLimiter(rate.Limit(20), 40) // 20 req/s, burst 40
 	if cfg.Profile == "fixture" {
@@ -263,7 +273,9 @@ func NewServer(cfg Config) *Server {
 			return nil, err
 		}
 		snapshot = cloneMenuSnapshot(snapshot)
-		refreshSnapshotHookStatuses(snapshot, s.hookStatusLoader)
+		if !s.runtimeObservationConfigured() {
+			refreshSnapshotHookStatuses(snapshot, s.hookStatusLoader)
+		}
 		if err := s.baseCtx.Err(); err != nil {
 			return nil, err
 		}
@@ -375,17 +387,21 @@ func (s *Server) Start() error {
 		s.remoteFleet.Start(s.baseCtx)
 	}
 
-	webLog := logging.ForComponent(logging.CompWeb)
-	if watcher, err := session.NewStatusFileWatcher(func() {
-		s.notifyMenuChanged()
-		if s.push != nil {
-			s.push.TriggerSync()
+	// matrix/hardened: the configured monitor watches hook changes itself;
+	// Web remains a consumer instead of adding another producer trigger.
+	if !s.runtimeObservationConfigured() {
+		webLog := logging.ForComponent(logging.CompWeb)
+		if watcher, err := session.NewStatusFileWatcher(func() {
+			s.notifyMenuChanged()
+			if s.push != nil {
+				s.push.TriggerSync()
+			}
+		}); err != nil {
+			webLog.Warn("hooks_watcher_disabled", slog.String("error", err.Error()))
+		} else {
+			s.hookWatcher = watcher
+			go watcher.Start()
 		}
-	}); err != nil {
-		webLog.Warn("hooks_watcher_disabled", slog.String("error", err.Error()))
-	} else {
-		s.hookWatcher = watcher
-		go watcher.Start()
 	}
 
 	if s.push != nil {
@@ -554,6 +570,11 @@ func (s *Server) HasMutator() bool {
 }
 
 func (s *Server) notifyMenuChanged() {
+	// matrix/hardened: mutations wake the shared monitor before publishing;
+	// collection errors remain with that source and never enable local probes.
+	if err := s.refreshRuntimeObservations(s.baseCtx); err != nil {
+		logging.ForComponent(logging.CompWeb).Warn("runtime_refresh_failed", slog.String("error", err.Error()))
+	}
 	// Clear the fallback cache before a subscriber loads the changed menu.
 	// Headless mode has no TUI publisher, so the next load reads storage.
 	if mmd, ok := s.menuData.(*MemoryMenuData); ok {

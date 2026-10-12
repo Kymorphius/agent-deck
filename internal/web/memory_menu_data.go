@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -53,6 +54,40 @@ func NewMemoryMenuData(fallback MenuDataLoader) *MemoryMenuData {
 	}
 }
 
+// matrix/hardened: runtime source configuration follows the storage fallback;
+// wrappers must not accidentally re-enable a second hook/status producer.
+func (m *MemoryMenuData) SetRuntimeObservationSource(source session.RuntimeObservationSource) {
+	if m == nil {
+		return
+	}
+	if consumer, ok := m.fallback.(interface {
+		SetRuntimeObservationSource(session.RuntimeObservationSource)
+	}); ok {
+		consumer.SetRuntimeObservationSource(source)
+	}
+	m.InvalidateCache()
+}
+
+func (m *MemoryMenuData) RuntimeObservationConfigured() bool {
+	if m == nil {
+		return false
+	}
+	if consumer, ok := m.fallback.(interface{ RuntimeObservationConfigured() bool }); ok {
+		return consumer.RuntimeObservationConfigured()
+	}
+	return false
+}
+
+func (m *MemoryMenuData) RefreshRuntimeObservations(ctx context.Context) error {
+	if m == nil {
+		return nil
+	}
+	if consumer, ok := m.fallback.(interface{ RefreshRuntimeObservations(context.Context) error }); ok {
+		return consumer.RefreshRuntimeObservations(ctx)
+	}
+	return nil
+}
+
 // LoadMenuSnapshot returns the latest complete snapshot. It rate-limits
 // storage checks and live-state reloads for fallback-owned snapshots.
 func (m *MemoryMenuData) LoadMenuSnapshot() (snapshot *MenuSnapshot, err error) {
@@ -62,6 +97,12 @@ func (m *MemoryMenuData) LoadMenuSnapshot() (snapshot *MenuSnapshot, err error) 
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	// matrix/hardened: a mutation controller's local publication must never
+	// mask subsequent shared observations. The outer publisher coalesces
+	// requests; complete runtime state remains owned by its configured source.
+	if m.RuntimeObservationConfigured() {
+		return m.loadFallbackSnapshotLocked()
+	}
 
 	// Coalesce failed reads as well as successful revision checks. Keep the
 	// error visible during the retry interval instead of serving stale data

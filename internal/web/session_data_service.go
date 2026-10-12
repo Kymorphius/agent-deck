@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -94,12 +95,14 @@ type MenuSession struct {
 	// SubstateDetail is free text for the substate — today the codex
 	// usage-limit retry time ("try again at Oct 10th, 2026 8:03 AM"). Same
 	// omitempty contract as Substate.
-	SubstateDetail  string `json:"substateDetail,omitempty"`
-	GroupPath       string `json:"groupPath"`
-	ProjectPath     string `json:"projectPath"`
-	ParentSessionID string `json:"parentSessionId,omitempty"`
-	Order           int    `json:"order"`
-	TmuxSession     string `json:"tmuxSession,omitempty"`
+	SubstateDetail string `json:"substateDetail,omitempty"`
+	// matrix/hardened: preserve the monitor's in-flight work beyond a Stop hook.
+	BackgroundWork  *tmux.BackgroundWork `json:"backgroundWork,omitempty"`
+	GroupPath       string               `json:"groupPath"`
+	ProjectPath     string               `json:"projectPath"`
+	ParentSessionID string               `json:"parentSessionId,omitempty"`
+	Order           int                  `json:"order"`
+	TmuxSession     string               `json:"tmuxSession,omitempty"`
 	// TmuxSocketName is the tmux -L selector captured at session creation
 	// (Instance.TmuxSocketName). Surfaced so the web PTY bridge can reach
 	// sessions running on an isolated socket (issue #687, v1.7.50).
@@ -190,6 +193,30 @@ type SessionDataService struct {
 	now              func() time.Time
 	refreshLiveState bool
 	loadHookStatuses func() map[string]*session.HookStatus
+	// matrix/hardened: configured Web consumers read the user-level monitor;
+	// source failures must never restart local fleet probing.
+	runtimeSourceMu sync.RWMutex
+	runtimeSource   session.RuntimeObservationSource
+}
+
+// SetRuntimeObservationSource supplies the shared runtime monitor before serving.
+// A nil source retains the standalone storage service's legacy sampling behavior.
+func (s *SessionDataService) SetRuntimeObservationSource(source session.RuntimeObservationSource) {
+	s.runtimeSourceMu.Lock()
+	s.runtimeSource = source
+	s.runtimeSourceMu.Unlock()
+}
+
+// RuntimeObservationConfigured distinguishes a complete runtime consumer from
+// a storage loader whose status still needs the legacy hook overlay.
+func (s *SessionDataService) RuntimeObservationConfigured() bool {
+	return s != nil && s.runtimeObservationSource() != nil
+}
+
+func (s *SessionDataService) runtimeObservationSource() session.RuntimeObservationSource {
+	s.runtimeSourceMu.RLock()
+	defer s.runtimeSourceMu.RUnlock()
+	return s.runtimeSource
 }
 
 // NewSessionDataService creates a SessionDataService for a profile.
@@ -207,13 +234,21 @@ type SessionDataService struct {
 // afterwards (see resolveAndOpenStorage), so Profile()/BuildMenuSnapshot
 // still report the true effective name rather than the raw input.
 func NewSessionDataService(profile string) *SessionDataService {
-	return &SessionDataService{
+	s := &SessionDataService{
 		profile:          profile,
-		openStorage:      defaultStorageOpener,
 		now:              time.Now,
 		refreshLiveState: true,
 		loadHookStatuses: defaultLoadHookStatuses,
 	}
+	// matrix/hardened: configure only the default opener; alternate factories
+	// remain injectable while consumers avoid migrations and hook pruning.
+	s.openStorage = func(profile string) (storageLoader, error) {
+		if s.RuntimeObservationConfigured() {
+			return session.NewLiveReadOnlyStorageWithProfile(profile)
+		}
+		return defaultStorageOpener(profile)
+	}
+	return s
 }
 
 func defaultStorageOpener(profile string) (storageLoader, error) {
@@ -233,7 +268,7 @@ func (s *SessionDataService) Profile() string {
 // refreshesLiveState reports that snapshots include tmux-derived process state,
 // which can change without a persisted menu-data revision.
 func (s *SessionDataService) refreshesLiveState() bool {
-	return s != nil && s.refreshLiveState
+	return s != nil && (s.refreshLiveState || s.RuntimeObservationConfigured())
 }
 
 // resolveAndOpenStorage opens storage for the raw profile this service was
@@ -285,15 +320,35 @@ func (s *SessionDataService) LoadMenuSnapshot() (*MenuSnapshot, error) {
 	}
 	defer func() { _ = storage.Close() }()
 
+	// matrix/hardened: obtain the source first, then read the registry and its
+	// edit watermark. Native rebinds committed by that source are visible, and
+	// edits made while Snapshot was in flight fence its earlier probe START.
+	var runtimeSnapshot *session.RuntimeProfileSnapshot
+	if source := s.runtimeObservationSource(); source != nil {
+		runtimeSnapshot, err = loadRuntimeObservations(context.Background(), source, profile)
+		if err != nil {
+			return nil, err
+		}
+	}
 	instances, groupsData, err := storage.LoadWithGroups()
 	if err != nil {
 		return nil, fmt.Errorf("load sessions for profile %q: %w", profile, err)
 	}
-	if s.refreshLiveState {
-		s.refreshStatuses(instances)
+	active := session.FilterInstancesByArchive(instances, false)
+	if runtimeSnapshot != nil {
+		// matrix/hardened: a verdict whose probe began before a registry edit
+		// cannot overwrite a stop/ack even when launch identity stayed the same.
+		updatedAt, err := storage.GetUpdatedAt()
+		if err != nil {
+			return nil, fmt.Errorf("load runtime registry watermark for profile %q: %w", profile, err)
+		}
+		if err := applyRuntimeObservations(runtimeSnapshot, profile, active, updatedAt); err != nil {
+			return nil, err
+		}
+	} else if s.refreshLiveState {
+		s.refreshStatuses(active)
 	}
 
-	active := session.FilterInstancesByArchive(instances, false)
 	return BuildMenuSnapshot(profile, active, groupsData, s.now()), nil
 }
 
@@ -345,6 +400,13 @@ func (s *SessionDataService) LoadArchivedMenuSnapshot() (*MenuSnapshot, error) {
 		return nil, fmt.Errorf("load sessions for profile %q: %w", profile, err)
 	}
 	archived := session.FilterInstancesByArchive(instances, true)
+	if s.RuntimeObservationConfigured() {
+		// matrix/hardened: archive browsing is registry-only and does not ask
+		// the monitor or a local sampler to observe retired sessions.
+		for _, inst := range archived {
+			inst.ExpectRuntimeSnapshot()
+		}
+	}
 	return BuildMenuSnapshot(profile, archived, groupsData, s.now()), nil
 }
 
@@ -355,7 +417,7 @@ func toMenuSession(inst *session.Instance) *MenuSession {
 	}
 	modelInfo := inst.LaunchModelInfo()
 
-	return &MenuSession{
+	result := &MenuSession{
 		ID:                 inst.ID,
 		Title:              inst.Title,
 		Tool:               inst.GetToolThreadSafe(),
@@ -367,6 +429,7 @@ func toMenuSession(inst *session.Instance) *MenuSession {
 		Status:             inst.GetStatusThreadSafe(),
 		Substate:           string(inst.CachedSubstate()),
 		SubstateDetail:     inst.SubstateDetail(),
+		BackgroundWork:     inst.BackgroundWorkJSON(),
 		GroupPath:          inst.GroupPath,
 		ProjectPath:        inst.ProjectPath,
 		ParentSessionID:    inst.ParentSessionID,
@@ -407,6 +470,14 @@ func toMenuSession(inst *session.Instance) *MenuSession {
 		LoadedMCPNames:     inst.LoadedMCPNames,
 		GeminiAnalytics:    inst.GeminiAnalytics,
 	}
+	// matrix/hardened: these live metadata fields remain in the volatile
+	// replica; copying them into the Web DTO must not edit persisted launch data.
+	if row, ok := inst.RuntimeReplica(); ok {
+		result.ModelID, result.Model, result.ModelVersion = row.LaunchModel.ModelID, row.LaunchModel.Model, row.LaunchModel.Version
+		result.GeminiModel, result.GeminiAnalytics = row.GeminiModel, row.GeminiAnalytics
+		result.LatestPrompt, result.ToolOptionsJSON = row.LatestPrompt, row.ToolOptions
+	}
+	return result
 }
 
 type rawHookStatus struct {

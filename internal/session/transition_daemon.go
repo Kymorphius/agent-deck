@@ -51,6 +51,10 @@ type TransitionDaemon struct {
 
 	storages map[string]*Storage
 
+	// matrix/hardened: configured consumers read complete ordered monitor observations.
+	observationSource  RuntimeObservationSource
+	observationCursors map[string]runtimeObservationCursor
+
 	lastStatus  map[string]map[string]string
 	initialized map[string]bool
 
@@ -196,7 +200,9 @@ func NewTransitionDaemon() *TransitionDaemon {
 }
 
 func (d *TransitionDaemon) Run(ctx context.Context) error {
-	d.ensureHookWatcher()
+	if d.observationSource == nil {
+		d.ensureHookWatcher()
+	}
 	defer d.shutdown()
 
 	// The daemon/timer path recall's initial backfill trigger asks for
@@ -233,7 +239,7 @@ func (d *TransitionDaemon) Run(ctx context.Context) error {
 
 // SyncOnce performs one full monitoring pass and returns the recommended delay
 // until the next pass.
-func (d *TransitionDaemon) SyncOnce(_ context.Context) time.Duration {
+func (d *TransitionDaemon) SyncOnce(ctx context.Context) time.Duration {
 	profiles := profilesForTransitionDaemon()
 	if len(profiles) == 0 {
 		return notifyPollSlow
@@ -246,7 +252,12 @@ func (d *TransitionDaemon) SyncOnce(_ context.Context) time.Duration {
 
 	nextInterval := notifyPollSlow
 	for _, profile := range profiles {
-		interval := d.syncProfile(profile)
+		interval := notifyPollSlow
+		if d.observationSource != nil {
+			interval = d.syncObservedProfile(ctx, profile)
+		} else {
+			interval = d.syncProfile(profile)
+		}
 		if interval < nextInterval {
 			nextInterval = interval
 		}
@@ -615,6 +626,13 @@ func (d *TransitionDaemon) syncProfile(profile string) time.Duration {
 		d.livePrior[profile] = nextPriors
 	}
 
+	return d.consumeObservedProfile(profile, instances, byID, statuses, substates, hookStatuses, hookCandidates)
+}
+
+// matrix/hardened: one delivery path preserves existing ledgers and dedup for both sources.
+func (d *TransitionDaemon) consumeObservedProfile(profile string, instances []*Instance, byID map[string]*Instance, statuses, substates map[string]string, hookStatuses map[string]*HookStatus, hookCandidates map[string]hookTransitionCandidate) time.Duration {
+	db := d.getStorage(profile).GetDB()
+
 	// Self-heal Stage 1 (observe-only): evaluate every instance through the
 	// profile's observe engine, logging what it WOULD do and taking ZERO action.
 	// Runs every poll (including the first) so the dwell/confirm clocks start
@@ -962,7 +980,12 @@ func (d *TransitionDaemon) recordTerminalTurns(
 		// indefinitely; recording that as a completed turn published 34 stale
 		// sessions on the first scan when this was first run against a real
 		// profile, which is how the check came to be here.
-		if d.turnLiveCheck != nil && !d.turnLiveCheck(inst) {
+		// matrix/hardened: never add a local tmux probe to shared observations.
+		if d.observationSource != nil {
+			if alive, known := inst.RuntimeTmuxAlive(); !known || !alive {
+				continue
+			}
+		} else if d.turnLiveCheck != nil && !d.turnLiveCheck(inst) {
 			continue
 		}
 
