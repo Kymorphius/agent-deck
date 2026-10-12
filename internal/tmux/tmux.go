@@ -1245,6 +1245,10 @@ type Session struct {
 	// model-unavailable no-op): see backgroundWorkOutrankedLocked.
 	lastBackgroundBlocked bool
 
+	// matrix/hardened: bounded text-only reuse; status/history observations
+	// continue on every read. Its lock never acquires mu or capture cacheMu.
+	frameTextCache matrixFrameTextCache
+
 	// Simple state tracking (hash-based)
 	stateTracker *StateTracker
 
@@ -1728,6 +1732,7 @@ func (s *Session) invalidateCache() {
 	defer s.cacheMu.Unlock()
 	s.cacheContent = ""
 	s.cacheTime = time.Time{}
+	s.clearFrameTextCache()
 }
 
 // ensureStateTrackerLocked lazily allocates the tracker so callers can safely
@@ -1895,7 +1900,7 @@ func (s *Session) startupShowsAgentAlive() bool {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	content := s.prepareFrame(StripANSI(rawContent))
+	content := s.preparedFrameLocked(rawContent, nil)
 	return s.hasBusyIndicator(content) || s.hasPromptIndicator(content)
 }
 
@@ -1908,6 +1913,7 @@ func (s *Session) SetCustomPatterns(toolName string, busyPatterns, promptPattern
 	s.customBusyPatterns = busyPatterns
 	s.customPromptPatterns = promptPatterns
 	s.customDetectPatterns = detectPatterns
+	s.clearFrameTextCache()
 }
 
 // SetPatterns sets the compiled ResolvedPatterns for configurable status detection.
@@ -1916,6 +1922,7 @@ func (s *Session) SetPatterns(p *ResolvedPatterns) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.resolvedPatterns = p
+	s.clearFrameTextCache()
 }
 
 // SetDetectPatterns sets tool auto-detection patterns (separate from busy/prompt patterns).
@@ -1924,6 +1931,7 @@ func (s *Session) SetDetectPatterns(toolName string, detectPatterns []string) {
 	defer s.mu.Unlock()
 	s.customToolName = toolName
 	s.customDetectPatterns = detectPatterns
+	s.clearFrameTextCache()
 }
 
 // SetInjectStatusLine controls whether ConfigureStatusBar modifies tmux settings.
@@ -3653,6 +3661,7 @@ func (s *Session) EnableMouseMode() error {
 // processes actually die. tmux kill-session sends SIGHUP which some CLI
 // tools (e.g. Claude Code 2.1.27+) ignore, leaving orphan processes.
 func (s *Session) Kill() error {
+	s.clearFrameTextCache()
 	// Disconnect control mode pipe
 	if pm := GetPipeManager(); pm != nil {
 		pm.Disconnect(s.Name)
@@ -4440,6 +4449,7 @@ func (s *Session) ForceDetectTool() string {
 	s.mu.Lock()
 	s.detectedTool = ""
 	s.toolDetectedAt = time.Time{}
+	s.clearFrameTextCache()
 	s.mu.Unlock()
 	return s.DetectTool()
 }
@@ -4508,6 +4518,7 @@ func (s *Session) GetStatus() (string, error) {
 
 	if !s.Exists() {
 		s.mu.Lock()
+		s.clearFrameTextCache()
 		s.lastStableStatus = "inactive"
 		// No live pane → no live substate; clear it so CachedSubstate (used by
 		// the transition daemon + TUI) cannot emit/show a stale error substate
@@ -4522,6 +4533,7 @@ func (s *Session) GetStatus() (string, error) {
 	// Pane dead (process exited with remain-on-exit on) = inactive.
 	if s.IsPaneDead() {
 		s.mu.Lock()
+		s.clearFrameTextCache()
 		s.lastStableStatus = "inactive"
 		s.lastSubstate = SubstateNone
 		s.lastSubstateDetail = ""
@@ -4636,7 +4648,7 @@ func (s *Session) GetStatus() (string, error) {
 		// Strip ANSI escape sequences for pattern matching.
 		// CapturePane now returns ANSI-rich content (via -e flag) for display,
 		// but status detection needs plain text for reliable string matching.
-		content := s.prepareFrame(StripANSI(rawContent))
+		content := s.preparedFrameLocked(rawContent, err)
 
 		if errors.Is(err, ErrCaptureTimeout) {
 			// Timeout: preserve previous state to avoid false RED flashing
@@ -4878,7 +4890,7 @@ func (s *Session) GetStatus() (string, error) {
 				content, captureErr := s.CapturePane()
 				s.mu.Lock()
 				if captureErr == nil {
-					content = s.prepareFrame(StripANSI(content))
+					content = s.preparedFrameLocked(content, nil)
 
 					// Check for explicit busy indicator (spinner, "ctrl+c to interrupt")
 					isExplicitlyBusy := s.hasBusyIndicator(content)
@@ -5008,7 +5020,7 @@ func (s *Session) GetStatus() (string, error) {
 		content, captureErr := s.CapturePane()
 		s.mu.Lock()
 		if captureErr == nil {
-			content = s.prepareFrame(StripANSI(content))
+			content = s.preparedFrameLocked(content, nil)
 		}
 		if captureErr == nil && s.hasBusyIndicator(content) {
 			// Busy indicator is authoritative (includes spinner grace period).
@@ -5130,7 +5142,7 @@ func (s *Session) getStatusFallback() (string, error) {
 
 	// Strip ANSI for reliable pattern matching (CapturePane now returns ANSI-rich content)
 	s.mu.Lock()
-	content := s.prepareFrame(StripANSI(rawContent))
+	content := s.preparedFrameLocked(rawContent, nil)
 	s.mu.Unlock()
 
 	// Keep precedence aligned with the main path:
@@ -5449,16 +5461,14 @@ func (s *Session) BackgroundWorkSince(notBefore time.Time) (work BackgroundWork,
 		// leave bgWorkCheckedAt unchanged so the next call re-captures.
 		// Old foreground evidence cannot promote a newer waiting hook.
 		s.mu.Lock()
+		s.clearFrameTextCache()
 		work, blocked, foregroundBusy = s.bgWork, s.bgWorkBlocked, false
 		s.mu.Unlock()
 		return work, blocked, foregroundBusy
 	}
-	stripped := StripANSI(rawContent)
-	work = ParseClaudeBackgroundWork(stripped)
-
 	s.mu.Lock()
-	content := trimClaudeTrailingRoster(stripped)
-	blocked = s.backgroundWorkOutrankedLocked(content)
+	content := s.preparedFrameLocked(rawContent, nil)
+	work, blocked = s.lastBackgroundWork, s.lastBackgroundBlocked
 	foregroundBusy = hasClaudeLiveSpinner(content)
 	s.bgWorkForegroundBusy = foregroundBusy
 	s.bgWork, s.bgWorkBlocked = work, blocked
@@ -5860,6 +5870,7 @@ func (s *Session) getSubstate() (Substate, bool, error) {
 		// stale auth/model-unavailable glyph does not linger on a stopped
 		// session in the TUI.
 		s.mu.Lock()
+		s.clearFrameTextCache()
 		s.lastSubstate = SubstateNone
 		s.lastSubstateDetail = ""
 		s.mu.Unlock()
@@ -5868,6 +5879,7 @@ func (s *Session) getSubstate() (Substate, bool, error) {
 	rawContent, err := s.CapturePane()
 	if err != nil {
 		s.mu.Lock()
+		s.clearFrameTextCache()
 		cached := s.lastSubstate
 		s.mu.Unlock()
 		return cached, false, err
@@ -5875,7 +5887,7 @@ func (s *Session) getSubstate() (Substate, bool, error) {
 	// Hold s.mu across classifySubstate: it mutates the shared
 	// cachedPromptDetector, which GetStatus also touches under the same lock.
 	s.mu.Lock()
-	content := s.prepareFrame(StripANSI(rawContent))
+	content := s.preparedFrameLocked(rawContent, nil)
 	sub := s.classifyFrameLocked(content)
 	liveSpinner := s.isClaudeTool() && hasClaudeLiveSpinner(content)
 	s.mu.Unlock()
@@ -6057,7 +6069,7 @@ var whimsicalWordsPattern = strings.Join(claudeWhimsicalWords, "|")
 // 4. Terminal resize (which can add trailing spaces with tmux -J flag)
 // 5. Multiple consecutive blank lines
 // 6. Dynamic time/token counters (e.g., "45s · 1234 tokens")
-func (s *Session) normalizeContent(content string) string {
+func (s *Session) normalizeContentUncached(content string) string {
 	// Strip ANSI escape codes first (handles CSI, OSC, and C1 codes)
 	result := StripANSI(content)
 
