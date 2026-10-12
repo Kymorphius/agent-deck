@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.42`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.43`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -66,7 +66,7 @@
 - `internal/session/claude_hooks.go`：`isAgentDeckHookCommand` 的判断规则：先去掉开头的 `VAR=值`，再要求第二个词是 `hook-handler`、程序名的文件名部分是 `agent-deck`。`RemoveClaudeHooks` 会扫描全部事件，并做 UTC 时间戳备份（约 387–414 行）。
 - `cmd/agent-deck/main.go`（约 4845、5070 行）：`agent-deck uninstall` 会移除这些钩子。`uninstall.sh` 第 253 行附近的 jq 过滤用的是同一套规则（正则），写回时用 `cat >` 保持软链接和权限。
 
-**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.42`。
+**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.43`。
 
 **测试**：以 `_hardened_test.go` 结尾的文件、`update_check_disable_test.go`、`update_timer_wiring_test.go` 等是新增或调整过的测试；`testdata/goldens/*` 里的快照已经按加固后的输出更新。
 
@@ -402,8 +402,10 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 
 ## 34. 本地会话永久删除
 
-`1.16.26+matrix.40` 增加普通删除之外的永久删除入口。主界面选中会话按 `d`，在确认框按 `p` 打开终端预览，再输入 `DELETE` 确认。CLI 为 `agent-deck remove --purge <id>`；`--dry-run` 只预览，`--yes` 显式确认，JSON 模式要求这两者之一。
+`1.16.26+matrix.40` 增加普通删除之外的永久删除入口。主界面选中会话按 `d`，在确认框按 `p` 打开界面内的预览，再输入 `DELETE` 并回车确认。CLI 为 `agent-deck remove --purge <id>`；`--dry-run` 只预览，`--yes` 显式确认，JSON 模式要求这两者之一。
 
+- **matrix/hardened:** `matrix.43` 将预览和确认留在 Bubble Tea 弹窗内，异步读取时显示进度；Esc/Ctrl+C 取消，长列表用方向键/PgUp/PgDn/滚轮查看。不再切换终端或启动交互式子进程，避免按 `p` 后黑屏。过期预览结果不重新打开弹窗，删除中的按键不会泄漏到主列表；错误需关闭后重新预览。
+- **matrix/hardened:** UI 和 CLI 共享基于具体 tmux pane 和真实 socket 的终端保护；实际删除前拒绝杀掉承载自身的会话，另一个服务器上同名会话仍可删除。
 - 支持本地、非容器的 Claude/Codex 会话；先按当前及历史原生 ID 定位，再检查各 profile 的共享引用。远程、混合 harness 历史或共享对话拒绝执行。
 - 停止目标进程后清理原生日志、Claude 会话快照/子代理文件、原生历史 JSONL 中匹配的行及 Codex 线程数据库行；保留项目/worktree 文件。
 - 删除 recall 的目标及其子代理索引、FTS、费用、最近配置项、提示/标签、通知与钩子记录；仅保留不含正文的 deck ID 删除标记，阻止旧进程恢复会话/费用。

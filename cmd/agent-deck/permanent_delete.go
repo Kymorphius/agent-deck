@@ -16,15 +16,10 @@ func runPermanentDelete(storage *session.Storage, inst *session.Instance, dryRun
 	if err != nil {
 		return err
 	}
-	// Do not kill the terminal hosting this deletion command halfway through it.
-	if !dryRun && os.Getenv("TMUX") != "" {
-		socket := strings.Split(os.Getenv("TMUX"), ",")[0]
-		name, e := tmuxProbeBounded("-S", socket, "display-message", "-p", "#S")
-		if e != nil {
-			return fmt.Errorf("cannot verify caller terminal: %w", e)
-		}
-		if target := inst.GetTmuxSession(); target != nil && strings.TrimSpace(string(name)) == target.Name {
-			return fmt.Errorf("run permanent deletion from the agent-deck main menu or a terminal outside the target session")
+	// matrix/hardened: preview remains allowed; confirmation shares the backend terminal guard.
+	if !dryRun {
+		if err := session.CheckPermanentDeleteTerminal(inst); err != nil {
+			return err
 		}
 	}
 	if jsonMode {
