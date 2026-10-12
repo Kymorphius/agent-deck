@@ -158,11 +158,32 @@ func (s authHoldScope) guard(action func() error) error {
 		if s.producer {
 			return statedb.ErrObservationStale
 		}
+		// matrix/hardened: a plain CLI may finish a slow probe after restart.
+		// Reading the newest watermark alone would lend that old instance the
+		// replacement's write permission. Read it before the current registry,
+		// verify the captured launch, then let the transaction recheck the pair.
 		value, err := s.db.LastModified()
 		if err != nil {
 			return err
 		}
 		fence = value
+		current, _, err := (&Storage{db: s.db, profile: s.profile}).LoadWithGroups()
+		if err != nil {
+			return err
+		}
+		matches := false
+		for _, inst := range current {
+			if inst.ID != s.id {
+				continue
+			}
+			inst.mu.RLock()
+			matches = inst.Status != StatusStopped && inst.authHoldLaunchIdentityLocked() == s.identity
+			inst.mu.RUnlock()
+			break
+		}
+		if !matches {
+			return statedb.ErrObservationStale
+		}
 	}
 	return s.db.GuardRuntimeObservation(s.id, fence, action)
 }
