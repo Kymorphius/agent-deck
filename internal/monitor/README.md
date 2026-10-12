@@ -69,6 +69,17 @@ registry reload; slow calls cannot multiply on every poll. Shutdown stops
 publishing immediately and retains each registry owner until its remaining
 legacy calls finish, rather than closing a DB underneath their writes.
 
+`matrix/hardened:` small groups of reserved probe slots may prefetch raw captures
+through a socket-local, read-only tmux command list. Groups contain at most four
+probes, flush before waiting for more slots, and start independently across
+sockets. Capture targets retain the existing current-window semantics. Random
+framing must validate the complete batch before publishing any bytes; failure
+falls back to ordinary individual capture. Raw-cache age starts at command
+start and never extends the existing 500ms TTL. Independent/Fresh acquisition,
+completion and invalidation fence older batch publications. Prefetch does not
+classify, acknowledge, or stamp completion; original probes still perform those
+actions. It creates no attach clients and does not alter window sizes.
+
 Regression coverage uses real Unix clients and the repository's isolated test
 entry point. The external pane probe is replaced only where deterministic
 hangs, demand expiry or generation changes are required; a two-profile test

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -392,6 +393,81 @@ func (s *Server) finish(p *profileState, record *observedInstance) bool {
 	}
 }
 
+// matrix/hardened: only already-reserved workers enter a small capture group.
+// Probes retain their original classification and per-reservation observation
+// time; failed/expired prefetches fall through to their individual capture path.
+type matrixProbeLaunch struct {
+	record *observedInstance
+	at     time.Time
+}
+
+func (s *Server) launchProbeGroup(p *profileState, group []matrixProbeLaunch, pass *session.StatusUpdatePass, hooks *session.StatusFileWatcher) {
+	if len(group) == 0 {
+		return
+	}
+	if len(group) == 1 || s.opts.Probe != nil {
+		for _, launch := range group {
+			go s.probe(p, launch.record, pass, launch.at, hooks)
+		}
+		return
+	}
+	// A stalled server must not hold already-reserved probes on another socket.
+	// Non-capture probes also start immediately, preserving stopped/archive paths.
+	var partitions [][]matrixProbeLaunch
+	var sockets []string
+	for _, launch := range group {
+		inst := launch.record.instance
+		pane := inst.GetTmuxSession()
+		if inst.IsArchived() || inst.GetStatusThreadSafe() == session.StatusStopped || pane == nil {
+			go s.probe(p, launch.record, pass, launch.at, hooks)
+			continue
+		}
+		socket := strings.TrimSpace(pane.SocketName)
+		index := -1
+		for i, existing := range sockets {
+			if existing == socket {
+				index = i
+				break
+			}
+		}
+		if index < 0 {
+			sockets = append(sockets, socket)
+			partitions = append(partitions, []matrixProbeLaunch{launch})
+		} else {
+			partitions[index] = append(partitions[index], launch)
+		}
+	}
+	for _, partition := range partitions {
+		s.launchCaptureProbeGroup(p, partition, pass, hooks)
+	}
+}
+
+func (s *Server) launchCaptureProbeGroup(p *profileState, group []matrixProbeLaunch, pass *session.StatusUpdatePass, hooks *session.StatusFileWatcher) {
+	if len(group) == 1 {
+		launch := group[0]
+		go s.probe(p, launch.record, pass, launch.at, hooks)
+		return
+	}
+	go func() {
+		func() {
+			// The ordinary probe has its own panic-to-error boundary. An optional
+			// prefetch cannot leak all of this group's reserved worker slots.
+			defer func() { _ = recover() }()
+			var panes []*tmux.Session
+			for _, launch := range group {
+				inst := launch.record.instance
+				if !inst.IsArchived() && inst.GetStatusThreadSafe() != session.StatusStopped {
+					panes = append(panes, inst.GetTmuxSession())
+				}
+			}
+			tmux.PrefetchCapturePanes(s.ctx, panes)
+		}()
+		for _, launch := range group {
+			go s.probe(p, launch.record, pass, launch.at, hooks)
+		}
+	}()
+}
+
 func (s *Server) collect(p *profileState) {
 	started := time.Now().UTC()
 	s.loads.Add(1)
@@ -470,15 +546,37 @@ func (s *Server) collect(p *profileState) {
 	if remaining > 0 {
 		index = p.rotation % remaining
 	}
-	for remaining > 0 && s.ctx.Err() == nil {
+	// matrix/hardened: reserve at most one bounded group at a time. Flush before
+	// waiting for a full worker channel; retained reservations must never prevent
+	// their own probes from starting and releasing the slots being awaited.
+	var group []matrixProbeLaunch
+	flush := func() {
+		s.launchProbeGroup(p, group, pass, hooks)
+		group = nil
+	}
+	for remaining > 0 && s.ctx.Err() == nil && budget.Err() == nil {
 		record := p.records[p.order[index]]
 		index = (index + 1) % len(p.order)
 		remaining--
 		if record == nil || record.inflight || blocked[record.instance.ID] || (record.instance.IsArchived() && !record.row.ObservedAt.IsZero()) {
 			continue
 		}
+		reserved := false
 		select {
 		case s.workers <- struct{}{}:
+			reserved = true
+		default:
+			flush()
+			select {
+			case s.workers <- struct{}{}:
+				reserved = true
+			case <-budget.Done():
+				remaining = 0
+			case <-s.ctx.Done():
+				remaining = 0
+			}
+		}
+		if reserved {
 			if source, ok := p.registry.(interface{ Fence() int64 }); ok {
 				record.expectedTouch = source.Fence()
 				record.instance.SetRuntimeProducerFence(record.expectedTouch)
@@ -487,13 +585,13 @@ func (s *Server) collect(p *profileState) {
 			record.done = make(chan session.RuntimeSessionSnapshot, 1)
 			observedAt := time.Now().UTC()
 			record.instance.SetRuntimeProducerObservedAt(observedAt)
-			go s.probe(p, record, pass, observedAt, hooks)
-		case <-budget.Done():
-			remaining = 0
-		case <-s.ctx.Done():
-			remaining = 0
+			group = append(group, matrixProbeLaunch{record, observedAt})
+			if len(group) == tmux.CapturePaneBatchLimit || s.opts.Probe != nil {
+				flush()
+			}
 		}
 	}
+	flush()
 	p.rotation = index
 	// Collect completed calls within the same bounded pass, without blocking
 	// the sampler behind one pane. Fast panes remain publishable beside a hang.
