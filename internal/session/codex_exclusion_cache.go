@@ -41,6 +41,10 @@ type StatusUpdatePass struct {
 	mu       sync.Mutex
 	bySocket map[string]codexOwnershipSnapshot
 	loading  map[string]chan struct{}
+	// matrix/hardened: one immutable host process table per sweep, shared by
+	// concurrent workers without extending its lifetime into another pass.
+	hostProcessOnce     sync.Once
+	hostProcessSnapshot *matrixHostProcessSnapshot
 }
 
 // UpdateStatus refreshes one instance using this pass's shared evidence.

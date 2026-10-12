@@ -3666,8 +3666,16 @@ func (i *Instance) PaneProcessTreePIDs() ([]int, error) {
 // error strings are prefixed "codex process probe" for historical reasons
 // (its first caller); it is not codex-specific — see PaneProcessTreePIDs.
 func (i *Instance) collectTmuxPaneProcessTreePIDs() ([]int, error) {
+	// matrix/hardened: standalone CLI callers retain fresh process discovery.
+	pids, err, _ := i.collectTmuxPaneProcessTreePIDsForPass(nil, false)
+	return pids, err
+}
+
+// matrix/hardened: share host ps only within a status pass. Fresh negative
+// verification deliberately skips the shared table and uses live pgrep.
+func (i *Instance) collectTmuxPaneProcessTreePIDsForPass(pass *StatusUpdatePass, fresh bool) ([]int, error, *matrixHostProcessSnapshot) {
 	if i.tmuxSession == nil || !i.tmuxSession.Exists() {
-		return nil, errors.New("codex process probe: tmux session is unavailable")
+		return nil, errors.New("codex process probe: tmux session is unavailable"), nil
 	}
 
 	target := i.tmuxSession.Name
@@ -3680,22 +3688,37 @@ func (i *Instance) collectTmuxPaneProcessTreePIDs() ([]int, error) {
 	// the session rather than only the target's current window.
 	out, err := tmux.OutputBounded(i.TmuxSocketName, "list-panes", "-s", "-t", target, "-F", "#{pane_pid}")
 	if err != nil {
-		return nil, fmt.Errorf("codex process probe: list tmux panes: %w", err)
+		return nil, fmt.Errorf("codex process probe: list tmux panes: %w", err), nil
 	}
 	panePIDs, paneErr := parsePositivePIDs(out, "tmux pane")
 	if len(panePIDs) == 0 {
-		return nil, paneErr
+		return nil, paneErr, nil
 	}
 
 	// Single snapshot of the process table is substantially cheaper than
 	// spawning pgrep once per node in deep process trees.
-	procTable, psErr := exec.Command("ps", "-eo", "pid=,ppid=").Output()
-	if psErr == nil {
-		allPIDs, treeErr := collectProcessTreePIDsFromTable(panePIDs, procTable)
-		if treeErr == nil {
-			return allPIDs, paneErr
+	// matrix/hardened: one full host table and argv index serves all workers;
+	// standalone callers keep their original ps/pgrep behavior.
+	var psErr error
+	if !fresh {
+		if pass != nil {
+			snapshot := pass.hostProcesses()
+			allPIDs, treeErr := snapshot.processTree(panePIDs)
+			if treeErr == nil {
+				return allPIDs, paneErr, snapshot
+			}
+			psErr = treeErr
+		} else {
+			var procTable []byte
+			procTable, psErr = exec.Command("ps", "-eo", "pid=,ppid=").Output()
+			if psErr == nil {
+				allPIDs, treeErr := collectProcessTreePIDsFromTable(panePIDs, procTable)
+				if treeErr == nil {
+					return allPIDs, paneErr, nil
+				}
+				psErr = treeErr
+			}
 		}
-		psErr = treeErr
 	}
 
 	// Fallback path for environments where ps output is unavailable/unexpected.
@@ -3714,10 +3737,10 @@ func (i *Instance) collectTmuxPaneProcessTreePIDs() ([]int, error) {
 			}
 		}
 	}
-	if pgrepErr != nil {
+	if pgrepErr != nil && psErr != nil {
 		pgrepErr = errors.Join(fmt.Errorf("codex process probe: ps: %w", psErr), pgrepErr)
 	}
-	return allPIDs, errors.Join(paneErr, pgrepErr)
+	return allPIDs, errors.Join(paneErr, pgrepErr), nil
 }
 
 func parsePositivePIDs(output []byte, source string) ([]int, error) {
@@ -3885,10 +3908,24 @@ func isLikelyCodexProcessPID(pid int) (bool, error) {
 }
 
 func (i *Instance) collectCodexProcessCandidates() ([]int, error) {
-	pids, probeErr := i.collectTmuxPaneProcessTreePIDs()
+	// matrix/hardened: keep the existing standalone API and fresh argv probes.
+	candidates, err, _ := i.collectCodexProcessCandidatesForPass(nil, false)
+	return candidates, err
+}
+
+// matrix/hardened: successful shared tables replace per-PID ps argv subprocesses.
+// The boolean marks shared evidence that needs live rechecking after a negative FD scan.
+func (i *Instance) collectCodexProcessCandidatesForPass(pass *StatusUpdatePass, fresh bool) ([]int, error, bool) {
+	pids, probeErr, snapshot := i.collectTmuxPaneProcessTreePIDsForPass(pass, fresh)
 	candidates := make([]int, 0, len(pids))
 	for _, pid := range pids {
-		likely, err := isLikelyCodexProcessPID(pid)
+		var likely bool
+		var err error
+		if snapshot != nil {
+			likely = strings.Contains(strings.ToLower(snapshot.argsByPID[pid]), "codex")
+		} else {
+			likely, err = isLikelyCodexProcessPID(pid)
+		}
 		if err != nil {
 			probeErr = errors.Join(probeErr, err)
 			continue
@@ -3897,7 +3934,7 @@ func (i *Instance) collectCodexProcessCandidates() ([]int, error) {
 			candidates = append(candidates, pid)
 		}
 	}
-	return candidates, probeErr
+	return candidates, probeErr, snapshot != nil
 }
 
 func extractCodexSessionIDFromPath(path string) string {
@@ -3961,7 +3998,23 @@ func (i *Instance) extractCodexSessionIDFromProcFD(pid int) (string, error) {
 }
 
 func (i *Instance) queryCodexSessionFromHostProcFD() (string, error) {
-	candidates, probeErr := i.collectCodexProcessCandidates()
+	// matrix/hardened: retain the standalone Linux/WSL process-probe API.
+	return i.queryCodexSessionFromHostProcFDForPass(nil)
+}
+
+// matrix/hardened: shared negative evidence cannot establish current absence;
+// newly spawned children are rechecked with live pgrep/argv before disk fallback.
+func (i *Instance) queryCodexSessionFromHostProcFDForPass(pass *StatusUpdatePass) (string, error) {
+	candidates, probeErr, shared := i.collectCodexProcessCandidatesForPass(pass, false)
+	if sessionID, err := i.queryCodexSessionFromHostProcFDCandidates(candidates, probeErr); sessionID != "" || !shared {
+		return sessionID, err
+	}
+	candidates, probeErr, _ = i.collectCodexProcessCandidatesForPass(pass, true)
+	return i.queryCodexSessionFromHostProcFDCandidates(candidates, probeErr)
+}
+
+// matrix/hardened: native FD and per-instance candidate filtering stay fresh.
+func (i *Instance) queryCodexSessionFromHostProcFDCandidates(candidates []int, probeErr error) (string, error) {
 	for _, pid := range candidates {
 		sessionID, err := i.extractCodexSessionIDFromProcFD(pid)
 		if sessionID != "" {
@@ -4114,6 +4167,13 @@ func (i *Instance) queryCodexSessionFromHostLsof(pids []int) (string, string, er
 // nil error means definitely absent; a non-nil error means undetermined. The
 // second return value names a missing dependency, when applicable.
 func (i *Instance) queryCodexSessionFromProcessFiles() (string, string, error) {
+	// matrix/hardened: standalone detection retains the original fresh path.
+	return i.queryCodexSessionFromProcessFilesForPass(nil)
+}
+
+// matrix/hardened: thread the sweep's host snapshot through local process
+// discovery only; container /proc probes never consult host process evidence.
+func (i *Instance) queryCodexSessionFromProcessFilesForPass(pass *StatusUpdatePass) (string, string, error) {
 	// Sandboxed sessions run Codex inside Docker; probe container /proc.
 	if i.IsSandboxed() {
 		return i.queryCodexSessionFromDockerProcFD()
@@ -4121,16 +4181,27 @@ func (i *Instance) queryCodexSessionFromProcessFiles() (string, string, error) {
 
 	// Linux/WSL: pure in-process /proc scanning (no lsof dependency).
 	if runtime.GOOS == "linux" {
-		sessionID, err := i.queryCodexSessionFromHostProcFD()
+		sessionID, err := i.queryCodexSessionFromHostProcFDForPass(pass)
 		return sessionID, "", err
 	}
 
 	// Non-Linux (e.g. macOS): in-process libproc FD scan first, with lsof kept
 	// only as a compatibility fallback when the native probe cannot answer.
-	candidates, candidateErr := i.collectCodexProcessCandidates()
-	if sessionID, nativeErr := i.queryCodexSessionFromHostNative(candidates); sessionID != "" {
+	candidates, candidateErr, shared := i.collectCodexProcessCandidatesForPass(pass, false)
+	sessionID, nativeErr := i.queryCodexSessionFromHostNative(candidates)
+	if sessionID != "" {
 		return sessionID, "", nil
-	} else if nativeErr == nil && candidateErr == nil {
+	}
+	// matrix/hardened: a negative shared table may predate a new Codex child;
+	// fresh tree/argv discovery must answer before declaring definitive absence.
+	if shared {
+		candidates, candidateErr, _ = i.collectCodexProcessCandidatesForPass(pass, true)
+		sessionID, nativeErr = i.queryCodexSessionFromHostNative(candidates)
+		if sessionID != "" {
+			return sessionID, "", nil
+		}
+	}
+	if nativeErr == nil && candidateErr == nil {
 		return "", "", nil
 	}
 
@@ -4199,7 +4270,8 @@ func (i *Instance) updateCodexSessionForPass(excludeIDs map[string]bool, forcePr
 	// 2. Prefer live-process file detection (Linux /proc, macOS lsof fallback).
 	missingProbeDep := ""
 	if i.shouldRunCodexProcessProbe(forceProbe) {
-		sessionID, missingDep, probeErr := i.queryCodexSessionFromProcessFiles()
+		// matrix/hardened: process/argv enumeration is shared only by this sweep.
+		sessionID, missingDep, probeErr := i.queryCodexSessionFromProcessFilesForPass(pass)
 		sessionID = i.filterCodexProcessProbeCandidate(sessionID)
 		if sessionID != "" {
 			changed := sessionID != i.CodexSessionID

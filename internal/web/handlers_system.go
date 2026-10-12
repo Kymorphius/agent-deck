@@ -16,7 +16,8 @@ func (s *Server) handleSystemStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	stats := sysinfo.Collect()
+	// matrix/hardened: browsers share this server's short-lived collection snapshot.
+	stats := s.systemStats.load()
 
 	resp := map[string]any{}
 
