@@ -137,25 +137,35 @@ func (i *Instance) matrixTurnInterruptKeyLocked() string {
 // matrixTurnInterruptMaxLineBytes, a read error, or walking past
 // matrixTurnInterruptMaxScanBytes ends the walk with no verdict.
 func matrixWalkLinesBackward(path string, decide func(line []byte) (matrixTurnInterrupt, bool, bool)) (matrixTurnInterrupt, bool) {
+	verdict, found, _ := matrixWalkLinesBackwardComplete(path, decide)
+	return verdict, found
+}
+
+// matrix/hardened: a shared file cache must distinguish a completed scan from
+// an I/O failure or an unreadable line, even though both have no UI verdict.
+func matrixWalkLinesBackwardComplete(path string, decide func(line []byte) (matrixTurnInterrupt, bool, bool)) (matrixTurnInterrupt, bool, bool) {
 	f, err := os.Open(path)
 	if err != nil {
-		return matrixTurnInterrupt{}, false
+		return matrixTurnInterrupt{}, false, false
 	}
 	defer f.Close()
 	info, err := f.Stat()
 	if err != nil || info.Size() == 0 {
-		return matrixTurnInterrupt{}, false
+		return matrixTurnInterrupt{}, false, false
 	}
 
+	complete := true
 	consider := func(start, end int64) (matrixTurnInterrupt, bool, bool) {
 		if end <= start {
 			return matrixTurnInterrupt{}, false, false
 		}
 		if end-start > matrixTurnInterruptMaxLineBytes {
+			complete = false
 			return matrixTurnInterrupt{}, false, true
 		}
 		line := make([]byte, end-start)
-		if _, err := f.ReadAt(line, start); err != nil && err != io.EOF {
+		if n, err := f.ReadAt(line, start); n != len(line) || (err != nil && err != io.EOF) {
+			complete = false
 			return matrixTurnInterrupt{}, false, true
 		}
 		return decide(line)
@@ -167,15 +177,15 @@ func matrixWalkLinesBackward(path string, decide func(line []byte) (matrixTurnIn
 	for end := info.Size(); end > floor; {
 		start := max(end-int64(len(buf)), floor)
 		n := end - start
-		if _, err := f.ReadAt(buf[:n], start); err != nil && err != io.EOF {
-			return matrixTurnInterrupt{}, false
+		if read, err := f.ReadAt(buf[:n], start); int64(read) != n || (err != nil && err != io.EOF) {
+			return matrixTurnInterrupt{}, false, false
 		}
 		for i := n - 1; i >= 0; i-- {
 			if buf[i] != '\n' {
 				continue
 			}
 			if v, found, stop := consider(start+i+1, lineEnd); stop {
-				return v, found
+				return v, found, complete
 			}
 			lineEnd = start + i
 		}
@@ -184,10 +194,10 @@ func matrixWalkLinesBackward(path string, decide func(line []byte) (matrixTurnIn
 	if floor == 0 {
 		// The first line has no newline before it.
 		if v, found, stop := consider(0, lineEnd); stop {
-			return v, found
+			return v, found, complete
 		}
 	}
-	return matrixTurnInterrupt{}, false
+	return matrixTurnInterrupt{}, false, complete
 }
 
 // matrixInterruptRecord is the subset of a Claude transcript line the scan reads.
@@ -235,9 +245,18 @@ func matrixInterruptMessage(content json.RawMessage) string {
 // no such record within the scan bound, an oversized line in the way): the
 // caller then shows the session as before, never as interrupted.
 func matrixLatestTurnInterrupt(path string) (matrixTurnInterrupt, bool) {
-	return matrixWalkLinesBackward(path, func(line []byte) (matrixTurnInterrupt, bool, bool) {
+	verdict, found, _ := matrixScanLatestTurnInterrupt(path)
+	return verdict, found
+}
+
+// matrix/hardened: partial JSON can precede a later flush at the same path;
+// retain the current verdict, but never memoize that incomplete observation.
+func matrixScanLatestTurnInterrupt(path string) (matrixTurnInterrupt, bool, bool) {
+	parsed := true
+	verdict, found, complete := matrixWalkLinesBackwardComplete(path, func(line []byte) (matrixTurnInterrupt, bool, bool) {
 		var rec matrixInterruptRecord
 		if json.Unmarshal(line, &rec) != nil {
+			parsed = false
 			return matrixTurnInterrupt{}, false, false // blank or partial line
 		}
 		if rec.IsSidechain {
@@ -257,6 +276,7 @@ func matrixLatestTurnInterrupt(path string) (matrixTurnInterrupt, bool) {
 		}
 		return matrixTurnInterrupt{}, false, false // system, attachment, snapshot, ...
 	})
+	return verdict, found, complete && parsed
 }
 
 // matrixCodexEvent is the subset of a Codex rollout line the scan reads.
@@ -272,9 +292,21 @@ type matrixCodexEvent struct {
 // Codex rollout at path is turn_aborted. Same "cannot tell means no" rule as
 // the Claude scan.
 func matrixLatestCodexTurnInterrupt(path string) (matrixTurnInterrupt, bool) {
-	return matrixWalkLinesBackward(path, func(line []byte) (matrixTurnInterrupt, bool, bool) {
+	verdict, found, _ := matrixScanLatestCodexTurnInterrupt(path)
+	return verdict, found
+}
+
+// matrix/hardened: keep incomplete-tail and I/O observations out of the
+// process-wide cache while preserving the existing latest-turn event rules.
+func matrixScanLatestCodexTurnInterrupt(path string) (matrixTurnInterrupt, bool, bool) {
+	parsed := true
+	verdict, found, complete := matrixWalkLinesBackwardComplete(path, func(line []byte) (matrixTurnInterrupt, bool, bool) {
 		var ev matrixCodexEvent
-		if json.Unmarshal(line, &ev) != nil || ev.Type != "event_msg" {
+		if json.Unmarshal(line, &ev) != nil {
+			parsed = false
+			return matrixTurnInterrupt{}, false, false
+		}
+		if ev.Type != "event_msg" {
 			return matrixTurnInterrupt{}, false, false
 		}
 		switch ev.Payload.Type {
@@ -289,11 +321,18 @@ func matrixLatestCodexTurnInterrupt(path string) (matrixTurnInterrupt, bool) {
 		}
 		return matrixTurnInterrupt{}, false, false
 	})
+	return verdict, found, complete && parsed
 }
 
 // matrixRefreshTurnInterrupt rescans the transcript, throttled, and caches the
 // verdict. Called by updateStatus after it releases i.mu; takes i.mu itself.
 func (i *Instance) matrixRefreshTurnInterrupt() {
+	i.matrixRefreshTurnInterruptWithCache(matrixInterruptFiles)
+}
+
+// matrix/hardened: fresh Instances loaded for Web snapshots share stable
+// file parses, while each Instance keeps its own 5-second refresh and gen guard.
+func (i *Instance) matrixRefreshTurnInterruptWithCache(cache *matrixTurnInterruptFileCache) {
 	i.mu.Lock()
 	key := i.matrixTurnInterruptKeyLocked()
 	m := &i.matrixInterrupt
@@ -317,22 +356,26 @@ func (i *Instance) matrixRefreshTurnInterrupt() {
 	tool, id, _ := strings.Cut(key, ":")
 	var verdict matrixTurnInterrupt
 	var found bool
+	// matrix/hardened: failed discovery and a newly subagent-sourced file must
+	// publish a cleared verdict through the same key/gen guard as a good read.
 	switch tool {
 	case "claude":
 		path := locateHandoffTranscript(i)
 		if !transcriptBelongsToSession(path, id) {
-			return
+			break
 		}
-		verdict, found = matrixLatestTurnInterrupt(path)
+		result := cache.load(tool, path)
+		verdict, found = result.verdict, result.found
 	case "codex":
 		path := CodexRolloutPathForInstance(i)
 		if path == "" || !strings.HasSuffix(filepath.Base(path), "-"+id+".jsonl") {
-			return
+			break
 		}
-		if meta := readCodexRolloutThreadMeta(path); meta.ThreadSource == "subagent" || meta.ParentThreadID != "" {
-			return
+		result := cache.load(tool, path)
+		if result.meta.ThreadSource == "subagent" || result.meta.ParentThreadID != "" {
+			break
 		}
-		verdict, found = matrixLatestCodexTurnInterrupt(path)
+		verdict, found = result.verdict, result.found
 	}
 
 	i.mu.Lock()

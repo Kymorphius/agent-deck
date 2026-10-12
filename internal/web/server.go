@@ -194,6 +194,8 @@ type Server struct {
 	mcpMgr          MCPManager
 	remoteFleet     RemoteFleetLoader
 	mutationLimiter *rate.Limiter
+	// matrix/hardened: coalesce nearby browser requests without a background collector.
+	systemStats systemStatsCache
 
 	// hookStatusLoader returns the latest hook payload for every instance
 	// whose hook file is present on disk. Defaults to defaultLoadHookStatuses
