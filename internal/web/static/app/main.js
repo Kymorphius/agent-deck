@@ -1,5 +1,5 @@
 // main.js -- Preact app entry point and full boot sequence
-// Handles: auth token extraction, SSE connection, route sync, service worker registration
+// Handles: auth token extraction, dashboard connection, route sync, service worker registration
 import { render, html } from 'htm/preact'
 import { App, applyPath } from './App.js'
 import { apiFetch, authHeaders } from './api.js'
@@ -40,258 +40,219 @@ import { initPush } from './push.js'
   meta.content = 'no-referrer'
 })()
 
-// ---------- SSE connection ----------
+// ---------- Dashboard connection ----------
+// matrix/hardened: one push-only WebSocket carries menu and Command Center.
+// Short authenticated JSON probes handle recovery without occupying HTTP/1.1
+// request slots with a second pair of long-lived streams. The exported SSE
+// names remain compatible with existing callers.
 
-let _menuSource = null
-let _ccSource = null
+let _dashboardSource = null
+let _dashboardEnabled = false
+let _dashboardNeedsRecovery = false
+let _dashboardTerminalFailure = false
 
-const SSE_RECOVERY_DELAYS_MS = [1000, 2000, 4000, 8000, 16000, 30000]
-const SSE_PROBE_TIMEOUT_MS = 5000
-let _sseRecoveryTimer = null
-let _sseRecoveryAbort = null
-let _sseRecoveryGeneration = 0
-let _sseRecoveryAttempt = 0
-let _sseTerminalFailures = new WeakSet()
+const DASHBOARD_RECOVERY_DELAYS_MS = [1000, 2000, 4000, 8000, 16000, 30000]
+const DASHBOARD_PROBE_TIMEOUT_MS = 5000
+let _dashboardRecoveryTimer = null
+let _dashboardRecoveryAbort = null
+let _dashboardRecoveryGeneration = 0
+let _dashboardRecoveryAttempt = 0
 
-function closedSSESources(includeTerminal = false) {
-  const closed = []
-  if (
-    _menuSource &&
-    _menuSource.readyState === EventSource.CLOSED &&
-    (includeTerminal || !_sseTerminalFailures.has(_menuSource))
-  ) {
-    closed.push({ kind: 'menu', source: _menuSource })
-  }
-  if (
-    _ccSource &&
-    _ccSource.readyState === EventSource.CLOSED &&
-    (includeTerminal || !_sseTerminalFailures.has(_ccSource))
-  ) {
-    closed.push({ kind: 'command-center', source: _ccSource })
-  }
-  return closed
+function recoverableDashboard(includeTerminal = false) {
+  return _dashboardEnabled && _dashboardSource && _dashboardNeedsRecovery &&
+    (includeTerminal || !_dashboardTerminalFailure)
+    ? _dashboardSource : null
 }
 
-async function probeSSEEndpoint(source, signal) {
+async function probeDashboard(signal) {
   let response
   try {
-    response = await fetch(source.url, {
+    response = await fetch('/api/menu', {
       method: 'GET',
-      headers: authHeaders({ Accept: 'text/event-stream' }),
+      headers: authHeaders(),
       cache: 'no-store',
       signal,
     })
+    const contentType = (response.headers.get('Content-Type') || '').split(';', 1)[0].trim().toLowerCase()
+    if (response.status === 200 && contentType === 'application/json') {
+      let data
+      try { data = await response.json() } catch (error) {
+        return error.name === 'SyntaxError' ? 'terminal' : 'transient'
+      }
+      return data && !data.error && Array.isArray(data.items) ? 'ready' : 'terminal'
+    }
+    if (response.status === 408 || response.status === 425 || response.status === 429 || response.status >= 500) {
+      return 'transient'
+    }
+    return 'terminal'
   } catch (_) {
     return 'transient'
+  } finally {
+    try { await response?.body?.cancel() } catch (_) { /* already consumed or aborted */ }
   }
-
-  const status = response.status
-  const contentType = (response.headers.get('Content-Type') || '').split(';', 1)[0].trim().toLowerCase()
-  try {
-    await response.body?.cancel()
-  } catch (_) {
-    // The status and headers are sufficient for this readiness probe.
-  }
-
-  if (status === 200 && contentType === 'text/event-stream') return 'ready'
-  if (status === 408 || status === 425 || status === 429 || status >= 500) return 'transient'
-  return 'terminal'
 }
 
-function scheduleSSERecovery(delay) {
-  if (_sseRecoveryTimer || _sseRecoveryAbort || closedSSESources().length === 0) return
+function scheduleDashboardRecovery(delay) {
+  if (_dashboardRecoveryTimer !== null || _dashboardRecoveryAbort || !recoverableDashboard()) return
 
-  const wait = delay ?? SSE_RECOVERY_DELAYS_MS[Math.min(_sseRecoveryAttempt, SSE_RECOVERY_DELAYS_MS.length - 1)]
-  const generation = _sseRecoveryGeneration
-  _sseRecoveryTimer = setTimeout(async () => {
-    _sseRecoveryTimer = null
-    const closed = closedSSESources()
-    if (closed.length === 0 || generation !== _sseRecoveryGeneration) return
+  const wait = delay ?? DASHBOARD_RECOVERY_DELAYS_MS[Math.min(_dashboardRecoveryAttempt, DASHBOARD_RECOVERY_DELAYS_MS.length - 1)]
+  const generation = _dashboardRecoveryGeneration
+  _dashboardRecoveryTimer = setTimeout(async () => {
+    _dashboardRecoveryTimer = null
+    const source = recoverableDashboard()
+    if (!source || generation !== _dashboardRecoveryGeneration) return
 
     const controller = new AbortController()
-    _sseRecoveryAbort = controller
-    const probeTimeout = setTimeout(() => controller.abort(), SSE_PROBE_TIMEOUT_MS)
-    const outcomes = await Promise.all(closed.map(({ source }) => probeSSEEndpoint(source, controller.signal)))
+    _dashboardRecoveryAbort = controller
+    const probeTimeout = setTimeout(() => controller.abort(), DASHBOARD_PROBE_TIMEOUT_MS)
+    const outcome = await probeDashboard(controller.signal)
     clearTimeout(probeTimeout)
-    if (_sseRecoveryAbort === controller) _sseRecoveryAbort = null
-    if (generation !== _sseRecoveryGeneration) return
+    if (_dashboardRecoveryAbort === controller) _dashboardRecoveryAbort = null
+    if (generation !== _dashboardRecoveryGeneration || _dashboardSource !== source || !_dashboardEnabled) return
 
-    let retryTransient = false
-    _sseRecoveryAttempt = Math.min(_sseRecoveryAttempt + 1, SSE_RECOVERY_DELAYS_MS.length - 1)
-    for (let i = 0; i < closed.length; i += 1) {
-      const { kind, source } = closed[i]
-      if (outcomes[i] === 'transient') {
-        retryTransient = true
-        continue
-      }
-      if (outcomes[i] !== 'ready') {
-        _sseTerminalFailures.add(source)
-        continue
-      }
-
-      if (kind === 'menu' && _menuSource === source) {
-        source.close()
-        _menuSource = null
-        startSSE()
-      } else if (kind === 'command-center' && _ccSource === source) {
-        source.close()
-        _ccSource = null
-        startCommandCenterSSE()
-      }
+    _dashboardRecoveryAttempt = Math.min(_dashboardRecoveryAttempt + 1, DASHBOARD_RECOVERY_DELAYS_MS.length - 1)
+    if (outcome === 'ready') {
+      // Detach first: close/error callbacks from the retired socket cannot
+      // disconnect or schedule another retry for its replacement.
+      _dashboardSource = null
+      source.close()
+      startSSE()
+    } else if (outcome === 'terminal') {
+      _dashboardTerminalFailure = true
+    } else {
+      scheduleDashboardRecovery()
     }
-
-    if (retryTransient) scheduleSSERecovery()
   }, wait)
 }
 
-function markSSEHealthy() {
-  if (closedSSESources().length === 0) _sseRecoveryAttempt = 0
+function markDashboardHealthy() {
+  _dashboardRecoveryAttempt = 0
+  connectionSignal.value = 'connected'
 }
 
-function wakeSSERecovery() {
-  if (closedSSESources(true).length === 0) return
-  _sseRecoveryGeneration += 1
-  if (_sseRecoveryTimer) clearTimeout(_sseRecoveryTimer)
-  _sseRecoveryTimer = null
-  _sseRecoveryAbort?.abort()
-  _sseRecoveryAbort = null
-  _sseRecoveryAttempt = 0
-  _sseTerminalFailures = new WeakSet()
-  scheduleSSERecovery(0)
+function wakeDashboardRecovery() {
+  if (!recoverableDashboard(true)) return
+  _dashboardRecoveryGeneration += 1
+  if (_dashboardRecoveryTimer !== null) clearTimeout(_dashboardRecoveryTimer)
+  _dashboardRecoveryTimer = null
+  _dashboardRecoveryAbort?.abort()
+  _dashboardRecoveryAbort = null
+  _dashboardRecoveryAttempt = 0
+  _dashboardTerminalFailure = false
+  scheduleDashboardRecovery(0)
+}
+
+// Preserve completion de-duplication across reconnects.
+const _ccSeenCompletions = new Set()
+
+function applyMenuSnapshot(snapshot) {
+  if (!snapshot || !Array.isArray(snapshot.items)) return false
+  sessionsSignal.value = snapshot.items
+  sessionsLoadedSignal.value = true
+  // Group panels also show archived sessions from their separate endpoint.
+  // A change-driven active snapshot refreshes that half while a panel is open.
+  if (selectedGroupSignal.value) loadArchivedSessions()
+  return true
+}
+
+function applyCommandCenterSnapshot(snapshot) {
+  if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) return false
+  commandCenterSignal.value = snapshot
+  const done = Array.isArray(snapshot.recentlyCompleted) ? snapshot.recentlyCompleted : []
+  for (const c of done) {
+    const key = (c && (c.id || '')) + ':' + (c && (c.at || ''))
+    if (_ccSeenCompletions.has(key)) continue
+    _ccSeenCompletions.add(key)
+    if (c && c.title) addToast(`✅ ${c.title} just finished`, 'success')
+  }
+  if (_ccSeenCompletions.size > 200) _ccSeenCompletions.clear()
+  return true
 }
 
 export function startSSE() {
-  if (_menuSource) return
+  _dashboardEnabled = true
+  if (_dashboardSource) return
 
+  const url = new URL('/ws/dashboard', window.location.href)
+  url.protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
   const token = authTokenSignal.value
-  const url = token
-    ? '/events/menu?token=' + encodeURIComponent(token)
-    : '/events/menu'
+  if (token) url.searchParams.set('token', token)
 
-  const source = new EventSource(url)
-  _menuSource = source
-
-  // CRITICAL: The Go server emits SSE events with event type "menu"
-  // (see handlers_events.go: writeSSEEvent(w, flusher, "menu", snapshot))
-  source.addEventListener('menu', (event) => {
-    try {
-      const snapshot = JSON.parse(event.data)
-      if (snapshot && Array.isArray(snapshot.items)) {
-        sessionsSignal.value = snapshot.items
-        // POL-1: first SSE snapshot counts as loaded. Skeleton unmounts
-        // even if the snapshot is empty — the server has spoken.
-        sessionsLoadedSignal.value = true
-        // The group stats panel shows archived members, which arrive from a
-        // SEPARATE endpoint that no SSE event touches. Archiving a session
-        // changes the active list (so the fingerprint changes and we land
-        // here), but left the panel's archived half stale until the user
-        // navigated away and back (PR #2047 review, item 2).
-        //
-        // Only refetched while a group is actually selected: nothing else on
-        // screen reads this feed live, and the menu stream is change-driven
-        // (handlers_events.go compares fingerprints), so this costs one
-        // request per real change while a panel is open, not a poll.
-        if (selectedGroupSignal.value) loadArchivedSessions()
-      }
-      markSSEHealthy()
-      connectionSignal.value = 'connected'
-    } catch (_) {
-      // malformed JSON; keep current connection state
-    }
-  })
-
-  source.addEventListener('error', () => {
+  const source = new WebSocket(url.href)
+  _dashboardSource = source
+  _dashboardNeedsRecovery = false
+  _dashboardTerminalFailure = false
+  const current = () => _dashboardEnabled && _dashboardSource === source
+  const failed = () => {
+    if (!current()) return
+    _dashboardNeedsRecovery = true
     connectionSignal.value = 'disconnected'
-    if (source.readyState === EventSource.CLOSED && _menuSource === source) {
-      scheduleSSERecovery()
+    scheduleDashboardRecovery()
+  }
+
+  source.addEventListener('open', () => {
+    if (current() && !_dashboardNeedsRecovery) markDashboardHealthy()
+  })
+  source.addEventListener('message', (event) => {
+    if (!current() || _dashboardNeedsRecovery) return
+    try {
+      const message = JSON.parse(event.data)
+      if (message.type === 'menu') {
+        if (applyMenuSnapshot(message.data)) markDashboardHealthy()
+      } else if (message.type === 'command-center') {
+        if (applyCommandCenterSnapshot(message.data)) markDashboardHealthy()
+      } else if (message.type === 'resync') {
+        // Browsers do not reconnect WebSockets. Explicitly schedule recovery
+        // even when close is asynchronous or no network error is emitted.
+        failed()
+        source.close()
+      } else if (message.type === 'error') {
+        connectionSignal.value = 'disconnected'
+      }
+    } catch (_) {
+      // Ignore malformed or unknown frames; keep the last valid snapshots.
     }
   })
+  source.addEventListener('error', () => {
+    // A failed CONNECTING socket also emits close. Avoid closing it again
+    // here; the single retry timer handles either event without duplication.
+    failed()
+  })
+  source.addEventListener('close', failed)
 }
 
 export function stopSSE() {
-  _sseRecoveryGeneration += 1
-  if (_sseRecoveryTimer) clearTimeout(_sseRecoveryTimer)
-  _sseRecoveryTimer = null
-  _sseRecoveryAbort?.abort()
-  _sseRecoveryAbort = null
-  _sseRecoveryAttempt = 0
-  _sseTerminalFailures = new WeakSet()
-  if (_menuSource) {
-    _menuSource.close()
-    _menuSource = null
-  }
-  if (_ccSource) {
-    _ccSource.close()
-    _ccSource = null
-  }
+  _dashboardEnabled = false
+  _dashboardRecoveryGeneration += 1
+  if (_dashboardRecoveryTimer !== null) clearTimeout(_dashboardRecoveryTimer)
+  _dashboardRecoveryTimer = null
+  _dashboardRecoveryAbort?.abort()
+  _dashboardRecoveryAbort = null
+  _dashboardRecoveryAttempt = 0
+  _dashboardTerminalFailure = false
+  _dashboardNeedsRecovery = false
+  const source = _dashboardSource
+  _dashboardSource = null
+  source?.close()
+  connectionSignal.value = 'disconnected'
 }
-
-// ---------- Command Center SSE ----------
-// A second stream alongside the menu SSE, carrying the synthesized cross-
-// project god-view snapshot. Live by construction (fingerprint-diffed
-// server-side), so the panel never polls. recentlyCompleted entries drive
-// "✅ X just finished" notifications.
-
-// Track which completion ids we've already toasted so a steady-state re-emit
-// of the same snapshot (or a reconnect) doesn't re-fire notifications.
-const _ccSeenCompletions = new Set()
 
 export function startCommandCenterSSE() {
-  if (_ccSource) return
-
-  const token = authTokenSignal.value
-  const url = token
-    ? '/events/command-center?token=' + encodeURIComponent(token)
-    : '/events/command-center'
-
-  const source = new EventSource(url)
-  _ccSource = source
-
-  // CRITICAL: the Go server emits this event with type "command-center"
-  // (handlers_command_center.go: writeSSEEvent(w, flusher, "command-center", snapshot)).
-  source.addEventListener('command-center', (event) => {
-    try {
-      const snapshot = JSON.parse(event.data)
-      if (snapshot && typeof snapshot === 'object') {
-        commandCenterSignal.value = snapshot
-        const done = Array.isArray(snapshot.recentlyCompleted) ? snapshot.recentlyCompleted : []
-        for (const c of done) {
-          const key = (c && (c.id || '')) + ':' + (c && (c.at || ''))
-          if (_ccSeenCompletions.has(key)) continue
-          _ccSeenCompletions.add(key)
-          if (c && c.title) addToast(`✅ ${c.title} just finished`, 'success')
-        }
-        // Bound the seen-set so it can't grow unbounded over a long session.
-        if (_ccSeenCompletions.size > 200) {
-          _ccSeenCompletions.clear()
-        }
-      }
-      markSSEHealthy()
-    } catch (_) {
-      // malformed JSON; ignore
-    }
-  })
-
-  source.addEventListener('error', () => {
-    if (source.readyState === EventSource.CLOSED && _ccSource === source) {
-      scheduleSSERecovery()
-    }
-  })
-
-  // The command-center stream shares the connection-state signal via the menu
-  // stream; we don't flip it here to avoid fighting the menu reconnect logic.
+  startSSE()
 }
 
-window.addEventListener('online', wakeSSERecovery)
+window.addEventListener('online', wakeDashboardRecovery)
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') wakeSSERecovery()
+  if (document.visibilityState === 'visible') wakeDashboardRecovery()
 })
 
-// ---------- Initial menu load + SSE kick-off ----------
+// ---------- Initial menu load + dashboard kick-off ----------
 
 export async function loadMenu() {
+  const generation = _dashboardRecoveryGeneration
   try {
     const data = await apiFetch('GET', '/api/menu')
+    if (generation !== _dashboardRecoveryGeneration) return
     sessionsSignal.value = data.items || []
     // POL-1: first real data arrived — unmount the skeleton. Do NOT set
     // this in the catch branch; the skeleton is the correct state when
@@ -300,8 +261,9 @@ export async function loadMenu() {
     startSSE()
     startCommandCenterSSE()
   } catch (_) {
+    if (generation !== _dashboardRecoveryGeneration) return
     connectionSignal.value = 'disconnected'
-    // Still start SSE so it can reconnect when server comes back
+    // Start the dashboard so its recovery can reconnect when the server returns
     startSSE()
     startCommandCenterSSE()
   }

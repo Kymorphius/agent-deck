@@ -32,7 +32,8 @@ func (s *Server) handleGroupsCollection(w http.ResponseWriter, r *http.Request) 
 
 	switch r.Method {
 	case http.MethodGet:
-		snapshot, err := s.menuData.LoadMenuSnapshot()
+		// matrix/hardened: registry reads share the Web collector and overlays.
+		snapshot, err := s.menuPublisher.LoadMenuSnapshot()
 		if err != nil {
 			writeAPIError(w, http.StatusInternalServerError, ErrCodeInternalError, "failed to load group data")
 			return

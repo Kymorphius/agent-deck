@@ -191,7 +191,8 @@ func writeSkillError(w http.ResponseWriter, err error) {
 // lookupSession resolves a sessionID to its MenuSession via the menu
 // snapshot. Used by per-session handlers that need projectPath + tool.
 func (s *Server) lookupSession(sessionID string) (*MenuSession, bool) {
-	snapshot, err := s.menuData.LoadMenuSnapshot()
+	// matrix/hardened: skill target lookup shares the Web registry publication.
+	snapshot, err := s.menuPublisher.LoadMenuSnapshot()
 	if err != nil || snapshot == nil {
 		return nil, false
 	}

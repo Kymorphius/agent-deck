@@ -57,7 +57,8 @@ func (s *Server) handleMatrixImageUpload(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	snapshot, err := s.menuData.LoadMenuSnapshot()
+	// matrix/hardened: image target lookup shares the current menu publication.
+	snapshot, err := s.menuPublisher.LoadMenuSnapshot()
 	if err != nil {
 		writeAPIError(w, http.StatusInternalServerError, ErrCodeInternalError, "failed to load session data")
 		return

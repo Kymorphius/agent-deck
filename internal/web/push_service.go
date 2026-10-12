@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	webpush "github.com/SherClockHolmes/webpush-go"
@@ -364,6 +365,10 @@ type pushService struct {
 	// and reject old transitions after the last subscriber disappears.
 	syncMu        sync.Mutex
 	baselineEpoch uint64
+	// matrix/hardened: publication callbacks never acquire syncMu (its callers
+	// can invalidate the publisher). Atomics expose resets without lock inversion.
+	publishedEpoch     atomic.Uint64
+	publishedOverflows atomic.Uint64
 
 	mu          sync.Mutex
 	initialized bool
@@ -469,7 +474,14 @@ func (p *pushService) UpsertSubscription(ctx context.Context, sub pushSubscripti
 		return err
 	}
 	if count == 0 {
-		p.resetBaselineLocked()
+		// matrix/hardened: a fresh first-subscription baseline cannot reuse a
+		// pre-subscription cache. Commit its epoch with invalidation, so old
+		// accepted callbacks cannot tag old snapshots as the new baseline.
+		if publisher, ok := p.menuData.(*menuSnapshotPublisher); ok {
+			publisher.invalidate(p.resetBaselineLocked)
+		} else {
+			p.resetBaselineLocked()
+		}
 	}
 	// matrix/hardened: prime the first subscriber's baseline promptly after idle.
 	p.TriggerSync()
@@ -494,6 +506,8 @@ func (p *pushService) RemoveSubscriptionByEndpoint(ctx context.Context, endpoint
 	}
 	if count == 0 {
 		p.resetBaselineLocked()
+		// matrix/hardened: release collector demand promptly after last removal.
+		p.TriggerSync()
 	}
 	return nil
 }
@@ -508,6 +522,12 @@ func (p *pushService) UpdateSubscriptionFocus(ctx context.Context, endpoint stri
 var pushLog = logging.ForComponent(logging.CompWeb)
 
 func (p *pushService) run(ctx context.Context) {
+	// matrix/hardened: configured Web push consumes the same menu publisher;
+	// standalone/unit callers retain their original independent polling API.
+	if publisher, ok := p.menuData.(*menuSnapshotPublisher); ok {
+		p.runPublished(ctx, publisher)
+		return
+	}
 	ticker := time.NewTicker(p.pollInterval)
 	defer ticker.Stop()
 
@@ -537,6 +557,156 @@ func (p *pushService) run(ctx context.Context) {
 	}
 }
 
+// matrix/hardened: only subscriber-count checks and test pushes retain a local
+// ticker. Real menu collection belongs to the publisher's single demand loop.
+func (p *pushService) runPublished(ctx context.Context, publisher *menuSnapshotPublisher) {
+	ticker := time.NewTicker(p.pollInterval)
+	defer ticker.Stop()
+	var testTicker *time.Ticker
+	var testTick <-chan time.Time
+	if p.testEvery > 0 {
+		testTicker = time.NewTicker(p.testEvery)
+		testTick = testTicker.C
+		defer testTicker.Stop()
+	}
+	var updates <-chan menuPublication
+	var release func()
+	// matrix/hardened: observe every publication into a bounded memory queue;
+	// network delays cannot discard already-observed status transitions.
+	queue := &publishedPushQueue{}
+	defer func() {
+		if release != nil {
+			release()
+		}
+	}()
+	updateDemand := func() {
+		count, err := p.SubscriptionCount(ctx)
+		if err != nil {
+			pushLog.Error("push_count_subscriptions_failed", slog.String("error", err.Error()))
+			return
+		}
+		if count == 0 {
+			if release != nil {
+				release()
+				release, updates = nil, nil
+			}
+			p.syncMu.Lock()
+			p.resetBaselineLocked()
+			p.syncMu.Unlock()
+			return
+		}
+		if release == nil {
+			updates, release = publisher.Subscribe(p.pollInterval, func(snapshot *MenuSnapshot) {
+				queue.observe(snapshot, p.publishedEpoch.Load())
+			})
+		}
+	}
+	dispatch := func() {
+		pending, overflow := queue.drain(p.publishedEpoch.Load())
+		if overflow {
+			// Explicit resynchronization bounds memory instead of silently
+			// claiming every notification was delivered after an overloaded queue.
+			p.publishedOverflows.Add(1)
+			pushLog.Error("push_backlog_requires_resync", slog.Int("limit", maxPublishedPushTransitions))
+			publisher.Invalidate()
+		}
+		for _, queued := range pending {
+			p.notifySubscribers(ctx, queued.transition, queued.epoch)
+		}
+	}
+	updateDemand()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case v, open := <-updates:
+			if !open {
+				return
+			}
+			updateDemand()
+			if updates != nil {
+				if v.Err != nil {
+					pushLog.Error("push_snapshot_load_failed", slog.String("error", v.Err.Error()))
+				} else {
+					dispatch()
+				}
+			}
+		case <-ticker.C:
+			updateDemand()
+		case <-p.triggerCh:
+			updateDemand()
+			if updates != nil {
+				dispatch()
+			}
+		case <-testTick:
+			p.sendTestPush(ctx)
+		}
+	}
+}
+
+// matrix/hardened: the observer only holds its own queue mutex. Neither disk
+// reads, gateway sends nor publisher/push-service locks occur in this reducer.
+const maxPublishedPushTransitions = 512
+
+type publishedPushTransition struct {
+	transition pushTransition
+	epoch      uint64
+}
+
+type publishedPushQueue struct {
+	mu          sync.Mutex
+	epoch       uint64
+	initialized bool
+	lastStatus  map[string]string
+	pending     []publishedPushTransition
+	overflow    bool
+}
+
+func (q *publishedPushQueue) observe(snapshot *MenuSnapshot, epoch uint64) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.epoch != epoch {
+		q.epoch, q.initialized, q.lastStatus, q.pending, q.overflow = epoch, false, nil, nil, false
+	}
+	if q.overflow {
+		return
+	}
+	current := make(map[string]string)
+	for _, item := range snapshot.Items {
+		if item.Type != MenuItemTypeSession || item.Session == nil {
+			continue
+		}
+		status := strings.ToLower(string(item.Session.Status))
+		current[item.Session.ID] = status
+		if !q.initialized || q.lastStatus[item.Session.ID] == status || (status != "waiting" && status != "error" && status != "idle") {
+			continue
+		}
+		if len(q.pending) == maxPublishedPushTransitions {
+			q.overflow = true
+			return
+		}
+		copy := *item.Session
+		q.pending = append(q.pending, publishedPushTransition{
+			transition: pushTransition{Profile: snapshot.Profile, Session: &copy, Status: status}, epoch: epoch,
+		})
+	}
+	q.lastStatus, q.initialized = current, true
+}
+
+func (q *publishedPushQueue) drain(epoch uint64) ([]publishedPushTransition, bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.epoch != epoch {
+		q.epoch, q.initialized, q.lastStatus, q.pending, q.overflow = epoch, false, nil, nil, false
+	}
+	pending, overflow := q.pending, q.overflow
+	q.pending, q.overflow = nil, false
+	if overflow {
+		q.lastStatus, q.initialized = nil, false
+	}
+	return pending, overflow
+}
+
 // matrix/hardened: callers hold syncMu so an older snapshot cannot restore this
 // cleared baseline and already-generated transitions retain their old epoch.
 func (p *pushService) resetBaselineLocked() {
@@ -544,6 +714,8 @@ func (p *pushService) resetBaselineLocked() {
 	p.initialized = false
 	p.lastStatus = nil
 	p.baselineEpoch++
+	// matrix/hardened: observers invalidate queued events with a lock-free epoch.
+	p.publishedEpoch.Store(p.baselineEpoch)
 	p.mu.Unlock()
 }
 

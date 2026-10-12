@@ -25,16 +25,12 @@ func (s *Server) handleSessionsCollection(w http.ResponseWriter, r *http.Request
 
 	switch r.Method {
 	case http.MethodGet:
-		snapshot, err := s.menuData.LoadMenuSnapshot()
+		// matrix/hardened: session list uses the common collector and overlays.
+		snapshot, err := s.menuPublisher.LoadMenuSnapshot()
 		if err != nil {
 			writeAPIError(w, http.StatusInternalServerError, ErrCodeInternalError, "failed to load session data")
 			return
 		}
-		// Reapply hook fast-path Status mapping so the web matches the CLI
-		// even when the TUI's inotify-driven snapshot has fallen out of date.
-		// See snapshot_hook_refresh.go for the rationale.
-		refreshSnapshotHookStatuses(snapshot, s.hookStatusLoader)
-		applySnapshotAnnotations(snapshot, s.annotationLoader)
 		resp := sessionsListResponse{
 			Sessions: make([]*MenuSession, 0),
 			Groups:   make([]*MenuGroup, 0),

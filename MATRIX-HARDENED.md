@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.36`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.37`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -66,7 +66,7 @@
 - `internal/session/claude_hooks.go`：`isAgentDeckHookCommand` 的判断规则：先去掉开头的 `VAR=值`，再要求第二个词是 `hook-handler`、程序名的文件名部分是 `agent-deck`。`RemoveClaudeHooks` 会扫描全部事件，并做 UTC 时间戳备份（约 387–414 行）。
 - `cmd/agent-deck/main.go`（约 4845、5070 行）：`agent-deck uninstall` 会移除这些钩子。`uninstall.sh` 第 253 行附近的 jq 过滤用的是同一套规则（正则），写回时用 `cat >` 保持软链接和权限。
 
-**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.36`。
+**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.37`。
 
 **测试**：以 `_hardened_test.go` 结尾的文件、`update_check_disable_test.go`、`update_timer_wiring_test.go` 等是新增或调整过的测试；`testdata/goldens/*` 里的快照已经按加固后的输出更新。
 
@@ -370,3 +370,19 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 - `StatusUpdatePass` 的进程快照：同一轮内共享主机的 PID、父 PID 和完整参数，减少每个 Codex 会话分别运行全表 `ps` 及逐 PID 查询。仍分别读取会话的 tmux pane 和进程文件；快照不跨刷新轮次，失败或缺失进程保留原有回退与不完整信号。
 - `system_stats_cache.go`：每个 Web Server 按需缓存系统统计两秒，多个页面的相邻请求共用一次采集；从采集完成时刻计时，不启动额外定时器，不跨服务器共享。不可用指标仍省略，权限与方法检查先于采集。
 - 验证包含日志变更/替换/首次 flush、账号目录隔离、并发读取、进程表失败与候选识别，以及系统统计过期/权限/并发。通过后使用隔离脚本完成相关测试，再安装并重启 Web；以相同网页打开状态采样实际服务 CPU。
+
+## 32. 多网页共用一次采集与广播
+
+`1.16.26+matrix.37` 引入按需工作的 Web 菜单快照发布器。REST、网页 WebSocket、兼容 SSE、Command Center、Push 和其它活跃会话读取共用同一份采集结果。
+
+- **matrix/hardened:** 发布器统一执行菜单读取、hook 状态覆盖和注释合并；各连接只负责传输和心跳。菜单指纹与编码按发布计算，增加网页连接不会增加采集循环。
+- **matrix/hardened:** 网页使用一条只推送状态的 `/ws/dashboard` 连接，复用菜单和 Command Center 事件，避免每页两条 SSE 占用普通 HTTP 连接池。握手复用既有鉴权与 Origin 检查；应用层输入被拒绝，终端输入仍走原有会话连接。
+- **matrix/hardened:** Service Worker shell cache 升至 v23，让 PWA 缓存随新连接实现刷新；页面重载后读取新入口，断线时保留有退避的自动恢复。
+- **matrix/hardened:** Command Center 基础状态按每次成功发布懒构建一次，多个连接和 REST 共用文件读取、合成与编码；各连接的完成通知独立合并。新发布会重新读取基础状态，即使菜单内容未变，conductor 文件变化也能显示。
+- **matrix/hardened:** 首个订阅者启动唯一循环，最后一个订阅者离开后停止；没有订阅时 REST 按需读取并合并并发请求。Push 没有有效订阅时不维持采集需求。
+- **matrix/hardened:** 每份发布拥有自己的数据，消费者不能改动其它窗口的快照。采集失败返回错误，失效期间旧 generation 不能提交；会话操作会唤醒一次共享刷新。
+- **matrix/hardened:** 慢连接使用有界待发送状态，采集不等待网络写入。完成通知另做有界观察与积累，保留已观察的回合变化；超出积累上限明确要求重新同步或记录失败。
+- **matrix/hardened:** 受既有鉴权保护的 `GET /api/diagnostics/menu-publisher` 提供采集次数、订阅数、错误与运行状态计数，供多窗口验收；不在产品界面展示实现细节，不返回会话或凭证。
+- 验证 1/4/16 个订阅者每次发布共用的采集与合成次数、失效与重订阅、慢连接完成事件、错误恢复、只推送 WebSocket 的权限/输入边界和关闭清理；本机安装后核对真实映射构建、AI pane 身份和 1/4 网页连接的稳定 CPU/采集计数。
+
+后续跨进程的终端共享采用独立的完整 runtime snapshot 协议；当前升级集中在 Web 发布与消费边界，终端仍沿用原有监测机制。

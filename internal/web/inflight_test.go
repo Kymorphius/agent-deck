@@ -64,6 +64,10 @@ func TestServer_TracksInFlightRequests(t *testing.T) {
 	<-streamDone
 
 	for path, want := range map[string]bool{
+		// matrix/hardened: only the dashboard transport is restart-idle;
+		// similarly prefixed paths and real terminal input remain counted.
+		"/ws/dashboard":          true,
+		"/ws/dashboard/anything": false,
 		"/events/command-center": true,
 		"/api/costs/stream":      true,
 		"/ws/session/abc":        false,
