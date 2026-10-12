@@ -169,20 +169,6 @@ func (r transcriptRecord) isAssistantTurn() bool {
 	return role == "assistant"
 }
 
-// fresh reports whether the record's timestamp is within maxAge of now.
-//
-// An absent or unparseable timestamp is NOT treated as fresh: believing a
-// rejection of unknown age is precisely what produces a stuck verdict. A
-// timestamp in the future is likewise rejected rather than trusted.
-func (r transcriptRecord) fresh(now time.Time, maxAge time.Duration) bool {
-	ts, err := time.Parse(time.RFC3339, strings.TrimSpace(r.Timestamp))
-	if err != nil {
-		return false
-	}
-	age := now.Sub(ts)
-	return age >= 0 && age <= maxAge
-}
-
 // latestAssistantTurnIsRateLimited reports whether the MOST RECENT
 // main-conversation assistant turn at path is a quota rejection recent enough to
 // still be believed, plus whether a verdict could be formed at all.
@@ -191,21 +177,33 @@ func (r transcriptRecord) fresh(now time.Time, maxAge time.Duration) bool {
 // Callers must treat that as "unknown", never as "fine" — silence being mistaken
 // for health is the failure this whole detector exists to stop.
 func latestAssistantTurnIsRateLimited(path string, now time.Time) (limited bool, ok bool) {
+	// matrix/hardened: share only immutable file facts; time-based expiry still
+	// uses every caller's clock and the Instance cadence/generation stays below.
+	result := matrixUsageLimitFiles.load(path)
+	return result.fact.limited(now), result.formed
+}
+
+// matrix/hardened: this bounded scanner records the latest assistant fact,
+// independently of now. The cache never stores a time-dependent limited bool.
+func scanLatestAssistantUsageLimitFact(path string) matrixUsageLimitScanResult {
+	var result matrixUsageLimitScanResult
 	f, err := os.Open(path)
 	if err != nil {
-		return false, false
+		return result
 	}
 	defer f.Close()
 
 	info, err := f.Stat()
 	if err != nil {
-		return false, false
+		return result
 	}
+	result.source = matrixTurnInterruptSignature(info)
+	cacheable := info.Mode().IsRegular()
 
 	if info.Size() == 0 {
 		// Nothing to read, and nothing to allocate: an empty transcript used to cost
 		// a full chunk buffer on every eligible scan.
-		return false, false
+		return result
 	}
 
 	chunk := usageLimitScanChunkBytes
@@ -230,9 +228,9 @@ func latestAssistantTurnIsRateLimited(path string, now time.Time) (limited bool,
 	// documents /compact producing multi-megabyte single-line records.
 	lineEnd := info.Size()
 
-	consider := func(start, end int64) (bool, bool, bool) {
+	consider := func(start, end int64) bool {
 		if end <= start {
-			return false, false, false
+			return false
 		}
 		if end-start > usageLimitMaxLineBytes {
 			if usageLimitScanObserver != nil {
@@ -241,31 +239,35 @@ func latestAssistantTurnIsRateLimited(path string, now time.Time) (limited bool,
 			// A line this large is a compaction/file-history snapshot, not a turn
 			// this detector can act on. Skipped WITHOUT reading it: the whole point
 			// of the bound is not to pull megabytes onto a status path.
-			return false, false, false
+			return false
 		}
 		if usageLimitScanObserver != nil {
 			usageLimitScanObserver(usageLimitScanRead{Kind: "line", Start: start, End: end, Bytes: end - start})
 		}
 		line := make([]byte, end-start)
-		if _, err := f.ReadAt(line, start); err != nil && err != io.EOF {
-			return false, false, false
+		read, err := f.ReadAt(line, start)
+		if read != len(line) || err != nil {
+			cacheable = false
+		}
+		if err != nil && err != io.EOF {
+			return false
 		}
 		trimmed := strings.TrimSpace(string(line))
 		if trimmed == "" {
-			return false, false, false
+			return false
 		}
 		var rec transcriptRecord
 		if err := json.Unmarshal([]byte(trimmed), &rec); err != nil {
-			return false, false, false
+			cacheable = false
+			return false
 		}
 		if !rec.isAssistantTurn() {
-			return false, false, false
+			return false
 		}
-		if !rec.isRateLimitRejection() {
-			return false, true, true
-		}
-		// A rejection older than the window is no longer evidence about now.
-		return rec.fresh(now, usageLimitMaxAge), true, true
+		at, timeErr := time.Parse(time.RFC3339, strings.TrimSpace(rec.Timestamp))
+		result.fact = matrixUsageLimitFact{rejection: rec.isRateLimitRejection(), at: at, timestampKnown: timeErr == nil}
+		result.formed, result.cacheable = true, cacheable
+		return true
 	}
 
 	for end := info.Size(); end > 0; {
@@ -277,26 +279,35 @@ func latestAssistantTurnIsRateLimited(path string, now time.Time) (limited bool,
 		if usageLimitScanObserver != nil {
 			usageLimitScanObserver(usageLimitScanRead{Kind: "chunk", Start: start, End: end, Bytes: end - start})
 		}
-		if _, err := f.ReadAt(buf[:n], start); err != nil && err != io.EOF {
-			return false, false
+		read, err := f.ReadAt(buf[:n], start)
+		if int64(read) != n || err != nil {
+			cacheable = false
+		}
+		if err != nil && err != io.EOF {
+			return result
+		}
+		// An unflushed final record keeps the old scanner's verdict but remains
+		// retryable even when its incomplete bytes have not changed yet.
+		if end == info.Size() && buf[n-1] != '\n' {
+			cacheable = false
 		}
 		for i := n - 1; i >= 0; i-- {
 			if buf[i] != '\n' {
 				continue
 			}
-			if lim, o, decided := consider(start+i+1, lineEnd); decided {
-				return lim, o
+			if consider(start+i+1, lineEnd) {
+				return result
 			}
 			lineEnd = start + i
 		}
 		end = start
 	}
 	// The first line of the file has no preceding newline to close it.
-	if lim, o, decided := consider(0, lineEnd); decided {
-		return lim, o
+	if consider(0, lineEnd) {
+		return result
 	}
 	// The whole file was read and holds no main-conversation assistant turn.
-	return false, false
+	return result
 }
 
 // usageLimitPublishable reports whether a finished scan may write its result to
