@@ -268,6 +268,10 @@ func (s *Storage) PermanentlyDelete(inst *Instance, approved PermanentDeletePlan
 	if !bytes.Equal(a, b) {
 		return errors.New("deletion plan changed; preview and confirm again")
 	}
+	// matrix/hardened: native UI and CLI execution must both protect their hosting terminal.
+	if err := CheckPermanentDeleteTerminal(inst); err != nil {
+		return err
+	}
 	lock, err := recall.LockPath()
 	if err != nil {
 		return err

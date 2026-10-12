@@ -321,6 +321,11 @@ type Home struct {
 	webServicePanel      *WebServicePanel      // matrix/hardened: the user's own `agent-deck web` service (alt+w)
 	webServiceWatch      *webServiceWatch      // matrix/hardened: background reading for the header's "web" mark
 	deadLetterPanel      *DeadLetterPanel      // Inspect, retry, and explicitly purge delivery failures
+
+	// matrix/hardened: permanent deletion stays in the TUI; no terminal handoff.
+	permanentDeleteDialog  *PermanentDeleteDialog
+	permanentDeleteRequest uint64
+
 	// agentsView is the last built fleet view; agentBySession indexes its
 	// rows by adopted session id so the session list can mark agent-owned
 	// rows and the preview pane can render their card. Both are empty for a
@@ -1549,8 +1554,6 @@ func (h *Home) stackedPreviewTopY() int {
 }
 
 // Messages
-// matrix/hardened: keep the child CLI completion on Bubble Tea's update loop.
-type permanentDeleteResultMsg struct{ err error }
 type loadSessionsMsg struct {
 	loadSequence      uint64
 	loadWatcher       *StorageWatcher
@@ -2032,6 +2035,7 @@ func NewHomeWithRuntimeSource(profile string, source session.RuntimeObservationS
 		groupDialog:               NewGroupDialog(),
 		forkDialog:                NewForkDialog(),
 		confirmDialog:             NewConfirmDialog(),
+		permanentDeleteDialog:     NewPermanentDeleteDialog(), // matrix/hardened
 		hookTrustDialog:           NewHookTrustDialog(),
 		helpOverlay:               NewHelpOverlay(),
 		mcpDialog:                 NewMCPDialog(),
@@ -7493,6 +7497,9 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if cmd, ok := h.handleWebServiceMsg(msg); ok { // matrix/hardened: alt+w (matrix_webservice_home.go)
 		return h, cmd
 	}
+	if cmd, ok := h.handlePermanentDeleteMsg(msg); ok { // matrix/hardened
+		return h, cmd
+	}
 
 	switch msg := msg.(type) {
 	case quitMsg:
@@ -7545,6 +7552,16 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return h, h.fetchSelectedPreview()
 
 	case tea.MouseMsg:
+		// matrix/hardened: absorb mouse input while previewing or deleting.
+		if h.permanentDeleteDialog != nil && h.permanentDeleteDialog.IsVisible() {
+			switch msg.Button {
+			case tea.MouseButtonWheelUp:
+				h.permanentDeleteDialog.HandleKey(tea.KeyMsg{Type: tea.KeyUp})
+			case tea.MouseButtonWheelDown:
+				h.permanentDeleteDialog.HandleKey(tea.KeyMsg{Type: tea.KeyDown})
+			}
+			return h, nil
+		}
 		if h.telemetryDialog != nil && h.telemetryDialog.IsVisible() {
 			return h, nil
 		}
@@ -7771,12 +7788,6 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return h, tea.Batch(h.fetchPreview(inst, key, winIdx), h.scheduleEmbeddedRefresh())
 
-	case permanentDeleteResultMsg:
-		if msg.err != nil {
-			h.setError(fmt.Errorf("permanent deletion: %w", msg.err))
-			return h, nil
-		}
-		return h, h.sessionLoadCmd(nil, false)
 	case loadSessionsMsg:
 		if msg.loadSequence != 0 && (msg.loadSequence != h.sessionLoadSequence || msg.loadWatcher != h.storageWatcher) {
 			return h, nil
@@ -10128,6 +10139,10 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			h.hookTrustDialog.HandleKey(msg)
 			return h, nil
 		}
+		// matrix/hardened: confirmation text must never become list shortcuts.
+		if h.permanentDeleteDialog != nil && h.permanentDeleteDialog.IsVisible() {
+			return h.handlePermanentDeleteKey(msg)
+		}
 
 		// Handle jump mode input (before modals)
 		if h.jumpMode {
@@ -11298,6 +11313,7 @@ func (h *Home) handleJumpKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // hasModalVisible returns true if any modal dialog or overlay is currently visible
 func (h *Home) hasModalVisible() bool {
 	return h.initialLoading || h.isQuitting || h.notesEditing || h.jumpMode ||
+		(h.permanentDeleteDialog != nil && h.permanentDeleteDialog.IsVisible()) || // matrix/hardened
 		h.setupWizard.IsVisible() || h.settingsPanel.IsVisible() ||
 		(h.toolVisibilityPanel != nil && h.toolVisibilityPanel.IsVisible()) ||
 		h.watcherPanel.IsVisible() || // hotkeyWatcherPanel overlay
@@ -13461,19 +13477,13 @@ func (h *Home) attachSelectedLegacy() tea.Cmd {
 
 // handleConfirmDialogKey handles keys when confirmation dialog is visible
 func (h *Home) handleConfirmDialogKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	// matrix/hardened: 'p' from Delete opens the exact deletion preview and
-	// typed confirmation in a child CLI. Ordinary 'd' and 'D' keep their meaning.
+	// matrix/hardened: preview and typed confirmation stay in Bubble Tea so
+	// opening or cancelling cannot strand the terminal outside its renderer.
 	if msg.String() == "p" && h.confirmDialog.GetConfirmType() == ConfirmDeleteSession {
 		id := h.confirmDialog.GetTargetID()
-		binary, err := os.Executable()
-		if err != nil {
-			h.setError(err)
-			return h, nil
-		}
+		title := h.confirmDialog.targetName
 		h.confirmDialog.Hide()
-		return h, tea.ExecProcess(exec.Command(binary, "-p", h.storage.Profile(), "remove", "--purge", id), func(err error) tea.Msg {
-			return permanentDeleteResultMsg{err: err}
-		})
+		return h, h.beginPermanentDelete(id, title)
 	}
 	// Let the dialog handle arrow/tab navigation first.
 	h.confirmDialog.Update(msg)
@@ -19067,6 +19077,9 @@ func (h *Home) updateSizes() {
 	h.newDialog.SetSize(h.width, h.height)
 	h.groupDialog.SetSize(h.width, h.height)
 	h.confirmDialog.SetSize(h.width, h.height)
+	if h.permanentDeleteDialog != nil { // matrix/hardened
+		h.permanentDeleteDialog.SetSize(h.width, h.height)
+	}
 	h.hookTrustDialog.SetSize(h.width, h.height)
 	h.geminiModelDialog.SetSize(h.width, h.height)
 	if h.sessionSwitcher != nil {
@@ -19156,6 +19169,9 @@ func (h *Home) renderFrame() string {
 			return renderShutdownSplash(h.width, h.height, h.animationFrame, "Restarting...")
 		}
 		return renderQuittingSplash(h.width, h.height, h.animationFrame)
+	}
+	if h.permanentDeleteDialog != nil && h.permanentDeleteDialog.IsVisible() { // matrix/hardened
+		return h.permanentDeleteDialog.View()
 	}
 
 	// Setup wizard takes over entire screen

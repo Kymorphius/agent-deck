@@ -1394,7 +1394,9 @@ Built with [Bubble Tea](https://github.com/charmbracelet/bubbletea) and [tmux](h
 
 <!-- matrix/hardened: explicit preview and confirmation; ordinary delete is unchanged. -->
 Select a local Claude/Codex session, press `d`, then `p` in the delete dialog.
-Review the exact native IDs and transcript paths, then type `DELETE` to confirm.
+The preview stays inside the main interface. Review the exact native IDs and
+transcript paths, then type `DELETE` and press Enter to confirm. Press Esc to
+cancel; use arrow keys, PgUp/PgDn or the mouse wheel to scroll long previews.
 The command-line equivalent is:
 
 ```bash
