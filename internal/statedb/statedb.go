@@ -286,6 +286,9 @@ type StatusRow struct {
 	Status       string
 	Tool         string
 	Acknowledged bool
+	// matrix/hardened: per-row explicit acknowledgment time distinguishes a
+	// repeated completion from a new turn in the shared collector.
+	AcknowledgedAt int64
 	// HookLag is the persisted tool_data.hook_lag extra (nil when absent):
 	// the completed-turn samples a CLI pass recorded for a Claude session
 	// whose hook still says running (session/hook_lag.go).
@@ -1567,20 +1570,24 @@ func (s *StateDB) PersistInstanceStatusesTx(updates []InstanceStatusUpdate) erro
 // it. The other is the hook confirmation of an id agent-deck minted itself
 // (Instance.confirmClaudeSessionLink, via UpsertSessionLink); the adoption
 // arbitration retracts a rejected candidate via RetractSessionLink.
-func (s *StateDB) WriteClaudeSessionBinding(id, sessionID string, detectedAt time.Time) error {
-	return s.writeHarnessSessionBinding(id, sessionID, "claude", detectedAt)
+func (s *StateDB) WriteClaudeSessionBinding(id, sessionID string, detectedAt time.Time, expectedTouch ...int64) error {
+	return s.writeHarnessSessionBinding(id, sessionID, "claude", detectedAt, expectedTouch)
 }
 
 // writeHarnessSessionBinding is the shared body of the Claude, Codex and
 // Gemini binding writers: one json_set on tool_data plus the session_links
 // row, in one transaction so a link never exists without its binding.
-func (s *StateDB) writeHarnessSessionBinding(id, sessionID, harness string, detectedAt time.Time) error {
+func (s *StateDB) writeHarnessSessionBinding(id, sessionID, harness string, detectedAt time.Time, expectedTouch []int64) error {
 	return withBusyRetry(func() error {
 		tx, err := s.db.Begin()
 		if err != nil {
 			return err
 		}
 		defer func() { _ = tx.Rollback() }()
+		// matrix/hardened: native bindings and Recall links share the mutation fence.
+		if err := guardRuntimeObservation(tx, id, expectedTouch); err != nil {
+			return err
+		}
 		if _, err := tx.Exec(
 			`UPDATE instances
 			   SET tool_data = json_set(
@@ -1611,8 +1618,8 @@ func (s *StateDB) writeHarnessSessionBinding(id, sessionID, harness string, dete
 // This sibling exists because the Codex rebind path in
 // bindCodexSessionFromHook has the same in-memory-only mutation shape
 // that the Claude fix in #1140 addressed — tracked as #1139.
-func (s *StateDB) WriteCodexSessionBinding(id, sessionID string, detectedAt time.Time) error {
-	return s.writeHarnessSessionBinding(id, sessionID, "codex", detectedAt)
+func (s *StateDB) WriteCodexSessionBinding(id, sessionID string, detectedAt time.Time, expectedTouch ...int64) error {
+	return s.writeHarnessSessionBinding(id, sessionID, "codex", detectedAt, expectedTouch)
 }
 
 // WriteGeminiSessionBinding is the Gemini counterpart of
@@ -1620,8 +1627,8 @@ func (s *StateDB) WriteCodexSessionBinding(id, sessionID string, detectedAt time
 // PERSIST-12 / json_set / withBusyRetry rationale; the Gemini rebind
 // path in bindGeminiSessionFromHook had the same persistence gap
 // (#1139).
-func (s *StateDB) WriteGeminiSessionBinding(id, sessionID string, detectedAt time.Time) error {
-	return s.writeHarnessSessionBinding(id, sessionID, "gemini", detectedAt)
+func (s *StateDB) WriteGeminiSessionBinding(id, sessionID string, detectedAt time.Time, expectedTouch ...int64) error {
+	return s.writeHarnessSessionBinding(id, sessionID, "gemini", detectedAt, expectedTouch)
 }
 
 // WriteGenericSessionBinding persists a custom-tool conversation id
@@ -1639,13 +1646,17 @@ func (s *StateDB) WriteGeminiSessionBinding(id, sessionID string, detectedAt tim
 // Recall phase 1: the same write records (id, tool, sessionID) in
 // session_links as the authoritative link, and a clear demotes the
 // instance's links, in the same transaction as the tool_data write.
-func (s *StateDB) WriteGenericSessionBinding(id, sessionID, tool, command, location string, detectedAt time.Time) error {
+func (s *StateDB) WriteGenericSessionBinding(id, sessionID, tool, command, location string, detectedAt time.Time, expectedTouch ...int64) error {
 	return withBusyRetry(func() error {
 		tx, err := s.db.Begin()
 		if err != nil {
 			return err
 		}
 		defer func() { _ = tx.Rollback() }()
+		// matrix/hardened: a slow probe cannot bind a newly edited session.
+		if err := guardRuntimeObservation(tx, id, expectedTouch); err != nil {
+			return err
+		}
 		if sessionID == "" {
 			if _, err := tx.Exec(
 				`UPDATE instances
@@ -1700,18 +1711,10 @@ func (s *StateDB) WriteGenericSessionBinding(id, sessionID, tool, command, locat
 // and for the same reason: the observing process (TUI hook watcher,
 // attach-return) has no save cycle it can rely on to flush the in-memory
 // value before the evidence behind it is gone.
-func (s *StateDB) WriteLastActivityAt(id string, at time.Time) error {
-	return withBusyRetry(func() error {
-		_, err := s.db.Exec(
-			`UPDATE instances
-			   SET tool_data = json_set(
-			         COALESCE(tool_data, '{}'),
-			         '$.last_activity_at', ?)
-			 WHERE id = ?`,
-			at.Unix(), id,
-		)
-		return err
-	})
+func (s *StateDB) WriteLastActivityAt(id string, at time.Time, expectedTouch ...int64) error {
+	// matrix/hardened: activity from a superseded probe must not replace new activity.
+	return s.guardedRuntimeUpdate(id, expectedTouch,
+		`UPDATE instances SET tool_data=json_set(COALESCE(tool_data,'{}'),'$.last_activity_at',?) WHERE id=?`, at.Unix(), id)
 }
 
 // WriteLastAccessed atomically updates the last_accessed column for one
@@ -1734,8 +1737,11 @@ func (s *StateDB) WriteLastAccessed(id string, at time.Time) error {
 // abort the whole query and silently blank every session's shared status;
 // the json_valid guard turns such a row into a NULL hook_lag instead.
 func (s *StateDB) ReadAllStatuses() (map[string]StatusRow, error) {
+	// matrix/hardened: keep the explicit per-row ACK time in the same read as
+	// its flag; legacy or malformed extras have an unknown zero timestamp.
 	rows, err := s.db.Query(`SELECT id, status, tool, acknowledged,
-		CASE WHEN json_valid(tool_data) THEN json_extract(tool_data, '$.hook_lag') ELSE NULL END
+		CASE WHEN json_valid(tool_data) THEN json_extract(tool_data, '$.hook_lag') ELSE NULL END,
+		CASE WHEN json_valid(tool_data) THEN CAST(COALESCE(json_extract(tool_data, '$.runtime_ack_at'),0) AS INTEGER) ELSE 0 END
 		FROM instances`)
 	if err != nil {
 		return nil, err
@@ -1748,7 +1754,7 @@ func (s *StateDB) ReadAllStatuses() (map[string]StatusRow, error) {
 		var sr StatusRow
 		var ack int
 		var hookLag sql.NullString
-		if err := rows.Scan(&id, &sr.Status, &sr.Tool, &ack, &hookLag); err != nil {
+		if err := rows.Scan(&id, &sr.Status, &sr.Tool, &ack, &hookLag, &sr.AcknowledgedAt); err != nil {
 			return nil, err
 		}
 		sr.Acknowledged = ack != 0
@@ -1807,13 +1813,36 @@ func (s *StateDB) SetAcknowledgedStamped(id string, ack bool) (WriteStamps, erro
 	if ack {
 		v = 1
 	}
-	if err := withBusyRetry(func() error {
-		_, err := s.db.Exec("UPDATE instances SET acknowledged = ? WHERE id = ?", v, id)
-		return err
-	}); err != nil {
-		return WriteStamps{}, err
-	}
-	return s.touchStamp()
+	// matrix/hardened: the flag, its time and the operator watermark commit
+	// together. An older collector cannot clear a just-acknowledged new turn.
+	var stamps WriteStamps
+	err := withBusyRetry(func() error {
+		tx, err := s.db.Begin()
+		if err != nil {
+			return err
+		}
+		defer func() { _ = tx.Rollback() }()
+		var before int64
+		if err := tx.QueryRow(`SELECT COALESCE((SELECT CAST(value AS INTEGER) FROM metadata WHERE key='last_modified'),0)`).Scan(&before); err != nil {
+			return err
+		}
+		after := time.Now().UnixNano()
+		if after <= before {
+			after = before + 1
+		}
+		if _, err := tx.Exec(`UPDATE instances SET acknowledged=?,tool_data=json_set(CASE WHEN json_valid(tool_data) THEN tool_data ELSE '{}' END,'$.runtime_ack_at',?) WHERE id=?`, v, after, id); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`INSERT INTO metadata(key,value) VALUES('last_modified',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, fmt.Sprint(after)); err != nil {
+			return err
+		}
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+		stamps = WriteStamps{Before: before, After: after}
+		return nil
+	})
+	return stamps, err
 }
 
 // SetArchived sets or clears the archive timestamp for a single instance via a

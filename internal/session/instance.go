@@ -582,6 +582,19 @@ type Instance struct {
 	// return to that profile instead of whichever database is process-global.
 	restartDB atomic.Pointer[statedb.StateDB]
 
+	// matrix/hardened: complete monitor replicas are volatile and never saved.
+	runtimeProfile       string
+	runtimeProfileName   atomic.Pointer[string]
+	runtimeReplica       atomic.Pointer[RuntimeSessionSnapshot]
+	runtimeConsumer      atomic.Bool
+	runtimeInvalidatedAt time.Time
+	// matrix/hardened: detached producers carry their persisted launch baseline
+	// into atomic targeted writes, so an old probe cannot undo an operator edit.
+	runtimeProducerExpected   atomic.Pointer[statedb.InstanceRow]
+	runtimeProducerFence      atomic.Pointer[int64]
+	runtimeProducerAck        atomic.Pointer[runtimeProducerAcknowledgment]
+	runtimeProducerObservedAt atomic.Pointer[time.Time]
+
 	paneDeadExitStatusForTest func() (int, bool) // nil uses tmuxSession.PaneDeadExitStatus
 
 	// terminatedPaneSubstate is set alongside i.Status by classifyTerminatedPane
@@ -1016,6 +1029,10 @@ func NewSandboxConfig(imageOverride string) *SandboxConfig {
 // GetStatusThreadSafe returns the session status with read-lock protection.
 // Use this when reading Status from a goroutine concurrent with backgroundStatusUpdate.
 func (inst *Instance) GetStatusThreadSafe() Status {
+	// matrix/hardened: monitor consumers use complete verdicts without local probes.
+	if row, _ := inst.runtimeView(); row != nil {
+		return row.Status
+	}
 	inst.mu.RLock()
 	s := inst.Status
 	inst.mu.RUnlock()
@@ -1025,6 +1042,9 @@ func (inst *Instance) GetStatusThreadSafe() Status {
 // SetStatusThreadSafe sets the session status with write-lock protection.
 func (inst *Instance) SetStatusThreadSafe(s Status) {
 	inst.mu.Lock()
+	// matrix/hardened: local status mutations invalidate pre-action observations.
+	inst.runtimeReplica.Store(nil)
+	inst.runtimeInvalidatedAt = time.Now()
 	inst.Status = s
 	inst.mu.Unlock()
 }
@@ -1092,7 +1112,8 @@ func (inst *Instance) SetToolThreadSafe(t string) {
 // UPDATE is not.
 func (inst *Instance) MarkAccessed() {
 	inst.LastAccessedAt = time.Now()
-	if db := statedb.GetGlobal(); db != nil {
+	// matrix/hardened: targeted writes stay in the instance owning profile.
+	if db := inst.stateDB(); db != nil {
 		if err := db.WriteLastAccessed(inst.ID, inst.LastAccessedAt); err != nil {
 			sessionLog.Debug("last_accessed_persist_failed",
 				slog.String("instance", inst.ID),
@@ -1105,6 +1126,12 @@ func (inst *Instance) MarkAccessed() {
 // GetLastActivityTime returns when the session was last active (content changed)
 // Returns CreatedAt if no activity has been tracked yet
 func (inst *Instance) GetLastActivityTime() time.Time {
+	// matrix/hardened: monitor consumers use complete verdicts without local probes.
+	if row, consumer := inst.runtimeView(); row != nil {
+		return row.LastChangeAt
+	} else if consumer {
+		return inst.CreatedAt
+	}
 	if inst.tmuxSession != nil {
 		activityTime := inst.tmuxSession.GetLastActivityTime()
 		if !activityTime.IsZero() {
@@ -1152,6 +1179,12 @@ func (inst *Instance) DisplayLastActivityTime() time.Time {
 // tracker has never observed activity). When the bool is false the time
 // value is zero.
 func (inst *Instance) LastObservedActivity() (time.Time, bool) {
+	// matrix/hardened: monitor consumers use complete verdicts without local probes.
+	if row, consumer := inst.runtimeView(); row != nil {
+		return row.ObservedActivityAt, row.ObservedActivityKnown
+	} else if consumer {
+		return time.Time{}, false
+	}
 	if inst.tmuxSession == nil {
 		return time.Time{}, false
 	}
@@ -1161,6 +1194,12 @@ func (inst *Instance) LastObservedActivity() (time.Time, bool) {
 // GetWaitingSince returns when the session transitioned to waiting status
 // Used for sorting notification bar (newest waiting sessions first)
 func (inst *Instance) GetWaitingSince() time.Time {
+	// matrix/hardened: monitor consumers use complete verdicts without local probes.
+	if row, consumer := inst.runtimeView(); row != nil {
+		return row.WaitingSince
+	} else if consumer {
+		return inst.CreatedAt
+	}
 	if inst.tmuxSession != nil {
 		waitingSince := inst.tmuxSession.GetWaitingSince()
 		if !waitingSince.IsZero() {
@@ -2284,6 +2323,12 @@ func allocateLocalPort() (int, error) {
 
 // GetOpenCodePort returns the event-server port with lock protection.
 func (i *Instance) GetOpenCodePort() int {
+	// matrix/hardened: consumer SSE metadata is part of the complete observation.
+	if row, consumer := i.runtimeView(); row != nil {
+		return row.OpenCodePort
+	} else if consumer {
+		return 0
+	}
 	i.mu.RLock()
 	defer i.mu.RUnlock()
 	return i.OpenCodePort
@@ -2494,7 +2539,9 @@ func (i *Instance) codexHomeForCommand(command string) string {
 	if accountHome := strings.TrimSpace(i.accountCodexHomeDir()); accountHome != "" {
 		return accountHome
 	}
-	return getCodexHomeDir()
+	// matrix/hardened: a user-level producer resolves this instance's profile,
+	// not the profile/environment of whichever client launched the collector.
+	return getCodexHomeDirForProfile(i.runtimeProfileForResolution(), !i.isRuntimeProducer())
 }
 
 func (i *Instance) getCodexHomeDir() string {
@@ -2947,7 +2994,8 @@ func (i *Instance) setOpenCodeSessionLocked(sessionID string) {
 }
 
 func (i *Instance) syncOpenCodeSessionEnvironment(tmuxSession *tmux.Session, sessionID string) {
-	if tmuxSession != nil {
+	// matrix/hardened: producers persist only guarded registry identities.
+	if !i.isRuntimeProducer() && tmuxSession != nil {
 		if err := tmuxSession.SetEnvironment("OPENCODE_SESSION_ID", sessionID); err != nil {
 			sessionLog.Warn("opencode_set_env_failed", slog.String("error", err.Error()))
 		}
@@ -3340,12 +3388,17 @@ func (i *Instance) detectCodexSessionAsync() {
 }
 
 func getCodexHomeDir() string {
-	if codexHome := strings.TrimSpace(os.Getenv("CODEX_HOME")); codexHome != "" {
+	return getCodexHomeDirForProfile(resolvedProcessProfile(), true)
+}
+
+// matrix/hardened: ordinary launch routing retains ambient precedence; a
+// multiplexed producer uses the bound profile instead of an inherited home.
+func getCodexHomeDirForProfile(profile string, useAmbient bool) string {
+	if codexHome := strings.TrimSpace(os.Getenv("CODEX_HOME")); useAmbient && codexHome != "" {
 		return ExpandPath(codexHome)
 	}
 
 	if cfg, err := LoadUserConfig(); err == nil && cfg != nil {
-		profile := resolvedProcessProfile()
 		if profileDir := cfg.GetProfileCodexConfigDir(profile); profileDir != "" {
 			return profileDir
 		}
@@ -4285,7 +4338,8 @@ func (i *Instance) updateCodexSessionForPass(excludeIDs map[string]bool, forcePr
 			i.CodexSessionID = sessionID
 			i.CodexDetectedAt = time.Now()
 			i.recordCodexOwnership(i.CodexSessionID)
-			if i.tmuxSession != nil && i.tmuxSession.Exists() && (changed || envSessionID == "") {
+			// matrix/hardened: an old observation cannot rebind a restarted pane.
+			if !i.isRuntimeProducer() && i.tmuxSession != nil && i.tmuxSession.Exists() && (changed || envSessionID == "") {
 				_ = i.tmuxSession.SetEnvironment("CODEX_SESSION_ID", i.CodexSessionID)
 			}
 			return ""
@@ -4319,7 +4373,8 @@ func (i *Instance) updateCodexSessionForPass(excludeIDs map[string]bool, forcePr
 			i.CodexSessionID = threadID
 			i.CodexDetectedAt = time.Now()
 			i.recordCodexOwnership(threadID)
-			if i.tmuxSession != nil && i.tmuxSession.Exists() {
+			// matrix/hardened: an old observation cannot rebind a restarted pane.
+			if !i.isRuntimeProducer() && i.tmuxSession != nil && i.tmuxSession.Exists() {
 				_ = i.tmuxSession.SetEnvironment("CODEX_SESSION_ID", threadID)
 			}
 		}
@@ -4384,7 +4439,8 @@ func (i *Instance) updateCodexSessionForPass(excludeIDs map[string]bool, forcePr
 
 		// Sync back to tmux environment for future restarts
 		// Skip redundant writes when env already matches: each write is a tmux subprocess.
-		if i.tmuxSession != nil && i.tmuxSession.Exists() && (changed || envSessionID == "") {
+		// matrix/hardened: an old observation cannot rebind a restarted pane.
+		if !i.isRuntimeProducer() && i.tmuxSession != nil && i.tmuxSession.Exists() && (changed || envSessionID == "") {
 			_ = i.tmuxSession.SetEnvironment("CODEX_SESSION_ID", i.CodexSessionID)
 		}
 	}
@@ -4779,6 +4835,18 @@ func isLiteralToolInvocation(baseCommand, literalName string) bool {
 // execution location still match this session — see generic_session_scope.go.
 // Whitespace-only values are treated as empty (not resumable).
 func (i *Instance) GetGenericSessionID() string {
+	// matrix/hardened: monitor consumers use complete verdicts without local probes.
+	if row, consumer := i.runtimeView(); row != nil {
+		if i.genericSessionScopeMismatch() != "" {
+			return ""
+		}
+		return strings.TrimSpace(row.GenericSessionID)
+	} else if consumer {
+		if i.genericSessionScopeMismatch() != "" {
+			return ""
+		}
+		return strings.TrimSpace(i.GenericSessionID)
+	}
 	// The scope check comes FIRST, before the live pane is consulted at all.
 	//
 	// A pane outlives the settings it was launched under: change the tool, the
@@ -5198,6 +5266,8 @@ func (i *Instance) ensureClaudeSessionIDFromDiskForRestart() {
 // matrix/hardened: the shared body also accepts an admission acquired before
 // RestartFresh teardown; fork dispatch retains the same guarded branches.
 func (i *Instance) Start() error {
+	// matrix/hardened: a pre-mutation monitor probe cannot overwrite this action.
+	i.InvalidateRuntimeSnapshot()
 	return i.startWithClaudeAdmission(nil, false)
 }
 
@@ -5599,6 +5669,8 @@ func (i *Instance) startWithClaudeAdmission(admission *claudeLaunchAdmission, lo
 // `launch -m "..."` racing with a poller-triggered Start() must not
 // produce two parallel tmux sessions.
 func (i *Instance) StartWithMessage(message string) (returnErr error) {
+	// matrix/hardened: a pre-mutation monitor probe cannot overwrite this action.
+	i.InvalidateRuntimeSnapshot()
 	if err := i.ValidateAccount(); err != nil {
 		return err
 	}
@@ -6451,6 +6523,10 @@ func (i *Instance) probeTmuxExists() (exists, current bool) {
 }
 
 func (i *Instance) updateStatus(pass *StatusUpdatePass, syncMetadata bool) error {
+	// matrix/hardened: monitor consumers use complete verdicts without local probes.
+	if _, consumer := i.runtimeView(); consumer {
+		return nil
+	}
 	// #1846: flush any unpersisted last-activity evidence once the lock is
 	// released (declared before Lock so it runs after the Unlock defer).
 	// Cheap no-op unless the cold-load fold below (or an earlier
@@ -6601,7 +6677,10 @@ func (i *Instance) updateStatus(pass *StatusUpdatePass, syncMetadata bool) error
 			// Reset stale acknowledged flag from ReconnectSessionLazy.
 			// Without this, sessions loaded from SQLite with previousStatus="idle"
 			// would report idle even when the hook file says waiting/running.
-			if i.tmuxSession != nil && (hs.Status == "running" || hs.Status == "waiting") {
+			// matrix/hardened: a producer retains an explicit acknowledgment of
+			// this same hook; only evidence newer than the ack resets it.
+			if i.tmuxSession != nil && (hs.Status == "running" || hs.Status == "waiting") &&
+				(!i.isRuntimeProducer() || i.runtimeHookResetsAcknowledgment(hs, time.Time{})) {
 				i.tmuxSession.ResetAcknowledged()
 			}
 		}
@@ -6657,6 +6736,16 @@ func (i *Instance) updateStatus(pass *StatusUpdatePass, syncMetadata bool) error
 			}
 		case "waiting":
 			if IsCodexCompatible(i.Tool) {
+				// matrix/hardened: a retained producer must not undo a user ack
+				// every time it re-reads the same completed Codex hook.
+				if i.isRuntimeProducer() {
+					if i.tmuxSession != nil && i.tmuxSession.IsAcknowledged() {
+						i.Status = StatusIdle
+					} else {
+						i.Status = StatusWaiting
+					}
+					break
+				}
 				// Codex completion should surface as attention-needed.
 				// Keep this as waiting and let tmux settle to idle if the user
 				// has acknowledged and no new activity appears.
@@ -7222,11 +7311,31 @@ func (i *Instance) UpdateHookStatus(status *HookStatus) {
 	// activity that the user must respond to — unlike Stop (task complete) which
 	// can stay grey if already seen.
 	// Handles both PermissionRequest events and Notification/permission_prompt.
-	if isNewEvent && status.Status == "waiting" && i.tmuxSession != nil {
+	if !i.isRuntimeProducer() && isNewEvent && status.Status == "waiting" && i.tmuxSession != nil {
 		if status.Event == "PermissionRequest" || status.Event == "Notification" {
 			i.tmuxSession.ResetAcknowledged()
 		}
 	}
+	// matrix/hardened: reset only accepted producer evidence, after candidate
+	// arbitration. A rejected foreign hook cannot clear a shared acknowledgment.
+	defer func() {
+		if !i.isRuntimeProducer() || rejected {
+			return
+		}
+		// matrix/hardened: hook files store whole seconds. Distinct accepted
+		// Codex generations prove a new turn even inside the ack's same second;
+		// empty generations remain the cold baseline and do not reset its ack.
+		newCodexTurn := IsCodexCompatible(i.Tool) &&
+			((prevStartedGen != "" && status.CodexStartedGeneration != "" && prevStartedGen != status.CodexStartedGeneration) ||
+				(prevCompletedGen != "" && status.CodexCompletedGeneration != "" && prevCompletedGen != status.CodexCompletedGeneration))
+		if isNewEvent || newCodexTurn {
+			i.lastIdleCheck = time.Time{}
+		}
+		if (isNewEvent || newCodexTurn) && status.Status == "waiting" && i.tmuxSession != nil &&
+			(newCodexTurn || i.runtimeHookResetsAcknowledgment(status, prevHookLastUpdate)) {
+			i.tmuxSession.ResetAcknowledged()
+		}
+	}()
 
 	// A live lifecycle hook proves the agent became interactive. The hook fast
 	// path in UpdateStatus skips tmux.GetStatus, which is otherwise the only
@@ -7457,7 +7566,9 @@ func (i *Instance) bindCodexSessionFromHook(sessionID, hookEvent string) {
 	i.CodexDetectedAt = time.Now()
 	i.hookSessionID = sessionID
 
-	if i.tmuxSession != nil && i.tmuxSession.Exists() {
+	// matrix/hardened: the collector writes only the guarded registry binding;
+	// an old probe must not rebind the environment of a newly restarted pane.
+	if !i.isRuntimeProducer() && i.tmuxSession != nil && i.tmuxSession.Exists() {
 		_ = i.tmuxSession.SetEnvironment("CODEX_SESSION_ID", sessionID)
 	}
 
@@ -7470,8 +7581,9 @@ func (i *Instance) bindCodexSessionFromHook(sessionID, hookEvent string) {
 	// producing a runaway loop of fresh "rebind" decisions on every
 	// poll. WriteCodexSessionBinding rewrites only the typed schema
 	// fields via json_set, leaving every other tool_data key untouched.
-	if db := statedb.GetGlobal(); db != nil {
-		if err := db.WriteCodexSessionBinding(i.ID, sessionID, i.CodexDetectedAt); err != nil {
+	// matrix/hardened: targeted writes stay in the instance owning profile.
+	if db := i.stateDB(); db != nil {
+		if err := db.WriteCodexSessionBinding(i.ID, sessionID, i.CodexDetectedAt, i.producerGuardArgs()...); err != nil {
 			sessionLog.Warn("codex_session_rebind_persist_failed",
 				slog.String("instance_id", i.ID),
 				slog.String("new_id", sessionID),
@@ -7496,7 +7608,9 @@ func (i *Instance) bindGeminiSessionFromHook(sessionID, hookEvent string) {
 	i.GeminiDetectedAt = time.Now()
 	i.hookSessionID = sessionID
 
-	if i.tmuxSession != nil && i.tmuxSession.Exists() {
+	// matrix/hardened: the collector writes only the guarded registry binding;
+	// an old probe must not rebind the environment of a newly restarted pane.
+	if !i.isRuntimeProducer() && i.tmuxSession != nil && i.tmuxSession.Exists() {
 		_ = i.tmuxSession.SetEnvironment("GEMINI_SESSION_ID", sessionID)
 	}
 
@@ -7508,8 +7622,9 @@ func (i *Instance) bindGeminiSessionFromHook(sessionID, hookEvent string) {
 	// row and clobbering this instance's in-memory state. The targeted
 	// json_set UPDATE atomically rewrites only $.gemini_session_id and
 	// $.gemini_detected_at, preserving the rest of tool_data.
-	if db := statedb.GetGlobal(); db != nil {
-		if err := db.WriteGeminiSessionBinding(i.ID, sessionID, i.GeminiDetectedAt); err != nil {
+	// matrix/hardened: targeted writes stay in the instance owning profile.
+	if db := i.stateDB(); db != nil {
+		if err := db.WriteGeminiSessionBinding(i.ID, sessionID, i.GeminiDetectedAt, i.producerGuardArgs()...); err != nil {
 			sessionLog.Warn("gemini_session_rebind_persist_failed",
 				slog.String("instance_id", i.ID),
 				slog.String("new_id", sessionID),
@@ -7535,6 +7650,12 @@ type StatusEvidence struct {
 
 // StatusEvidence returns the current evidence snapshot (read lock).
 func (i *Instance) StatusEvidence() StatusEvidence {
+	// matrix/hardened: monitor consumers use complete verdicts without local probes.
+	if row, consumer := i.runtimeView(); row != nil {
+		return row.Evidence
+	} else if consumer {
+		return StatusEvidence{}
+	}
 	i.mu.RLock()
 	defer i.mu.RUnlock()
 	return StatusEvidence{
@@ -7547,6 +7668,15 @@ func (i *Instance) StatusEvidence() StatusEvidence {
 }
 
 func (i *Instance) GetHookStatus() (string, bool) {
+	// matrix/hardened: monitor consumers use complete verdicts without local probes.
+	if row, consumer := i.runtimeView(); row != nil {
+		if row.Hook == nil {
+			return "", false
+		}
+		return row.Hook.Status, row.HookFresh
+	} else if consumer {
+		return "", false
+	}
 	i.mu.RLock()
 	defer i.mu.RUnlock()
 
@@ -7570,6 +7700,15 @@ func (i *Instance) GetHookStatus() (string, bool) {
 // last-activity age against CreatedAt instead of the moment it actually
 // went idle/waiting.
 func (i *Instance) LastHookActivityTime() (time.Time, bool) {
+	// matrix/hardened: monitor consumers use complete verdicts without local probes.
+	if row, consumer := i.runtimeView(); row != nil {
+		if row.Hook == nil {
+			return time.Time{}, false
+		}
+		return row.Hook.UpdatedAt, row.HookKnown
+	} else if consumer {
+		return time.Time{}, false
+	}
 	i.mu.RLock()
 	defer i.mu.RUnlock()
 
@@ -7582,6 +7721,10 @@ func (i *Instance) LastHookActivityTime() (time.Time, bool) {
 // GetAutoNameDescription returns the last captured Claude task description for
 // an AutoName session (empty if none captured yet). Thread-safe.
 func (i *Instance) GetAutoNameDescription() string {
+	// matrix/hardened: monitor consumers use complete verdicts without local probes.
+	if row, _ := i.runtimeView(); row != nil {
+		return row.AutoNameDescription
+	}
 	i.mu.RLock()
 	defer i.mu.RUnlock()
 	return i.autoNameDescription
@@ -7807,7 +7950,8 @@ func (i *Instance) syncGeminiSessionFromDisk() {
 	i.GeminiDetectedAt = time.Now()
 
 	// Sync back to tmux environment for future restarts
-	if i.tmuxSession != nil && i.tmuxSession.Exists() {
+	// matrix/hardened: an old observation cannot rebind a restarted pane.
+	if !i.isRuntimeProducer() && i.tmuxSession != nil && i.tmuxSession.Exists() {
 		_ = i.tmuxSession.SetEnvironment("GEMINI_SESSION_ID", i.GeminiSessionID)
 	}
 }
@@ -8178,12 +8322,13 @@ func (i *Instance) clearSessionBindingForFreshStart() {
 		i.GenericSessionCommand = ""
 		i.GenericSessionLocation = ""
 		i.genericSessionIDCleared = true
-		if db := statedb.GetGlobal(); db != nil {
+		// matrix/hardened: targeted writes stay in the instance owning profile.
+		if db := i.stateDB(); db != nil {
 			// The flag above means a later save re-applies this clear, so the
 			// outcome is eventually right either way — but a write that keeps
 			// failing on a data path would otherwise never be visible, and
 			// this one deletes a binding the operator asked to be rid of.
-			err := db.WriteGenericSessionBinding(i.ID, "", "", "", "", time.Time{})
+			err := db.WriteGenericSessionBinding(i.ID, "", "", "", "", time.Time{}, i.producerGuardArgs()...)
 			i.setGenericSessionPersistError(err)
 			if err != nil {
 				sessionLog.Warn("generic_session_clear_persist_failed",
@@ -9899,6 +10044,8 @@ func (i *Instance) RetireServiceUnit(own tmux.ServiceUnitOwnership) tmux.Service
 
 // Kill terminates the tmux session and cleans up sandbox container if present.
 func (i *Instance) Kill() error {
+	// matrix/hardened: a pre-mutation monitor probe cannot overwrite this action.
+	i.InvalidateRuntimeSnapshot()
 	return i.killInternal(false)
 }
 
@@ -9910,6 +10057,8 @@ func (i *Instance) Kill() error {
 // variant — see issue #59 (v1.7.68). The TUI and web callers can
 // keep using Kill for the non-blocking path.
 func (i *Instance) KillAndWait() error {
+	// matrix/hardened: a pre-mutation monitor probe cannot overwrite this action.
+	i.InvalidateRuntimeSnapshot()
 	return i.killInternal(true)
 }
 
@@ -10068,6 +10217,8 @@ func (i *Instance) Restart() error {
 // The values apply to the replacement process only and are not persisted in
 // the Instance or tmux session environment for future restarts.
 func (i *Instance) RestartWithEnv(env map[string]string) error {
+	// matrix/hardened: a pre-mutation monitor probe cannot overwrite this action.
+	i.InvalidateRuntimeSnapshot()
 	for key := range env {
 		if !IsValidEnvKey(key) {
 			return fmt.Errorf("invalid environment variable name %q", key)
@@ -10783,6 +10934,8 @@ func (i *Instance) restart(env map[string]string) (returnErr error) {
 // This recreates the tmux session and clears the stored tool session binding first,
 // so the next start gets a brand-new tool session ID.
 func (i *Instance) RestartFresh() error {
+	// matrix/hardened: a pre-mutation monitor probe cannot overwrite this action.
+	i.InvalidateRuntimeSnapshot()
 	// matrix/hardened: acquire once, admit once, then clear/kill/start under the
 	// same lock. A denial leaves the current tool binding and pane untouched.
 	if err := i.ValidateAccount(); err != nil {
@@ -11245,6 +11398,18 @@ func SupportsNativeFork(tool string) bool {
 // CanFork returns true if this session currently has the source state needed
 // by its native fork implementation.
 func (i *Instance) CanFork() bool {
+	// matrix/hardened: dashboard capability rendering uses the shared verdict;
+	// explicit fork execution retains each tool's current native preflight.
+	if row, consumer := i.runtimeView(); row != nil {
+		return row.CanForkKnown && row.CanFork
+	} else if consumer {
+		return false
+	}
+	return i.canForkCurrentSource()
+}
+
+// matrix/hardened: explicit fork execution validates the current native source.
+func (i *Instance) canForkCurrentSource() bool {
 	// Gemini CLI doesn't support forking
 	if i.Tool == "gemini" {
 		return false
@@ -11364,7 +11529,7 @@ func (i *Instance) buildClaudeForkCommandForTarget(target *Instance, opts *Claud
 		return "", fmt.Errorf("cannot build fork command: target instance is nil")
 	}
 
-	if !i.CanFork() {
+	if !i.canForkCurrentSource() {
 		return "", fmt.Errorf("cannot fork: no active Claude session")
 	}
 
@@ -11821,6 +11986,12 @@ func (i *Instance) GetTmuxSession() *tmux.Session {
 // status --json, web, transition events) the auth-401 substate for a dead
 // session without any of them changing.
 func (i *Instance) Substate() Substate {
+	// matrix/hardened: monitor consumers use complete verdicts without local probes.
+	if row, consumer := i.runtimeView(); row != nil {
+		return row.Substate
+	} else if consumer {
+		return SubstateNone
+	}
 	if held, _ := i.IsAuthHeld(); held {
 		return SubstateAuth401
 	}
@@ -11871,6 +12042,12 @@ func (i *Instance) Substate() Substate {
 // Call after Substate/CachedSubstate; it reads the cached value and never
 // captures the pane.
 func (i *Instance) SubstateDetail() string {
+	// matrix/hardened: monitor consumers use complete verdicts without local probes.
+	if row, consumer := i.runtimeView(); row != nil {
+		return row.Detail
+	} else if consumer {
+		return ""
+	}
 	// matrix/hardened: why a turn-interrupted turn stopped.
 	if i.CachedSubstate() == SubstateTurnInterrupted {
 		if t, ok := i.matrixTurnInterruptCached(); ok {
@@ -11910,6 +12087,12 @@ func (i *Instance) getTerminatedPaneSubstate() Substate {
 // Like Substate, an auth hold wins — read from the in-memory mirror so the
 // render path stays filesystem-free.
 func (i *Instance) CachedSubstate() Substate {
+	// matrix/hardened: monitor consumers use complete verdicts without local probes.
+	if row, consumer := i.runtimeView(); row != nil {
+		return row.Substate
+	} else if consumer {
+		return SubstateNone
+	}
 	if i.AuthHeldCached() {
 		return SubstateAuth401
 	}
@@ -12086,6 +12269,12 @@ func (i *Instance) SetOMPOptions(opts *OMPOptions) error {
 // GetSessionIDFromTmux reads Claude session ID from tmux environment
 // This is the primary method for sessions started with the capture-resume pattern
 func (i *Instance) GetSessionIDFromTmux() string {
+	// matrix/hardened: monitor consumers use complete verdicts without local probes.
+	if row, consumer := i.runtimeView(); row != nil {
+		return row.ClaudeSessionID
+	} else if consumer {
+		return i.ClaudeSessionID
+	}
 	if i.tmuxSession == nil {
 		return ""
 	}
@@ -12424,7 +12613,9 @@ func (i *Instance) bindClaudeSessionFromHook(sessionID, hookSource, hookEvent, a
 	i.ClaudeDetectedAt = time.Now()
 	i.hookSessionID = sessionID
 
-	if i.tmuxSession != nil && i.tmuxSession.Exists() {
+	// matrix/hardened: the collector writes only the guarded registry binding;
+	// an old probe must not rebind the environment of a newly restarted pane.
+	if !i.isRuntimeProducer() && i.tmuxSession != nil && i.tmuxSession.Exists() {
 		_ = i.tmuxSession.SetEnvironment("CLAUDE_SESSION_ID", sessionID)
 	}
 
@@ -12449,8 +12640,9 @@ func (i *Instance) bindClaudeSessionFromHook(sessionID, hookSource, hookEvent, a
 	// synchronously here, not because clobbering is impossible — a
 	// later peer reload that observes the new ID will short-circuit at
 	// the `sessionID == i.ClaudeSessionID` check in UpdateHookStatus.
-	if db := statedb.GetGlobal(); db != nil {
-		if err := db.WriteClaudeSessionBinding(i.ID, sessionID, i.ClaudeDetectedAt); err != nil {
+	// matrix/hardened: targeted writes stay in the instance owning profile.
+	if db := i.stateDB(); db != nil {
+		if err := db.WriteClaudeSessionBinding(i.ID, sessionID, i.ClaudeDetectedAt, i.producerGuardArgs()...); err != nil {
 			sessionLog.Warn("claude_session_rebind_persist_failed",
 				slog.String("instance_id", i.ID),
 				slog.String("new_id", sessionID),
@@ -12472,11 +12664,12 @@ func (i *Instance) confirmClaudeSessionLink(sessionID, hookSource string) {
 	if sessionID == "" || i.linkedClaudeSessionID == sessionID {
 		return
 	}
-	db := statedb.GetGlobal()
+	// matrix/hardened: targeted writes stay in the instance owning profile.
+	db := i.stateDB()
 	if db == nil {
 		return
 	}
-	if err := db.UpsertSessionLink(i.ID, "claude", sessionID, "", true); err != nil {
+	if err := db.UpsertSessionLink(i.ID, "claude", sessionID, "", true, i.producerGuardArgs()...); err != nil {
 		sessionLog.Warn("claude_session_link_confirm_failed",
 			slog.String("instance_id", i.ID),
 			slog.String("session_id", sessionID),
@@ -12495,11 +12688,12 @@ func (i *Instance) confirmClaudeSessionLink(sessionID, hookSource string) {
 // WriteClaudeSessionBinding and by confirmClaudeSessionLink; this is the
 // matching retraction.
 func (i *Instance) retractClaudeCandidateLink(candidate string) {
-	db := statedb.GetGlobal()
+	// matrix/hardened: targeted writes stay in the instance owning profile.
+	db := i.stateDB()
 	if db == nil || candidate == "" {
 		return
 	}
-	if _, err := db.RetractSessionLink(i.ID, "claude", candidate); err != nil {
+	if _, err := db.RetractSessionLink(i.ID, "claude", candidate, i.producerGuardArgs()...); err != nil {
 		sessionLog.Warn("claude_session_link_retract_failed",
 			slog.String("instance_id", i.ID),
 			slog.String("candidate", candidate),

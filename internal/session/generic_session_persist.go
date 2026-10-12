@@ -120,7 +120,7 @@ func PersistGenericSessionBinding(db *statedb.StateDB, inst *Instance) error {
 	return db.WriteGenericSessionBinding(
 		inst.ID, inst.GenericSessionID,
 		inst.GenericSessionTool, inst.GenericSessionCommand, inst.GenericSessionLocation,
-		inst.GenericDetectedAt,
+		inst.GenericDetectedAt, inst.producerGuardArgs()...,
 	)
 }
 
@@ -151,11 +151,12 @@ func (i *Instance) persistGenericSessionIDIfChanged(sessionID string) {
 	if i.GenericDetectedAt.IsZero() {
 		i.GenericDetectedAt = time.Now()
 	}
-	db := statedb.GetGlobal()
+	// matrix/hardened: targeted writes stay in the instance owning profile.
+	db := i.stateDB()
 	if db == nil {
 		return
 	}
-	err := db.WriteGenericSessionBinding(i.ID, sessionID, scope.Tool, scope.Command, scope.Location, i.GenericDetectedAt)
+	err := db.WriteGenericSessionBinding(i.ID, sessionID, scope.Tool, scope.Command, scope.Location, i.GenericDetectedAt, i.producerGuardArgs()...)
 	i.setGenericSessionPersistError(err)
 	if err != nil {
 		sessionLog.Warn("generic_session_bind_persist_failed",
@@ -229,8 +230,9 @@ func (i *Instance) invalidateGenericSessionBindingOnScopeChange() func() {
 	i.GenericSessionLocation = ""
 	i.genericSessionIDCleared = true
 
-	if db := statedb.GetGlobal(); db != nil {
-		err := db.WriteGenericSessionBinding(i.ID, "", "", "", "", time.Time{})
+	// matrix/hardened: targeted writes stay in the instance owning profile.
+	if db := i.stateDB(); db != nil {
+		err := db.WriteGenericSessionBinding(i.ID, "", "", "", "", time.Time{}, i.producerGuardArgs()...)
 		i.setGenericSessionPersistError(err)
 		if err != nil {
 			sessionLog.Warn("generic_session_invalidate_persist_failed",

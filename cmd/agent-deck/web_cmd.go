@@ -33,6 +33,8 @@ func buildWebServer(profile string, args []string, menuData web.MenuDataLoader, 
 }
 
 type webCommandOptions struct {
+	// matrix/hardened: injected by the production entry point; tests retain legacy nil.
+	runtimeSource    session.RuntimeObservationSource
 	listenAddr       string
 	allowedHosts     stringValues
 	readOnly         bool
@@ -154,20 +156,21 @@ func buildWebServerFromOptions(profile string, options webCommandOptions, menuDa
 
 	confirmLinkOpen := session.GetWebConfirmLinkOpen()
 	server := web.NewServer(web.Config{
-		ListenAddr:          options.listenAddr,
-		AllowedHosts:        append(session.GetWebAllowedHosts(), options.allowedHosts...),
-		Profile:             effectiveProfile,
-		ReadOnly:            options.readOnly,
-		WebMutations:        resolveMutationsEnabled(options.readOnly),
-		Token:               resolvedToken,
-		InsecureBind:        options.insecureBind,
-		TrustedDomains:      session.GetWebTrustedDomains(),
-		ConfirmLinkOpen:     &confirmLinkOpen,
-		MenuData:            menuData,
-		PushVAPIDPublicKey:  resolvedPushPublic,
-		PushVAPIDPrivateKey: resolvedPushPrivate,
-		PushVAPIDSubject:    resolvedPushSubject,
-		PushTestInterval:    options.pushTestEvery,
+		RuntimeObservationSource: options.runtimeSource,
+		ListenAddr:               options.listenAddr,
+		AllowedHosts:             append(session.GetWebAllowedHosts(), options.allowedHosts...),
+		Profile:                  effectiveProfile,
+		ReadOnly:                 options.readOnly,
+		WebMutations:             resolveMutationsEnabled(options.readOnly),
+		Token:                    resolvedToken,
+		InsecureBind:             options.insecureBind,
+		TrustedDomains:           session.GetWebTrustedDomains(),
+		ConfirmLinkOpen:          &confirmLinkOpen,
+		MenuData:                 menuData,
+		PushVAPIDPublicKey:       resolvedPushPublic,
+		PushVAPIDPrivateKey:      resolvedPushPrivate,
+		PushVAPIDSubject:         resolvedPushSubject,
+		PushTestInterval:         options.pushTestEvery,
 	})
 
 	if mutator != nil {

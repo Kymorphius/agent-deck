@@ -5,7 +5,6 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/asheshgoplani/agent-deck/internal/statedb"
 	"github.com/asheshgoplani/agent-deck/internal/tmux"
 )
 
@@ -271,14 +270,13 @@ func (i *Instance) ApplyPersistedHookLag(raw json.RawMessage) {
 // sampler's evidence.
 func (i *Instance) persistHookLag() {
 	i.mu.RLock()
-	rec, prev, db := i.hookLag, i.hookLagPersisted, i.hookLagDB
+	rec, prev := i.hookLag, i.hookLagPersisted
 	i.mu.RUnlock()
 	if rec.HookTS == 0 || rec.evidenceKey() == prev.evidenceKey() {
 		return
 	}
-	if db == nil {
-		db = statedb.GetGlobal()
-	}
+	// matrix/hardened: targeted writes stay in the instance owning profile.
+	db := i.stateDB()
 	if db == nil {
 		return
 	}

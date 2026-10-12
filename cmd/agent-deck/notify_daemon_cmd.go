@@ -71,6 +71,14 @@ func handleNotifyDaemon(args []string) {
 	// (upstream healClaudeHooksAtDaemonStart is deleted: it was its only caller.)
 
 	daemon := session.NewTransitionDaemon()
+	// matrix/hardened: ordered full observations replace every local fleet probe.
+	runtimeSource, err := newRuntimeMonitor()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: runtime monitor setup: %v\n", err)
+		os.Exit(1)
+	}
+	defer runtimeSource.Close()
+	daemon.SetObservationSource(runtimeSource)
 	if *once {
 		daemon.SyncOnce(context.Background())
 		// Ensure async dispatches started during SyncOnce land on disk

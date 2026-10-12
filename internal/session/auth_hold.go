@@ -54,6 +54,11 @@ import (
 type AuthHoldRecord struct {
 	InstanceID string `json:"instance_id"`
 	Tool       string `json:"tool,omitempty"`
+	// matrix/hardened: bound records identify their owning registry and launch;
+	// probe START uses nanoseconds so late same-second observations are ordered.
+	RuntimeProfile  string `json:"runtime_profile,omitempty"`
+	RuntimeIdentity string `json:"runtime_identity,omitempty"`
+	ObservedAtNS    int64  `json:"observed_at_ns,omitempty"`
 	// Reason distinguishes a session still showing the banner from one whose
 	// process already exited on it. Stable strings — the TUI/CLI switch on them.
 	Reason string `json:"reason"` // auth_banner_live | auth_death
@@ -119,7 +124,12 @@ func writeAuthHoldRecord(rec AuthHoldRecord) error {
 	if rec.Timestamp == 0 {
 		rec.Timestamp = time.Now().Unix()
 	}
-	path := authHoldRecordPath(rec.InstanceID)
+	path := authHoldRecordPathForProfile(rec.RuntimeProfile, rec.InstanceID)
+	return writeAuthHoldRecordAt(path, rec)
+}
+
+// matrix/hardened: callers choose an owned path before entering their DB guard.
+func writeAuthHoldRecordAt(path string, rec AuthHoldRecord) error {
 	// 0o700: the directory listing alone leaks which sessions are failing to
 	// authenticate, and authHoldDir() falls back to a shared /tmp when the data
 	// dir cannot be resolved.
@@ -131,8 +141,12 @@ func writeAuthHoldRecord(rec AuthHoldRecord) error {
 	// from the 0o755 era would keep the world-listable directory. Narrow it on the
 	// next write. Lstat-gated so a symlink planted at the fallback path is never
 	// chmod'd through, and best-effort: a dir we do not own must not fail the write.
-	if fi, err := os.Lstat(dir); err == nil && fi.IsDir() && fi.Mode().Perm()&0o077 != 0 {
-		_ = os.Chmod(dir, 0o700)
+	// matrix/hardened: a scoped write also narrows legacy parent directories;
+	// otherwise a 0755 auth-hold root would keep exposing old per-ID entries.
+	for _, privateDir := range []string{authHoldDir(), filepath.Join(authHoldDir(), "profiles"), dir} {
+		if fi, err := os.Lstat(privateDir); err == nil && fi.IsDir() && fi.Mode().Perm()&0o077 != 0 {
+			_ = os.Chmod(privateDir, 0o700)
+		}
 	}
 	data, err := json.MarshalIndent(rec, "", "  ")
 	if err != nil {
@@ -151,7 +165,11 @@ func writeAuthHoldRecord(rec AuthHoldRecord) error {
 // readAuthHoldRecord loads the sidecar for an instance, or (nil, nil) when none
 // exists.
 func readAuthHoldRecord(instanceID string) (*AuthHoldRecord, error) {
-	data, err := os.ReadFile(authHoldRecordPath(instanceID))
+	return readAuthHoldRecordAt(authHoldRecordPath(instanceID))
+}
+
+func readAuthHoldRecordAt(path string) (*AuthHoldRecord, error) {
+	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -173,8 +191,28 @@ func clearAuthHoldRecord(instanceID string) {
 // Reads the durable sidecar, so it works in a fresh CLI process that has no
 // in-memory history.
 func (i *Instance) AuthHold() *AuthHoldRecord {
-	rec, err := readAuthHoldRecord(i.ID)
+	// matrix/hardened: replica reads must not reopen credential sidecars.
+	if row, consumer := i.runtimeView(); row != nil {
+		if row.AuthHold == nil {
+			return nil
+		}
+		copy := *row.AuthHold
+		return &copy
+	} else if consumer {
+		return nil
+	}
+	i.mu.RLock()
+	scope := i.authHoldScopeLocked()
+	i.mu.RUnlock()
+	rec, _, err := scope.readCurrent()
 	if err != nil {
+		return nil
+	}
+	// matrix/hardened: a stop/rebind concurrent with the filesystem read wins.
+	i.mu.RLock()
+	current := i.authHoldScopeLocked()
+	i.mu.RUnlock()
+	if !current.accepts(rec) {
 		return nil
 	}
 	return rec
@@ -191,6 +229,12 @@ func (i *Instance) AuthHold() *AuthHoldRecord {
 // (Substate, the CLI restart gate, the boot sweep) that run concurrently with
 // the TUI's background status poller writing Status under i.mu.
 func (i *Instance) IsAuthHeld() (bool, string) {
+	// matrix/hardened: the producer already reconciled auth with the full status.
+	if row, consumer := i.runtimeView(); row != nil {
+		return row.AuthHeld, row.AuthRemedy
+	} else if consumer {
+		return false, ""
+	}
 	if isHealthyForFreshnessGuard(i.GetStatusThreadSafe()) {
 		return false, ""
 	}
@@ -221,7 +265,13 @@ func (r *AuthHoldRecord) Remedy() string {
 // ObservedAt returns the record's observation time, or the zero time when the
 // record carries no usable timestamp (a hand-edited or truncated sidecar).
 func (r *AuthHoldRecord) ObservedAt() time.Time {
-	if r == nil || r.Timestamp <= 0 {
+	if r == nil {
+		return time.Time{}
+	}
+	if r.ObservedAtNS > 0 {
+		return time.Unix(0, r.ObservedAtNS)
+	}
+	if r.Timestamp <= 0 {
 		return time.Time{}
 	}
 	return time.Unix(r.Timestamp, 0)
@@ -298,28 +348,33 @@ func (r *AuthHoldRecord) FormatForDisplay() string {
 // first sample is the cleanest evidence, and BootAttempts must survive), because
 // the death path reads Timestamp as "last seen" to decide whether this record can
 // explain a death happening now.
-func (i *Instance) noteAuthHoldLocked(reason, evidence string) {
+func (i *Instance) noteAuthHoldLocked(reason, evidence string) bool {
 	now := time.Now()
 	i.authFailureSeenAt = now
 
-	existing, err := readAuthHoldRecord(i.ID)
+	// matrix/hardened: capture the launch/profile/fence without re-locking i.mu.
+	scope := i.authHoldScopeLocked()
+	existing, _, err := scope.readCurrent()
 	if err != nil {
 		existing = nil
 	}
 	if existing != nil && existing.Reason == reason {
 		if observed := existing.ObservedAt(); !observed.IsZero() && now.Sub(observed) < authHoldObservationRefresh {
-			return
+			return true
 		}
 		existing.Timestamp = now.Unix()
 		// The path is derived from InstanceID: pin it to this instance so a
 		// record with a missing/foreign id can never be re-stamped elsewhere.
 		existing.InstanceID = i.ID
-		if err := writeAuthHoldRecord(*existing); err != nil {
+		if err := scope.writeObserved(*existing); err != nil {
+			if authHoldObservationStale(err) {
+				return false
+			}
 			sessionLog.Warn("auth_hold_restamp_failed",
 				slog.String("instance_id", i.ID),
 				slog.String("error", err.Error()))
 		}
-		return
+		return true
 	}
 
 	rec := AuthHoldRecord{
@@ -336,17 +391,21 @@ func (i *Instance) noteAuthHoldLocked(reason, evidence string) {
 		// session whose automatic boot already died on the same credential.
 		rec.BootAttempts = existing.BootAttempts
 	}
-	if err := writeAuthHoldRecord(rec); err != nil {
+	if err := scope.writeObserved(rec); err != nil {
+		if authHoldObservationStale(err) {
+			return false
+		}
 		sessionLog.Warn("auth_hold_write_failed",
 			slog.String("instance_id", i.ID),
 			slog.String("error", err.Error()))
-		return
+		return true // the observed banner still holds automation if disk is unavailable
 	}
 	sessionLog.Warn("auth_hold_armed",
 		slog.String("instance_id", i.ID),
 		slog.String("title", i.Title),
 		slog.String("reason", reason),
 		slog.String("remedy", "run /login or repair credentials, then restart manually"))
+	return true
 }
 
 // clearAuthHoldLocked releases the hold. Called from the status path the moment
@@ -361,14 +420,16 @@ func (i *Instance) noteAuthHoldLocked(reason, evidence string) {
 // session a restart would have fixed. One unlink of a usually-absent path per
 // session per process is the whole cost; every subsequent healthy sample is free.
 func (i *Instance) clearAuthHoldLocked() {
-	if i.authHoldClearedOnce && !i.authHeld && i.authFailureSeenAt.IsZero() {
+	if i.Status != StatusStopped && i.authHoldClearedOnce && !i.authHeld && i.authFailureSeenAt.IsZero() {
 		return
 	}
 	i.authHoldClearedOnce = true
 	i.authFailureSeenAt = time.Time{}
 	i.authHeld = false
 	i.authHoldCheckedAt = time.Time{}
-	clearAuthHoldRecord(i.ID)
+	// matrix/hardened: explicit stop owns deletion; healthy observations must
+	// keep a newer failure and are fenced by the registry's writer generation.
+	_ = i.authHoldScopeLocked().clearObserved(i.Status == StatusStopped)
 }
 
 // authHoldRecheckInterval throttles the sidecar read the death path does while
@@ -405,10 +466,12 @@ func (i *Instance) refreshAuthHoldOnDeathLocked() {
 	}
 	i.authHoldCheckedAt = now
 
-	if rec := i.AuthHold(); rec != nil {
+	if rec := i.readAuthHoldLocked(); rec != nil {
 		if rec.canExplainDeathAt(now) {
 			if rec.Reason != AuthHoldReasonDeath {
-				i.noteAuthHoldLocked(AuthHoldReasonDeath, rec.Evidence)
+				if !i.noteAuthHoldLocked(AuthHoldReasonDeath, rec.Evidence) {
+					return
+				}
 			}
 			i.authHeld = true
 			return
@@ -421,7 +484,7 @@ func (i *Instance) refreshAuthHoldOnDeathLocked() {
 			slog.String("title", i.Title),
 			slog.String("reason", rec.Reason),
 			slog.Time("observed_at", rec.ObservedAt()))
-		clearAuthHoldRecord(i.ID)
+		_ = i.authHoldScopeLocked().clearObserved(false)
 		// Fall through rather than returning: i.authFailureSeenAt and the pane's
 		// retained sample are independent, in-process evidence about THIS death,
 		// and authDeathObservedLocked applies the same window to them.
@@ -455,8 +518,7 @@ func (i *Instance) reconcileAuthHoldLocked(tmuxStatus string) {
 		if !isAuth {
 			return
 		}
-		i.noteAuthHoldLocked(AuthHoldReasonLive, evidence)
-		i.authHeld = true
+		i.authHeld = i.noteAuthHoldLocked(AuthHoldReasonLive, evidence)
 	case tmuxStatus == "inactive":
 		i.refreshAuthHoldOnDeathLocked()
 	case isHealthyForFreshnessGuard(i.Status):
@@ -478,8 +540,17 @@ func (i *Instance) releaseAuthHoldIfHealthyLocked() {
 // status sweep keeps the flag fresh. Use IsAuthHeld for a decision that must be
 // correct across processes (CLI gates).
 func (i *Instance) AuthHeldCached() bool {
+	// matrix/hardened: render paths use the shared complete auth verdict.
+	if row, consumer := i.runtimeView(); row != nil {
+		return row.AuthHeld
+	} else if consumer {
+		return false
+	}
 	i.mu.RLock()
 	defer i.mu.RUnlock()
+	if i.runtimeProfile != "" && i.Status == StatusStopped {
+		return false
+	}
 	return i.authHeld
 }
 
@@ -495,13 +566,17 @@ func (i *Instance) AuthHoldSurvivedBoot() bool {
 // Called by the bulk-boot gate when a boot it allowed landed straight back in
 // auth-death, so `session show` can report how much thrash the session absorbed.
 func (i *Instance) RecordAuthBootFailure() {
-	rec := i.AuthHold()
+	// matrix/hardened: boot diagnostics use the same scoped write guard and
+	// must not copy an old launch's hold into the replacement's namespace.
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	rec := i.readAuthHoldLocked()
 	if rec == nil {
 		return
 	}
 	rec.BootAttempts++
 	rec.Timestamp = time.Now().Unix()
-	_ = writeAuthHoldRecord(*rec)
+	_ = i.authHoldScopeLocked().writeObserved(*rec)
 }
 
 // authDeathObservedLocked decides whether a just-detected pane death should be
@@ -520,17 +595,15 @@ func (i *Instance) RecordAuthBootFailure() {
 func (i *Instance) authDeathObservedLocked() bool {
 	if ts := i.tmuxSession; ts != nil {
 		if evidence, ok := ts.LastSampleAuthFailure(); ok {
-			i.noteAuthHoldLocked(AuthHoldReasonDeath, evidence)
-			return true
+			return i.noteAuthHoldLocked(AuthHoldReasonDeath, evidence)
 		}
 	}
 	if !i.authFailureSeenAt.IsZero() && time.Since(i.authFailureSeenAt) < authHoldDeathWindow {
 		evidence := ""
-		if rec := i.AuthHold(); rec != nil {
+		if rec := i.readAuthHoldLocked(); rec != nil {
 			evidence = rec.Evidence
 		}
-		i.noteAuthHoldLocked(AuthHoldReasonDeath, evidence)
-		return true
+		return i.noteAuthHoldLocked(AuthHoldReasonDeath, evidence)
 	}
 	// No auth evidence: an ordinary death, which a restart CAN fix. Leave it
 	// alone so the existing recovery paths keep working.

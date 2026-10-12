@@ -374,9 +374,21 @@ func (s *StateDB) ListInstanceAnnotations() (map[string]*InstanceAnnotations, er
 // UpsertSessionLink records that instance sessionID is (or was) the harness
 // conversation nativeID. With authoritative=true every other native id for
 // the same (session, harness) is demoted, so at most one row is current.
-func (s *StateDB) UpsertSessionLink(sessionID, harness, nativeID, host string, authoritative bool) error {
+func (s *StateDB) UpsertSessionLink(sessionID, harness, nativeID, host string, authoritative bool, expectedTouch ...int64) error {
+	// matrix/hardened: authoritative links from old probes share the native binding fence.
 	return withBusyRetry(func() error {
-		return upsertSessionLink(s.db, sessionID, harness, nativeID, host, authoritative, time.Now())
+		tx, err := s.db.Begin()
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		if err := guardRuntimeObservation(tx, sessionID, expectedTouch); err != nil {
+			return err
+		}
+		if err := upsertSessionLink(tx, sessionID, harness, nativeID, host, authoritative, time.Now()); err != nil {
+			return err
+		}
+		return tx.Commit()
 	})
 }
 
@@ -416,9 +428,31 @@ func demoteSessionLinks(e execer, sessionID string) error {
 
 // RetractSessionLink removes the link for a candidate the adoption
 // arbitration rejected. Returns whether a row existed.
-func (s *StateDB) RetractSessionLink(sessionID, harness, nativeID string) (bool, error) {
-	return s.execAffected(`DELETE FROM session_links WHERE session_id = ? AND harness = ? AND native_id = ?`,
-		sessionID, harness, nativeID)
+func (s *StateDB) RetractSessionLink(sessionID, harness, nativeID string, expectedTouch ...int64) (bool, error) {
+	// matrix/hardened: rejected candidates cannot retract a newly rebound launch.
+	var affected bool
+	err := withBusyRetry(func() error {
+		affected = false
+		tx, err := s.db.Begin()
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		if err := guardRuntimeObservation(tx, sessionID, expectedTouch); err != nil {
+			return err
+		}
+		result, err := tx.Exec(`DELETE FROM session_links WHERE session_id=? AND harness=? AND native_id=?`, sessionID, harness, nativeID)
+		if err != nil {
+			return err
+		}
+		n, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		affected = n > 0
+		return tx.Commit()
+	})
+	return affected, err
 }
 
 // ListSessionLinks returns every recorded harness conversation id for an

@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/asheshgoplani/agent-deck/internal/statedb"
 	"github.com/asheshgoplani/agent-deck/internal/tmux"
 )
 
@@ -153,6 +152,8 @@ func normalizeToolSessionID(field, value string) (string, error) {
 //
 // Persistence is the caller's responsibility.
 func SetField(inst *Instance, field, value string, extraArgsTokens []string) (oldValue string, postCommit func(), err error) {
+	// matrix/hardened: metadata edits fence stale in-flight monitor observations.
+	inst.InvalidateRuntimeSnapshot()
 	switch field {
 	case FieldTitle:
 		oldValue = inst.GetTitleThreadSafe()
@@ -392,10 +393,11 @@ func SetField(inst *Instance, field, value string, extraArgsTokens []string) (ol
 		// genericSessionIDCleared flag above. A failure is recorded rather than
 		// dropped: the CLI reports it, and nothing else can tell an id that
 		// reached disk from one that only ever lived in this process.
-		if db := statedb.GetGlobal(); db != nil {
+		// matrix/hardened: targeted writes stay in the instance owning profile.
+		if db := inst.stateDB(); db != nil {
 			err := db.WriteGenericSessionBinding(
 				inst.ID, value, inst.GenericSessionTool, inst.GenericSessionCommand,
-				inst.GenericSessionLocation, inst.GenericDetectedAt)
+				inst.GenericSessionLocation, inst.GenericDetectedAt, inst.producerGuardArgs()...)
 			inst.setGenericSessionPersistError(err)
 			if err != nil {
 				return oldValue, nil, &MutationError{

@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.38`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.39`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -66,7 +66,7 @@
 - `internal/session/claude_hooks.go`：`isAgentDeckHookCommand` 的判断规则：先去掉开头的 `VAR=值`，再要求第二个词是 `hook-handler`、程序名的文件名部分是 `agent-deck`。`RemoveClaudeHooks` 会扫描全部事件，并做 UTC 时间戳备份（约 387–414 行）。
 - `cmd/agent-deck/main.go`（约 4845、5070 行）：`agent-deck uninstall` 会移除这些钩子。`uninstall.sh` 第 253 行附近的 jq 过滤用的是同一套规则（正则），写回时用 `cat >` 保持软链接和权限。
 
-**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.38`。
+**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.39`。
 
 **测试**：以 `_hardened_test.go` 结尾的文件、`update_check_disable_test.go`、`update_timer_wiring_test.go` 等是新增或调整过的测试；`testdata/goldens/*` 里的快照已经按加固后的输出更新。
 
@@ -386,4 +386,16 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 - **matrix/hardened:** 受既有鉴权保护的 `GET /api/diagnostics/menu-publisher` 提供采集次数、订阅数、错误与运行状态计数，供多窗口验收；不在产品界面展示实现细节，不返回会话或凭证。
 - 验证 1/4/16 个订阅者每次发布共用的采集与合成次数、失效与重订阅、慢连接完成事件、错误恢复、只推送 WebSocket 的权限/输入边界和关闭清理；本机安装后核对真实映射构建、AI pane 身份和 1/4 网页连接的稳定 CPU/采集计数。
 
-后续跨进程的终端共享采用独立的完整 runtime snapshot 协议；当前升级集中在 Web 发布与消费边界，终端仍沿用原有监测机制。
+## 33. 终端、Web 与通知共享本机采集
+
+`1.16.26+matrix.39` 将生产 TUI、Web 和通知守护进程接入同一用户的本机采集服务。多个窗口保留自己的输入、几何和选中预览，完整会话状态由服务统一采集。协议与边界见 `internal/monitor/README.md`。
+
+- **matrix/hardened:** 使用独立 Unix socket、独占 owner lock、0700 目录、0600 socket 与相同 OS UID 的对端校验；不复用执行命令的 core daemon，不新增 LaunchAgent、更新任务、网络端口或钩子安装。
+- **matrix/hardened:** 首次读取按实际可执行文件启动服务；仅缺失或拒绝连接时自动启动，协议、权限和数据错误保持可见。`agent-deck monitor serve|status --json|stop` 管理这一个采集服务；停止它不会停止 AI 会话。
+- **matrix/hardened:** 按 profile 保留长期 Instance、观察者和原生身份；定向写入只使用所属数据库。没有消费需求时暂停采样，状态与事件按有界历史共享；增加消费者不会增加采集器。
+- **matrix/hardened:** 协议包含子状态及详情、完整 hook 回合证据、后台工作、认证 hold、活动与等待时间、确认状态、模型、原生绑定、fork 能力和逐行采样时间。未知或失败有明确标记，不用零值假装已观察。
+- **matrix/hardened:** 本地操作时间与持久注册变更时间拒绝旧采样；状态、原生绑定、确认以及相关 sidecar 写回受数据库 generation 校验。慢探针保留唯一在途调用，不能反复生成 goroutine；身份变化后旧结果不发布。
+- **matrix/hardened:** 已配置消费者不会在服务故障时各自重启全量采样。TUI 保留上次状态并显示重试提示；短暂断线保留历史游标，明确缺口重新建基线。历史错误发布作为未知边界推进，恢复不会卡在同一错误记录。
+- **matrix/hardened:** 终端输出只唤醒本窗口读取已有观察；实际操作才请求新采样。窗口心跳、通知交互与预览保持，既有 idle timeout 和 conductor compact 动作由 profile 的 primary TUI 执行。
+- **matrix/hardened:** 安装后需分别核对 Web、monitor 以及 TUI 的实际运行版本。旧 TUI 仍运行旧构建，列表上的 `Ctrl+T` 原地重载后才接入共享服务；AI tmux pane 无需重启。
+- 验证包含多个 Unix 消费者共用一次采集、暂停与唤醒、有界历史和大小边界、失败恢复、同 ID 的 profile 隔离、慢调用与代次、确认与新回合、完整状态及消费者零全量探针；使用第 4 节隔离入口。真实验收另核对构建映射、socket 权限、采集计数、稳定 CPU 与 AI pane 身份。
