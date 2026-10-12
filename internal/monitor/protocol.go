@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/asheshgoplani/agent-deck/internal/session"
+	"github.com/asheshgoplani/agent-deck/internal/tmux"
 )
 
 const Protocol = session.RuntimeProtocolVersion
@@ -50,6 +51,8 @@ type Status struct {
 	Publications   uint64    `json:"publications"`
 	Errors         uint64    `json:"errors"`
 	Inflight       int       `json:"inflight"`
+	// matrix/hardened: local, fixed-category counters expose query cost, not argv.
+	TmuxCommands tmux.SubprocessMetricsSnapshot `json:"tmuxCommands"`
 }
 
 type publication struct {
