@@ -596,7 +596,7 @@ func (p *pushService) runPublished(ctx context.Context, publisher *menuSnapshotP
 			return
 		}
 		if release == nil {
-			updates, release = publisher.Subscribe(p.pollInterval, func(snapshot *MenuSnapshot) {
+			updates, release = publisher.subscribeWire(p.pollInterval, func(snapshot *MenuSnapshot) {
 				queue.observe(snapshot, p.publishedEpoch.Load())
 			})
 		}

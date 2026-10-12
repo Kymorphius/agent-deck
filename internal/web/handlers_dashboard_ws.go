@@ -89,7 +89,7 @@ func (s *Server) handleDashboardWS(w http.ResponseWriter, r *http.Request) {
 		<-closerDone
 	}()
 	tracker := &ccPublicationTracker{}
-	updates, release := s.menuPublisher.Subscribe(dashboardEventsPollInterval, tracker.observe)
+	updates, release := s.menuPublisher.subscribeWire(dashboardEventsPollInterval, tracker.observe)
 	defer release()
 	write := func(encoded []byte) error {
 		if err := conn.SetWriteDeadline(time.Now().Add(writeTimeout)); err != nil {

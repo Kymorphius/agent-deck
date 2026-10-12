@@ -25,6 +25,9 @@ type menuPublication struct {
 type menuPublisherSubscriber struct {
 	interval time.Duration
 	observe  func(*MenuSnapshot)
+	// matrix/hardened: DTO consumers keep private deep copies; transports use
+	// only immutable encoding/derived state and never receive mutable menu DTOs.
+	privateDTO bool
 }
 
 // matrix/hardened: construction uses a fixed production default; stream
@@ -80,6 +83,13 @@ func (v menuPublication) clone() menuPublication {
 	return v
 }
 
+// matrix/hardened: transport publications share owned immutable wire/derived
+// data without decoding a menu DTO for each connected browser or push worker.
+func (v menuPublication) wire() menuPublication {
+	v.Snapshot = nil
+	return v
+}
+
 func (p *menuSnapshotPublisher) intervalLocked() time.Duration {
 	interval := p.ttl
 	for _, sub := range p.subscribers {
@@ -101,6 +111,23 @@ func (p *menuSnapshotPublisher) LoadMenuSnapshot() (*MenuSnapshot, error) {
 }
 
 func (p *menuSnapshotPublisher) load(ctx context.Context) (menuPublication, error) {
+	v, err := p.loadOwned(ctx)
+	if err != nil {
+		return menuPublication{}, err
+	}
+	return v.clone(), nil
+}
+
+// matrix/hardened: raw HTTP menu output can reuse encoding without exposing a
+// mutable DTO. Default load/LoadMenuSnapshot still return deep private copies.
+func (p *menuSnapshotPublisher) loadWire(ctx context.Context) (menuPublication, error) {
+	v, err := p.loadOwned(ctx)
+	return v.wire(), err
+}
+
+// matrix/hardened: internal collectors/derived builders only read the owned
+// immutable generation. Never return this DTO from a transport or public load.
+func (p *menuSnapshotPublisher) loadOwned(ctx context.Context) (menuPublication, error) {
 	for {
 		p.mu.Lock()
 		if p.closed || p.ctx.Err() != nil {
@@ -108,7 +135,7 @@ func (p *menuSnapshotPublisher) load(ctx context.Context) (menuPublication, erro
 			return menuPublication{}, context.Canceled
 		}
 		if !p.dirty && !p.at.IsZero() && time.Since(p.at) < p.intervalLocked() {
-			v := p.current.clone()
+			v := p.current
 			p.mu.Unlock()
 			return v, nil
 		}
@@ -159,10 +186,11 @@ func (p *menuSnapshotPublisher) collect(ready chan struct{}, generation uint64) 
 		}
 		for ch, sub := range p.subscribers {
 			if v.Err == nil && sub.observe != nil {
-				// Observers only reduce in-memory state; no I/O or publisher calls.
+				// Observers read the owned immutable DTO and only reduce bounded
+				// memory state; no snapshot mutation, retention, I/O or publisher calls.
 				sub.observe(v.Snapshot)
 			}
-			p.offerLocked(ch, v)
+			p.offerLocked(ch, v, sub.privateDTO)
 		}
 	}
 	p.loading = nil
@@ -171,10 +199,14 @@ func (p *menuSnapshotPublisher) collect(ready chan struct{}, generation uint64) 
 	p.signal()
 }
 
-// matrix/hardened: each reader gets a private DTO. A slow SSE writer only
-// replaces its one pending value and cannot block collection or other readers.
-func (p *menuSnapshotPublisher) offerLocked(ch chan menuPublication, v menuPublication) {
-	v = v.clone()
+// matrix/hardened: DTO readers get private copies while transport readers get
+// no mutable snapshot. Either mode has one replaceable pending publication.
+func (p *menuSnapshotPublisher) offerLocked(ch chan menuPublication, v menuPublication, privateDTO bool) {
+	if privateDTO {
+		v = v.clone()
+	} else {
+		v = v.wire()
+	}
 	select {
 	case ch <- v:
 	default:
@@ -186,9 +218,20 @@ func (p *menuSnapshotPublisher) offerLocked(ch chan menuPublication, v menuPubli
 	}
 }
 
-// matrix/hardened: Subscribe creates demand, reuses a fresh first baseline and
-// returns an idempotent release. observe must be nonblocking and memory-only.
+// matrix/hardened: Subscribe gives channel readers private DTOs and returns an
+// idempotent release. As before, observe reads the owned immutable snapshot;
+// it must be nonblocking, memory-only, and must not mutate or retain the DTO.
 func (p *menuSnapshotPublisher) Subscribe(interval time.Duration, observe func(*MenuSnapshot)) (<-chan menuPublication, func()) {
+	return p.subscribe(interval, observe, true)
+}
+
+// matrix/hardened: production stream/push consumers only need immutable wire
+// data; their observers have the same read-only contract as default Subscribe.
+func (p *menuSnapshotPublisher) subscribeWire(interval time.Duration, observe func(*MenuSnapshot)) (<-chan menuPublication, func()) {
+	return p.subscribe(interval, observe, false)
+}
+
+func (p *menuSnapshotPublisher) subscribe(interval time.Duration, observe func(*MenuSnapshot), privateDTO bool) (<-chan menuPublication, func()) {
 	ch := make(chan menuPublication, 1)
 	p.mu.Lock()
 	if p.closed || p.ctx.Err() != nil {
@@ -196,12 +239,12 @@ func (p *menuSnapshotPublisher) Subscribe(interval time.Duration, observe func(*
 		p.mu.Unlock()
 		return ch, func() {}
 	}
-	p.subscribers[ch] = menuPublisherSubscriber{interval: interval, observe: observe}
+	p.subscribers[ch] = menuPublisherSubscriber{interval: interval, observe: observe, privateDTO: privateDTO}
 	if !p.dirty && !p.at.IsZero() && time.Since(p.at) < p.intervalLocked() {
 		if p.current.Err == nil && observe != nil {
 			observe(p.current.Snapshot)
 		}
-		p.offerLocked(ch, p.current)
+		p.offerLocked(ch, p.current, privateDTO)
 	}
 	if !p.running {
 		p.running = true
@@ -273,7 +316,9 @@ func (p *menuSnapshotPublisher) run() {
 		}
 		p.mu.Unlock()
 		if delay <= 0 {
-			_, _ = p.load(p.ctx)
+			// matrix/hardened: the loop only ensures a generation exists; avoid
+			// decoding an otherwise-unused private DTO on every collector tick.
+			_, _ = p.loadOwned(p.ctx)
 			continue
 		}
 		timer := time.NewTimer(delay)

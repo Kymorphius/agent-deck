@@ -258,7 +258,7 @@ func (s *Server) handleCommandCenterEvents(w http.ResponseWriter, r *http.Reques
 	// matrix/hardened: only one collector performs menu/hook/annotation I/O;
 	// connection-local status observation preserves completion notifications.
 	tracker := &ccPublicationTracker{}
-	updates, release := s.menuPublisher.Subscribe(commandCenterPollInterval, tracker.observe)
+	updates, release := s.menuPublisher.subscribeWire(commandCenterPollInterval, tracker.observe)
 	defer release()
 	var publication menuPublication
 	select {
@@ -345,8 +345,9 @@ func (s *Server) handleCommandCenterEvents(w http.ResponseWriter, r *http.Reques
 // with the latest per-session statuses and RecentlyCompleted is populated from
 // the running→done/waiting diff.
 func (s *Server) loadCommandCenterSnapshot(tracker ccStatusTracker) (*CommandCenterSnapshot, error) {
-	// matrix/hardened: REST command-center derives from the common publication.
-	publication, err := s.menuPublisher.load(s.baseCtx)
+	// matrix/hardened: derive from the owned read-only menu without decoding it;
+	// only the REST result needs a private DTO, including nested conductor data.
+	publication, err := s.menuPublisher.loadOwned(s.baseCtx)
 	if err != nil {
 		return nil, err
 	}
@@ -355,8 +356,11 @@ func (s *Server) loadCommandCenterSnapshot(tracker ccStatusTracker) (*CommandCen
 		return nil, err
 	}
 	// matrix/hardened: keep the existing tracker-aware helper API without
-	// repeating artifact I/O. Its private overlay never mutates the shared base.
-	snapshot := *base.snapshot
+	// repeating artifact I/O or exposing the shared base's nested DTOs.
+	var snapshot CommandCenterSnapshot
+	if err := json.Unmarshal(base.encoded, &snapshot); err != nil {
+		return nil, err
+	}
 	if tracker != nil {
 		next := make(ccStatusTracker)
 		snapshot.RecentlyCompleted = []CommandCenterCompletion{}
