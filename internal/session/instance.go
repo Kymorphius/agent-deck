@@ -11664,6 +11664,8 @@ func (i *Instance) CreateForkedInstanceWithOptions(
 		}
 	}
 
+	// matrix/hardened: direct Claude forks must retain shared-directory cleanup protection.
+	inheritForkWorktreeLocation(i, forked)
 	return forked, cmd, nil
 }
 
@@ -11809,6 +11811,8 @@ func (i *Instance) CreateForkedOpenCodeInstanceWithOptionsAndWorkDir(
 		}
 	}
 
+	// matrix/hardened: apply this in the builder, including direct OpenCode calls.
+	inheritForkWorktreeLocation(i, forked)
 	return forked, cmd, nil
 }
 
@@ -11859,6 +11863,8 @@ func (i *Instance) CreateForkedPiInstanceWithOptions(
 		forked.WorktreeBranch = opts.WorktreeBranch
 	}
 
+	// matrix/hardened: a Pi fork can share the parent's existing worktree.
+	inheritForkWorktreeLocation(i, forked)
 	return forked, cmd, nil
 }
 
@@ -11957,6 +11963,8 @@ func (i *Instance) CreateForkedCodexInstanceWithOptions(
 		forked.WorktreeBranch = opts.WorktreeBranch
 	}
 
+	// matrix/hardened: a Codex fork can share the parent's existing worktree.
+	inheritForkWorktreeLocation(i, forked)
 	return forked, cmd, nil
 }
 

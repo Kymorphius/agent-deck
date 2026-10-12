@@ -725,6 +725,9 @@ func handleWorktreeFinish(profile string, args []string) {
 	repoRoot := inst.WorktreeRepoRoot
 	worktreePath := inst.WorktreePath
 	worktreeBranch := inst.WorktreeBranch
+	// matrix/hardened: finishing a parent can merge its branch, but in-place
+	// forks retain the shared directory and branch until their final finish.
+	sharedWorktree := session.OtherSessionsShareWorktree(inst, instances)
 
 	finishBackend, err := detectAndCreateBackend(repoRoot)
 	if err != nil {
@@ -777,7 +780,10 @@ func handleWorktreeFinish(profile string, args []string) {
 		} else {
 			fmt.Printf("Merge:     %s → %s\n", worktreeBranch, targetBranch)
 		}
-		if *keepBranch {
+		if sharedWorktree {
+			fmt.Printf("Worktree:  kept (another session uses it)\n")
+			fmt.Printf("Branch:    kept (another session uses it)\n")
+		} else if *keepBranch {
 			fmt.Printf("Branch:    kept (--keep-branch)\n")
 		} else {
 			fmt.Printf("Delete:    branch '%s' will be deleted\n", worktreeBranch)
@@ -821,22 +827,28 @@ func handleWorktreeFinish(profile string, args []string) {
 	}
 
 	// Step 2: Remove worktree
-	if _, statErr := os.Stat(worktreePath); !os.IsNotExist(statErr) {
-		fmt.Printf("Removing worktree at %s...\n", FormatPath(worktreePath))
-		if err := finishBackend.RemoveWorktree(worktreePath, *force); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to remove worktree: %v\n", err)
-		} else {
-			fmt.Printf("  %s Worktree removed\n", successSymbol)
+	if !sharedWorktree {
+		if _, statErr := os.Stat(worktreePath); !os.IsNotExist(statErr) {
+			fmt.Printf("Removing worktree at %s...\n", FormatPath(worktreePath))
+			if err := finishBackend.RemoveWorktree(worktreePath, *force); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: failed to remove worktree: %v\n", err)
+			} else {
+				fmt.Printf("  %s Worktree removed\n", successSymbol)
+			}
 		}
+		_ = finishBackend.PruneWorktrees()
 	}
-	_ = finishBackend.PruneWorktrees()
 
 	// Step 3: Delete branch (if not --keep-branch)
-	if !*keepBranch {
+	// matrix/hardened: JSON reports an actual deletion, including failures and
+	// shared-worktree skips, instead of merely echoing the requested option.
+	branchDeleted := false
+	if !*keepBranch && !sharedWorktree {
 		fmt.Printf("Deleting branch %s...\n", worktreeBranch)
 		if err := finishBackend.DeleteBranch(worktreeBranch, *force); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: failed to delete branch: %v\n", err)
 		} else {
+			branchDeleted = true
 			fmt.Printf("  %s Branch deleted\n", successSymbol)
 		}
 	}
@@ -887,10 +899,15 @@ func handleWorktreeFinish(profile string, args []string) {
 			"branch":         worktreeBranch,
 			"merged_into":    targetBranch,
 			"merged":         !*noMerge,
-			"branch_deleted": !*keepBranch,
+			"branch_deleted": branchDeleted,
 		})
 	} else {
-		fmt.Printf("\n%s Finished: session '%s' removed, worktree cleaned up", successSymbol, inst.Title)
+		fmt.Printf("\n%s Finished: session '%s' removed", successSymbol, inst.Title)
+		if sharedWorktree {
+			fmt.Printf(", shared worktree and branch retained")
+		} else {
+			fmt.Printf(", worktree cleaned up")
+		}
 		if !*noMerge {
 			fmt.Printf(", branch merged into %s", targetBranch)
 		}

@@ -232,5 +232,7 @@ func (i *Instance) CreateForkedOMPInstanceWithOptions(
 		forked.WorktreeBranch = opts.WorktreeBranch
 	}
 
+	// matrix/hardened: direct omp forks must retain shared-directory cleanup protection.
+	inheritForkWorktreeLocation(i, forked)
 	return forked, cmd, nil
 }

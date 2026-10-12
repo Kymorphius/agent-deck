@@ -220,6 +220,7 @@ func (h *HelpOverlay) View() string {
 	// Define help sections
 	newKeys := h.keyPair(hotkeyNewSession, hotkeyQuickCreate, "n/N")
 	forkKeys := h.keyPair(hotkeyQuickFork, hotkeyForkWithOptions, "f/F")
+	inPlaceForkKey := h.key(hotkeyForkInPlace, "Alt+F") // matrix/hardened
 	reorderUpKeys := "+ / K / Shift+↑"
 	reorderDownKeys := "- / J / Shift+↓"
 	indentKeys := "Shift+→/←"
@@ -375,6 +376,7 @@ func (h *HelpOverlay) View() string {
 				{indentKeys, "Indent / outdent (in group)"},
 				{pinKeys, "Pin (cycle off→top→bottom→off)"},
 				{forkKeys, "Fork session (Claude/Pi)"},
+				{inPlaceForkKey, "Fork session in same directory (no new worktree)"}, // matrix/hardened
 				{yoloKey, "Toggle YOLO mode"},
 				{contextInspectorKey, "Inspect full context (everything the agent is being sent, ranked by cost)"},
 				{sendKey, "Send output to session"},

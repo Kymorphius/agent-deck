@@ -41,8 +41,10 @@ func IsRemovableWorktree(inst *Instance) bool {
 // OtherSessionsShareWorktree reports whether any instance in others (other than
 // target itself) still references target's worktree directory. Paths are
 // compared canonically (EvalSymlinks), so a symlinked alias to the same
-// directory counts as a sharer. nil entries, target's own ID, and non-worktree
-// instances are skipped.
+// directory counts as a sharer. nil entries and target's own ID are skipped.
+// matrix/hardened: project paths and per-repo references also retain the directory.
+// matrix/hardened: a multi-repo instance may also reference the directory in
+// MultiRepoWorktrees while its single WorktreePath is empty.
 //
 // This is the missing guard behind issue #1449: finishing one of several
 // sessions that share a single worktree must not remove the shared directory or
@@ -61,14 +63,94 @@ func OtherSessionsShareWorktree(target *Instance, others []*Instance) bool {
 			continue
 		}
 		owt := strings.TrimSpace(o.WorktreePath)
-		if owt == "" {
-			continue
-		}
-		if canonicalPath(owt) == targetCanon {
+		if owt != "" && canonicalPath(owt) == targetCanon {
 			return true
+		}
+		// matrix/hardened: older or direct forks can have only a project-path
+		// reference. They still depend on this checkout and must protect it.
+		if canonicalDirectoryContains(wt, o.ProjectPath) {
+			return true
+		}
+		for _, path := range o.AdditionalPaths {
+			if canonicalDirectoryContains(wt, path) {
+				return true
+			}
+		}
+		// matrix/hardened: include each per-repository reference before
+		// allowing cleanup of a directory used by a shared multi-repo fork.
+		for _, worktree := range o.MultiRepoWorktrees {
+			path := strings.TrimSpace(worktree.WorktreePath)
+			if path != "" && canonicalPath(path) == targetCanon {
+				return true
+			}
 		}
 	}
 	return false
+}
+
+// matrix/hardened: shared multi-repo forks retain the same temporary working
+// directory and its repository links. Only the last registered user may remove
+// that directory, including when another record uses a symlinked alias or a
+// different aggregate directory whose project links resolve into this one.
+func OtherSessionsShareMultiRepoTempDir(target *Instance, others []*Instance) bool {
+	if target == nil || strings.TrimSpace(target.MultiRepoTempDir) == "" {
+		return false
+	}
+	targetCanon := canonicalPath(strings.TrimSpace(target.MultiRepoTempDir))
+	for _, other := range others {
+		if other == nil || other.ID == target.ID {
+			continue
+		}
+		path := strings.TrimSpace(other.MultiRepoTempDir)
+		if path != "" && canonicalPath(path) == targetCanon {
+			return true
+		}
+		// matrix/hardened: a distinct aggregate directory can still depend on
+		// worktrees below this directory through its project symlinks.
+		if canonicalDirectoryContains(targetCanon, other.ProjectPath) ||
+			canonicalDirectoryContains(targetCanon, other.WorktreePath) {
+			return true
+		}
+		for _, path := range other.AdditionalPaths {
+			if canonicalDirectoryContains(targetCanon, path) {
+				return true
+			}
+		}
+		for _, worktree := range other.MultiRepoWorktrees {
+			if canonicalDirectoryContains(targetCanon, worktree.WorktreePath) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// matrix/hardened: a registered path depends on its parent directories even
+// when its final symlink points outside the container. Check its ancestors as
+// well as its resolved destination; sibling prefixes remain unrelated.
+func canonicalDirectoryContains(directory, path string) bool {
+	if strings.TrimSpace(directory) == "" || strings.TrimSpace(path) == "" {
+		return false
+	}
+	root, err := filepath.Abs(strings.TrimSpace(directory))
+	if err != nil {
+		return false
+	}
+	candidate, err := filepath.Abs(strings.TrimSpace(path))
+	if err != nil {
+		return false
+	}
+	root = canonicalPath(root)
+	for {
+		if isPathWithin(root, canonicalPath(candidate)) {
+			return true
+		}
+		parent := filepath.Dir(candidate)
+		if parent == candidate {
+			return false
+		}
+		candidate = parent
+	}
 }
 
 // RemoveSessionWorktree removes the session's worktree directory if and only if

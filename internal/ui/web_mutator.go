@@ -715,6 +715,9 @@ func (m *WebMutator) FinishWorktree(id string, opts web.WorktreeFinishOptions) (
 	defer unlock()
 	m.h.instancesMu.RLock()
 	inst := m.h.instanceByID[id]
+	// matrix/hardened: use this mutation's hydrated snapshot so finishing a
+	// parent preserves the worktree and branch still used by in-place forks.
+	sharedWorktree := session.OtherSessionsShareWorktree(inst, m.h.instances)
 	m.h.instancesMu.RUnlock()
 	if inst == nil {
 		return web.WorktreeFinishResult{}, web.ErrSessionNotFound
@@ -771,16 +774,18 @@ func (m *WebMutator) FinishWorktree(id string, opts web.WorktreeFinishOptions) (
 		}
 	}
 
-	if _, statErr := os.Stat(worktreePath); !os.IsNotExist(statErr) {
-		// Best-effort: log via error wrapping only if it bubbles. CLI
-		// treats this as a warning; we mirror that by swallowing here so
-		// the rest of cleanup proceeds.
-		_ = backend.RemoveWorktree(worktreePath, opts.Force)
+	if !sharedWorktree {
+		if _, statErr := os.Stat(worktreePath); !os.IsNotExist(statErr) {
+			// Best-effort: log via error wrapping only if it bubbles. CLI
+			// treats this as a warning; we mirror that by swallowing here so
+			// the rest of cleanup proceeds.
+			_ = backend.RemoveWorktree(worktreePath, opts.Force)
+		}
+		_ = backend.PruneWorktrees()
 	}
-	_ = backend.PruneWorktrees()
 
 	branchDeleted := false
-	if !opts.KeepBranch {
+	if !opts.KeepBranch && !sharedWorktree {
 		if dErr := backend.DeleteBranch(worktreeBranch, opts.Force); dErr == nil {
 			branchDeleted = true
 		}
