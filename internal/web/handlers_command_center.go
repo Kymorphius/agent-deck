@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/asheshgoplani/agent-deck/internal/agentpaths"
@@ -158,6 +160,64 @@ type askRequest struct {
 // connection); kept on the connection's stack, not shared, so no extra lock.
 type ccStatusTracker map[string]string
 
+// matrix/hardened: every connection observes every collected status change,
+// even while its network writer is slow. This reducer is memory-only; artifact
+// reads stay in the handler. A bounded backlog explicitly requests reconnection.
+const maxCCPendingCompletions = 512
+
+type ccPublicationTracker struct {
+	mu       sync.Mutex
+	previous ccStatusTracker
+	pending  []CommandCenterCompletion
+	overflow bool
+}
+
+func (t *ccPublicationTracker) observe(menu *MenuSnapshot) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.overflow {
+		return
+	}
+	next := make(ccStatusTracker)
+	for _, item := range menu.Items {
+		if item.Type != MenuItemTypeSession || item.Session == nil {
+			continue
+		}
+		s := item.Session
+		status := string(s.Status)
+		if t.previous[s.ID] == "running" && (status == "waiting" || status == "idle") {
+			if len(t.pending) == maxCCPendingCompletions {
+				t.overflow = true
+				return
+			}
+			t.pending = append(t.pending, CommandCenterCompletion{
+				ID: s.ID, Title: s.Title, Status: status, At: time.Now().UTC().Format(time.RFC3339),
+			})
+		}
+		next[s.ID] = status
+	}
+	t.previous = next
+}
+
+func (t *ccPublicationTracker) drain() ([]CommandCenterCompletion, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.overflow {
+		return nil, errors.New("command center completion backlog requires resync")
+	}
+	pending := t.pending
+	t.pending = nil
+	return pending, nil
+}
+
+// matrix/hardened: checking overflow must not drain successful pending events
+// when a source refresh failed; they are delivered after recovery.
+func (t *ccPublicationTracker) overflowed() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.overflow
+}
+
 // handleCommandCenterStatus serves a one-shot synthesized snapshot.
 func (s *Server) handleCommandCenterStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -195,8 +255,24 @@ func (s *Server) handleCommandCenterEvents(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	tracker := ccStatusTracker{}
-	snapshot, err := s.loadCommandCenterSnapshot(tracker)
+	// matrix/hardened: only one collector performs menu/hook/annotation I/O;
+	// connection-local status observation preserves completion notifications.
+	tracker := &ccPublicationTracker{}
+	updates, release := s.menuPublisher.Subscribe(commandCenterPollInterval, tracker.observe)
+	defer release()
+	var publication menuPublication
+	select {
+	case <-r.Context().Done():
+		return
+	case next, open := <-updates:
+		if !open {
+			return
+		}
+		publication = next
+	}
+	// matrix/hardened: artifact/grouping/encoding work is shared per publication;
+	// only this connection's completion overlay is synthesized independently.
+	_, snapshot, err := s.commandCenterForPublication(publication, tracker)
 	if err != nil {
 		writeAPIError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to build command center snapshot")
 		return
@@ -208,35 +284,35 @@ func (s *Server) handleCommandCenterEvents(w http.ResponseWriter, r *http.Reques
 	w.Header().Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
 
-	lastFingerprint := commandCenterFingerprint(snapshot)
-	if err := writeSSEEvent(w, flusher, "command-center", snapshot); err != nil {
+	lastFingerprint := snapshot.fingerprint
+	if err := writeEncodedSSEEvent(w, flusher, "command-center", snapshot.encoded); err != nil {
 		return
 	}
 
-	menuChanges := s.subscribeMenuChanges()
-	defer s.unsubscribeMenuChanges(menuChanges)
-
-	pollTicker := time.NewTicker(commandCenterPollInterval)
-	defer pollTicker.Stop()
 	heartbeatTicker := time.NewTicker(commandCenterHeartbeatInterval)
 	defer heartbeatTicker.Stop()
 
 	ctx := r.Context()
-	emitIfChanged := func() error {
-		next, err := s.loadCommandCenterSnapshot(tracker)
+	// matrix/hardened: publication delivery never invokes another menu load.
+	emitIfChanged := func(v menuPublication) error {
+		_, next, err := s.commandCenterForPublication(v, tracker)
 		if err != nil {
 			logging.ForComponent(logging.CompWeb).Error("command_center_stream_refresh_failed",
 				slog.String("error", err.Error()))
+			if tracker.overflowed() {
+				_ = writeSSEEvent(w, flusher, "resync", apiError{Code: "RESYNC_REQUIRED", Message: "Reconnect to refresh command center state"})
+				return err
+			}
 			return nil
 		}
-		nextFingerprint := commandCenterFingerprint(next)
+		nextFingerprint := next.fingerprint
 		// Always emit when a completion fired (the notification is the point),
 		// even if the steady-state fingerprint (which excludes RecentlyCompleted)
 		// is unchanged.
-		if nextFingerprint == lastFingerprint && len(next.RecentlyCompleted) == 0 {
+		if nextFingerprint == lastFingerprint && len(next.snapshot.RecentlyCompleted) == 0 {
 			return nil
 		}
-		if err := writeSSEEvent(w, flusher, "command-center", next); err != nil {
+		if err := writeEncodedSSEEvent(w, flusher, "command-center", next.encoded); err != nil {
 			return err
 		}
 		lastFingerprint = nextFingerprint
@@ -251,17 +327,13 @@ func (s *Server) handleCommandCenterEvents(w http.ResponseWriter, r *http.Reques
 			if err := writeSSEComment(w, flusher, "keepalive"); err != nil {
 				return
 			}
-		case _, ok := <-menuChanges:
+		case next, ok := <-updates:
 			if !ok {
 				// Subscription closed (server shutting down) — stop rather
 				// than spin on a perpetually-ready closed channel.
 				return
 			}
-			if err := emitIfChanged(); err != nil {
-				return
-			}
-		case <-pollTicker.C:
-			if err := emitIfChanged(); err != nil {
+			if err := emitIfChanged(next); err != nil {
 				return
 			}
 		}
@@ -273,13 +345,41 @@ func (s *Server) handleCommandCenterEvents(w http.ResponseWriter, r *http.Reques
 // with the latest per-session statuses and RecentlyCompleted is populated from
 // the running→done/waiting diff.
 func (s *Server) loadCommandCenterSnapshot(tracker ccStatusTracker) (*CommandCenterSnapshot, error) {
-	menu, err := s.menuData.LoadMenuSnapshot()
+	// matrix/hardened: REST command-center derives from the common publication.
+	publication, err := s.menuPublisher.load(s.baseCtx)
 	if err != nil {
 		return nil, err
 	}
-	refreshSnapshotHookStatuses(menu, s.hookStatusLoader)
-	applySnapshotAnnotations(menu, s.annotationLoader)
-	return buildCommandCenterSnapshot(menu, s.cfg.Profile, conductorArtifactDir(), tracker), nil
+	base, err := s.commandCenterBase(publication)
+	if err != nil {
+		return nil, err
+	}
+	// matrix/hardened: keep the existing tracker-aware helper API without
+	// repeating artifact I/O. Its private overlay never mutates the shared base.
+	snapshot := *base.snapshot
+	if tracker != nil {
+		next := make(ccStatusTracker)
+		snapshot.RecentlyCompleted = []CommandCenterCompletion{}
+		for _, item := range publication.Snapshot.Items {
+			if item.Type != MenuItemTypeSession || item.Session == nil {
+				continue
+			}
+			status := string(item.Session.Status)
+			if tracker[item.Session.ID] == "running" && (status == "waiting" || status == "idle") {
+				snapshot.RecentlyCompleted = append(snapshot.RecentlyCompleted, CommandCenterCompletion{
+					ID: item.Session.ID, Title: item.Session.Title, Status: status, At: snapshot.GeneratedAt,
+				})
+			}
+			next[item.Session.ID] = status
+		}
+		for id := range tracker {
+			delete(tracker, id)
+		}
+		for id, status := range next {
+			tracker[id] = status
+		}
+	}
+	return &snapshot, nil
 }
 
 // buildCommandCenterSnapshot is the pure synthesis function (no I/O beyond the

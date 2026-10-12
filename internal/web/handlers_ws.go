@@ -84,7 +84,8 @@ func (s *Server) handleSessionWS(w http.ResponseWriter, r *http.Request) {
 	// CRLF/control-char id can't forge fake log lines (go/log-injection).
 	logSessionID := logging.SanitizeValue(sessionID)
 
-	snapshot, err := s.menuData.LoadMenuSnapshot()
+	// matrix/hardened: terminal target lookup shares the owned Web registry.
+	snapshot, err := s.menuPublisher.LoadMenuSnapshot()
 	if err != nil {
 		writeAPIError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to load session data")
 		return

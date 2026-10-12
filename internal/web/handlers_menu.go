@@ -33,13 +33,16 @@ func (s *Server) handleMenu(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	snapshot, err := s.menuData.LoadMenuSnapshot()
+	// matrix/hardened: REST reads the same owned publication as all live streams.
+	publication, err := s.menuPublisher.load(r.Context())
+	snapshot := publication.Snapshot
+	if err == nil {
+		err = publication.Err
+	}
 	if err != nil {
 		writeAPIError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to load menu data")
 		return
 	}
-	refreshSnapshotHookStatuses(snapshot, s.hookStatusLoader)
-	applySnapshotAnnotations(snapshot, s.annotationLoader)
 
 	writeJSON(w, http.StatusOK, snapshot)
 }
@@ -65,13 +68,16 @@ func (s *Server) handleSessionByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	snapshot, err := s.menuData.LoadMenuSnapshot()
+	// matrix/hardened: session details share the menu collector and overlays.
+	publication, err := s.menuPublisher.load(r.Context())
+	snapshot := publication.Snapshot
+	if err == nil {
+		err = publication.Err
+	}
 	if err != nil {
 		writeAPIError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to load session data")
 		return
 	}
-	refreshSnapshotHookStatuses(snapshot, s.hookStatusLoader)
-	applySnapshotAnnotations(snapshot, s.annotationLoader)
 
 	for _, item := range snapshot.Items {
 		if item.Type != MenuItemTypeSession || item.Session == nil {

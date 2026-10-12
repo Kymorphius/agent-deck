@@ -33,16 +33,24 @@ func (s *Server) handleMenuEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	snapshot, err := s.menuData.LoadMenuSnapshot()
-	if err != nil {
+	// matrix/hardened: subscribing creates demand for the single menu collector;
+	// a new tab receives the existing publication instead of loading another menu.
+	updates, release := s.menuPublisher.Subscribe(menuEventsPollInterval, nil)
+	defer release()
+	var publication menuPublication
+	select {
+	case <-r.Context().Done():
+		return
+	case next, open := <-updates:
+		if !open {
+			return
+		}
+		publication = next
+	}
+	if publication.Err != nil {
 		writeAPIError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to load menu data")
 		return
 	}
-	// #963: SSE must apply the same hook overlay the REST handlers do,
-	// otherwise sessions stuck at error in the snapshot but waiting per
-	// the hook file surface as error on the web while CLI shows waiting.
-	refreshSnapshotHookStatuses(snapshot, s.hookStatusLoader)
-	applySnapshotAnnotations(snapshot, s.annotationLoader)
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -50,41 +58,30 @@ func (s *Server) handleMenuEvents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
 
-	lastFingerprint := menuSnapshotFingerprint(snapshot)
-	if err := writeSSEEvent(w, flusher, "menu", snapshot); err != nil {
+	// matrix/hardened: reuse the publisher's fingerprint and wire encoding.
+	lastFingerprint := publication.Fingerprint
+	if err := writeEncodedSSEEvent(w, flusher, "menu", publication.encoded); err != nil {
 		return
 	}
-
-	menuChanges := s.subscribeMenuChanges()
-	defer s.unsubscribeMenuChanges(menuChanges)
-
-	pollTicker := time.NewTicker(menuEventsPollInterval)
-	defer pollTicker.Stop()
 
 	heartbeatTicker := time.NewTicker(menuEventsHeartbeatInterval)
 	defer heartbeatTicker.Stop()
 
 	ctx := r.Context()
-	emitIfChanged := func() error {
-		nextSnapshot, err := s.menuData.LoadMenuSnapshot()
-		if err != nil {
+	// matrix/hardened: only delivery/heartbeat remain per connection. Collection
+	// errors do not emit stale menu data as a successful update.
+	emitIfChanged := func(next menuPublication) error {
+		if next.Err != nil {
 			logging.ForComponent(logging.CompWeb).Error("menu_stream_refresh_failed",
-				slog.String("error", err.Error()))
+				slog.String("error", next.Err.Error()))
 			return nil
 		}
-		// #963: re-apply the hook overlay before fingerprinting/emit so
-		// the fingerprint reflects what the client will actually see
-		// (otherwise the fingerprint matches pre-overlay state and the
-		// stream goes silent while the visible state still changes).
-		refreshSnapshotHookStatuses(nextSnapshot, s.hookStatusLoader)
-		applySnapshotAnnotations(nextSnapshot, s.annotationLoader)
-
-		nextFingerprint := menuSnapshotFingerprint(nextSnapshot)
+		nextFingerprint := next.Fingerprint
 		if nextFingerprint == lastFingerprint {
 			return nil
 		}
 
-		if err := writeSSEEvent(w, flusher, "menu", nextSnapshot); err != nil {
+		if err := writeEncodedSSEEvent(w, flusher, "menu", next.encoded); err != nil {
 			return err
 		}
 		lastFingerprint = nextFingerprint
@@ -99,12 +96,11 @@ func (s *Server) handleMenuEvents(w http.ResponseWriter, r *http.Request) {
 			if err := writeSSEComment(w, flusher, "keepalive"); err != nil {
 				return
 			}
-		case <-menuChanges:
-			if err := emitIfChanged(); err != nil {
+		case next, open := <-updates:
+			if !open {
 				return
 			}
-		case <-pollTicker.C:
-			if err := emitIfChanged(); err != nil {
+			if err := emitIfChanged(next); err != nil {
 				return
 			}
 		}
@@ -116,6 +112,11 @@ func writeSSEEvent(w http.ResponseWriter, flusher http.Flusher, event string, pa
 	if err != nil {
 		return err
 	}
+	// matrix/hardened: menu fanout supplies one already-encoded payload.
+	return writeEncodedSSEEvent(w, flusher, event, data)
+}
+
+func writeEncodedSSEEvent(w http.ResponseWriter, flusher http.Flusher, event string, data []byte) error {
 	if _, err := fmt.Fprintf(w, "event: %s\n", event); err != nil {
 		return err
 	}

@@ -42,6 +42,14 @@ async function installBridge(page) {
 async function openStoppedSession(page, request) {
   await request.post('/__fixture/reset')
   await request.post(`/__fixture/session/${SID}/status?to=stopped`)
+  // matrix/hardened: fixture-admin changes mimic external status updates,
+  // which reach the shared publisher on its next collection. Wait for that
+  // stopped baseline before opening the terminal; a previous test's cached
+  // running snapshot would otherwise trigger an unrelated extra reattach.
+  await expect.poll(async () => {
+    const menu = await (await request.get('/api/menu')).json()
+    return menu.items?.find(item => item.session?.id === SID)?.session?.status
+  }).toBe('stopped')
   await installBridge(page)
   await page.goto(`/s/${SID}`)
   await expect(page.locator('.xterm-screen')).toBeVisible()

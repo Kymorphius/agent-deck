@@ -97,6 +97,9 @@ func main() {
 	// reset and inspect state without going through the real Go test harness.
 	handler := server.Handler()
 	streams := newFixtureStreamConnections()
+	// matrix/hardened: dashboard sockets are tracked separately from legacy SSE
+	// and terminal sockets so recovery tests only count the page's one channel.
+	dashboards := newFixtureStreamConnections()
 	mux := http.NewServeMux()
 	mux.HandleFunc("/__fixture/stream-outage", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -112,20 +115,25 @@ func main() {
 			}
 		}
 		streams.setUnavailable(status)
+		dashboards.setUnavailable(status)
 		disconnected := 0
 		if enabled {
-			disconnected = streams.disconnect()
+			// matrix/hardened: retain legacy SSE outage coverage while reporting
+			// only dashboard disconnects; terminal WebSockets are never tracked.
+			streams.disconnect()
+			disconnected = dashboards.disconnect()
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"enabled":      enabled,
+			"status":       status,
 			"disconnected": disconnected,
 		})
 	})
 	mux.Handle("/__fixture/", store.adminHandler())
 	mux.Handle("/events/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if status := streams.unavailableStatus(); status != 0 {
-			http.Error(w, "fixture stream outage", status)
+			fixtureStreamUnavailable(w, status)
 			return
 		}
 		conn, _ := r.Context().Value(fixtureConnKey{}).(net.Conn)
@@ -133,13 +141,44 @@ func main() {
 			handler.ServeHTTP(w, r)
 			return
 		}
-		defer streams.track(conn)()
+		// matrix/hardened: atomically gate tracking against an outage so a
+		// request admitted just before disconnect cannot escape the fixture.
+		release, status := streams.track(conn)
+		if status != 0 {
+			fixtureStreamUnavailable(w, status)
+			return
+		}
+		defer release()
+		handler.ServeHTTP(w, r)
+	}))
+	// matrix/hardened: ConnContext retains the same TCP connection after the
+	// dashboard's HTTP hijack, allowing an outage to close established sockets.
+	mux.Handle("/ws/dashboard", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if status := dashboards.unavailableStatus(); status != 0 {
+			fixtureStreamUnavailable(w, status)
+			return
+		}
+		conn, _ := r.Context().Value(fixtureConnKey{}).(net.Conn)
+		if conn == nil {
+			handler.ServeHTTP(w, r)
+			return
+		}
+		release, status := dashboards.track(conn)
+		if status != 0 {
+			fixtureStreamUnavailable(w, status)
+			return
+		}
+		defer release()
 		handler.ServeHTTP(w, r)
 	}))
 	mux.Handle("/api/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if status := streams.unavailableStatus(); status != 0 {
-			http.Error(w, "fixture stream outage", status)
-			return
+		// matrix/hardened: readiness probing uses the real menu REST path;
+		// other fixture mutations remain usable while dashboard delivery is off.
+		if r.URL.Path == "/api/menu" {
+			if status := dashboards.unavailableStatus(); status != 0 {
+				fixtureStreamUnavailable(w, status)
+				return
+			}
 		}
 		handler.ServeHTTP(w, r)
 	}))
@@ -244,15 +283,34 @@ func newFixtureStreamConnections() *fixtureStreamConnections {
 	return &fixtureStreamConnections{active: make(map[net.Conn]struct{})}
 }
 
-func (s *fixtureStreamConnections) track(conn net.Conn) func() {
+// matrix/hardened: source admission and connection tracking share one lock so
+// reconnecting during a simulated outage never adds an untracked live stream.
+func (s *fixtureStreamConnections) track(conn net.Conn) (func(), int) {
 	s.mu.Lock()
+	if s.unavailable != 0 {
+		status := s.unavailable
+		s.mu.Unlock()
+		return func() {}, status
+	}
 	s.active[conn] = struct{}{}
 	s.mu.Unlock()
 	return func() {
 		s.mu.Lock()
 		delete(s.active, conn)
 		s.mu.Unlock()
+	}, 0
+}
+
+// matrix/hardened: the readiness probe sees the same structured API error
+// family in 401/503 fixtures as it does from a real unavailable backend.
+func fixtureStreamUnavailable(w http.ResponseWriter, status int) {
+	code := "SERVER_UNAVAILABLE"
+	if status == http.StatusUnauthorized {
+		code = "UNAUTHORIZED"
 	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{"code": code, "message": "fixture stream outage"}})
 }
 
 func (s *fixtureStreamConnections) setUnavailable(status int) {

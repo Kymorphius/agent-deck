@@ -177,13 +177,19 @@ type SessionMutator interface {
 
 // Server wraps an HTTP server for Agent Deck web mode.
 type Server struct {
-	cfg         Config
-	httpServer  *http.Server
-	menuData    MenuDataLoader
-	push        pushServiceAPI
-	baseCtx     context.Context
-	cancelBase  context.CancelFunc
-	hookWatcher *session.StatusFileWatcher
+	cfg        Config
+	httpServer *http.Server
+	menuData   MenuDataLoader
+	// matrix/hardened: REST/SSE/command-center/push share one demand-driven source.
+	menuPublisher *menuSnapshotPublisher
+	// matrix/hardened: derived command-center I/O runs lazily once per menu
+	// publication, shared by REST and live transports; injectable for tests.
+	commandCenterBuilder func(*MenuSnapshot) *CommandCenterSnapshot
+	commandCenterBuilds  atomic.Uint64 // matrix/hardened: safe diagnostic once-build counter.
+	push                 pushServiceAPI
+	baseCtx              context.Context
+	cancelBase           context.CancelFunc
+	hookWatcher          *session.StatusFileWatcher
 
 	menuSubscribersMu sync.Mutex
 	menuSubscribers   map[chan struct{}]struct{}
@@ -244,14 +250,39 @@ func NewServer(cfg Config) *Server {
 		s.remoteFleet = session.NewRemoteFleetScanner()
 	}
 	s.baseCtx, s.cancelBase = context.WithCancel(context.Background())
+	// matrix/hardened: overlay hooks/annotations once per owned publication,
+	// cloning the source DTO before mutation (loaders may reuse their snapshot).
+	s.menuPublisher = newMenuSnapshotPublisher(s.baseCtx, func() (*MenuSnapshot, error) {
+		snapshot, err := s.menuData.LoadMenuSnapshot()
+		if err != nil {
+			return nil, err
+		}
+		// matrix/hardened: a late uncancelable source call must not reopen
+		// annotation resources after the server lifecycle has ended.
+		if err := s.baseCtx.Err(); err != nil {
+			return nil, err
+		}
+		snapshot = cloneMenuSnapshot(snapshot)
+		refreshSnapshotHookStatuses(snapshot, s.hookStatusLoader)
+		if err := s.baseCtx.Err(); err != nil {
+			return nil, err
+		}
+		applySnapshotAnnotations(snapshot, s.annotationLoader)
+		return snapshot, nil
+	}, defaultMenuPublisherInterval)
+	s.commandCenterBuilder = func(menu *MenuSnapshot) *CommandCenterSnapshot {
+		return buildCommandCenterSnapshot(menu, s.cfg.Profile, conductorArtifactDir(), nil)
+	}
 	webLog := logging.ForComponent(logging.CompWeb)
-	if pushSvc, err := newPushService(cfg, menuData); err != nil {
+	if pushSvc, err := newPushService(cfg, s.menuPublisher); err != nil {
 		webLog.Warn("push_disabled", slog.String("error", err.Error()))
 	} else {
 		s.push = pushSvc
 	}
 
 	mux := http.NewServeMux()
+	// matrix/hardened: read-only diagnostic route has the same auth as menu REST.
+	mux.HandleFunc("/api/diagnostics/menu-publisher", s.handleMenuPublisherDiagnostics)
 	mux.HandleFunc("/", s.handleIndex)
 	mux.HandleFunc("/s/", s.handleIndex)
 	mux.HandleFunc("/g/", s.handleIndex)
@@ -301,6 +332,9 @@ func NewServer(cfg Config) *Server {
 	mux.HandleFunc("/api/push/presence", s.handlePushPresence)
 	mux.HandleFunc("/events/menu", s.handleMenuEvents)
 	mux.HandleFunc("/ws/session/", s.handleSessionWS)
+	// matrix/hardened: one push-only dashboard connection carries both feeds;
+	// upgraded sockets do not exhaust the browser's HTTP/1 request pool.
+	mux.HandleFunc("/ws/dashboard", s.handleDashboardWS)
 
 	// Feature routes (command center, costs, system, skills, MCPs) register
 	// themselves from their handlers_<feature>.go files; see routes.go.
@@ -358,6 +392,9 @@ func (s *Server) Start() error {
 		s.push.Start(s.baseCtx)
 	}
 	err := s.httpServer.ListenAndServe()
+	// matrix/hardened: the collector cannot outlive the HTTP server lifecycle.
+	s.cancelBase()
+	s.menuPublisher.Close()
 	if s.hookWatcher != nil {
 		s.hookWatcher.Stop()
 		s.hookWatcher = nil
@@ -379,6 +416,13 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	if s.cancelBase != nil {
 		// Signal long-lived handlers (SSE/WS) to stop promptly.
 		s.cancelBase()
+	}
+	// matrix/hardened: unblock subscriber and lazy-read waiters before HTTP shutdown.
+	s.menuPublisher.Close()
+	// matrix/hardened: close the reader even when Handler was embedded without
+	// Start; its permanent gate prevents a late collector from reopening it.
+	if s.annotationReader != nil {
+		s.annotationReader.close()
 	}
 	if s.hookWatcher != nil {
 		s.hookWatcher.Stop()
@@ -411,6 +455,11 @@ func (s *Server) Shutdown(ctx context.Context) error {
 var streamPathPrefixes = []string{"/events/", "/api/costs/stream"}
 
 func isStreamPath(path string) bool {
+	// matrix/hardened: dashboard WS replaces always-open SSE, while terminal
+	// WS remains active user work. Exclude only this exact dashboard route.
+	if path == "/ws/dashboard" {
+		return true
+	}
 	for _, p := range streamPathPrefixes {
 		if strings.HasPrefix(path, p) {
 			return true
@@ -510,6 +559,8 @@ func (s *Server) notifyMenuChanged() {
 	if mmd, ok := s.menuData.(*MemoryMenuData); ok {
 		mmd.InvalidateCache()
 	}
+	// matrix/hardened: a mutation wakes one shared refresh, independent of tabs.
+	s.menuPublisher.Invalidate()
 
 	s.menuSubscribersMu.Lock()
 	for ch := range s.menuSubscribers {

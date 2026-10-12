@@ -117,7 +117,7 @@ test.describe('sidebar session action buttons', () => {
 
   test('Fork button (canFork=true) POSTs fork; child is titled "<title> (fork)" by the server', async ({ page, request }) => {
     // Rewrite the initial /api/menu payload so every session reports
-    // canFork=true, and pin the SSE stream shut so the un-doctored snapshot
+    // canFork=true, and pin the dashboard feed shut so the un-doctored snapshot
     // can't flip the button back off mid-test.
     await page.route('**/api/menu', async (route) => {
       const response = await route.fetch()
@@ -127,7 +127,8 @@ test.describe('sidebar session action buttons', () => {
       }
       await route.fulfill({ response, json: body })
     })
-    await page.route('**/events/menu*', (route) => route.abort())
+    // matrix/hardened: menu updates now share the dashboard WebSocket.
+    await page.routeWebSocket('**/ws/dashboard', (route) => route.close())
 
     await gotoSidebar(page)
     const row = rowFor(page, 'agent-deck') // sess-001
@@ -140,7 +141,7 @@ test.describe('sidebar session action buttons', () => {
     await row.locator('[data-testid="session-fork-btn"]').click()
     expect((await forkResponse).status()).toBe(200)
 
-    // Server-side truth (SSE is blocked above, so assert via fixture
+    // Server-side truth (the dashboard is blocked above, so assert via fixture
     // snapshot): handlers_sessions.go ignores the client-sent
     // "agent-deck-fork" title; the fixture mutator appends " (fork)".
     const snap = await (await request.get('/__fixture/snapshot')).json()

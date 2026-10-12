@@ -305,7 +305,8 @@ func (s *Server) lookupSessionMCPTarget(sessionID string) (MCPTarget, bool) {
 	if s.menuData == nil {
 		return MCPTarget{}, false
 	}
-	snap, err := s.menuData.LoadMenuSnapshot()
+	// matrix/hardened: MCP target lookup cannot bypass the Web menu collector.
+	snap, err := s.menuPublisher.LoadMenuSnapshot()
 	if err != nil || snap == nil {
 		return MCPTarget{}, false
 	}

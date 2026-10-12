@@ -1,6 +1,7 @@
 package web
 
 import (
+	"errors"
 	"log/slog"
 	"os"
 	"sync"
@@ -68,11 +69,14 @@ const annotationCacheTTL = time.Second
 // (profile restore or migration writing a new file over the path) gets a
 // fresh handle instead of the cached one still reading the old file.
 type stateDBAnnotationReader struct {
-	mu   sync.Mutex
-	path string
-	db   *statedb.StateDB
-	fi   os.FileInfo // state.db as it was when db was opened
-	now  func() time.Time
+	mu sync.Mutex
+	// matrix/hardened: explicit server shutdown permanently closes this reader;
+	// late source calls must not reopen a database after lifecycle cleanup.
+	closed bool
+	path   string
+	db     *statedb.StateDB
+	fi     os.FileInfo // state.db as it was when db was opened
+	now    func() time.Time
 
 	cached   map[string]*statedb.InstanceAnnotations
 	cachedAt time.Time
@@ -87,6 +91,11 @@ func (r *stateDBAnnotationReader) load(profile string) (map[string]*statedb.Inst
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	// matrix/hardened: serialize the close/read boundary before stat/open or a
+	// cached success. Internal cache resets remain recoverable via closeLocked.
+	if r.closed {
+		return nil, errors.New("annotation reader is closed")
+	}
 	now := time.Now
 	if r.now != nil {
 		now = r.now
@@ -126,5 +135,8 @@ func (r *stateDBAnnotationReader) closeLocked() {
 func (r *stateDBAnnotationReader) close() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	// matrix/hardened: only explicit close ends the lifecycle; transient missing
+	// files and replacement reopen paths use closeLocked without setting this.
+	r.closed = true
 	r.closeLocked()
 }

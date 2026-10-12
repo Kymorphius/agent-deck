@@ -42,7 +42,8 @@ func (s *Server) handleSessionChildren(w http.ResponseWriter, r *http.Request, s
 		return
 	}
 
-	snapshot, err := s.menuData.LoadMenuSnapshot()
+	// matrix/hardened: child registry lookup uses the common Web publication.
+	snapshot, err := s.menuPublisher.LoadMenuSnapshot()
 	if err != nil || snapshot == nil {
 		writeAPIError(w, http.StatusInternalServerError, ErrCodeInternalError, "failed to load session data")
 		return
