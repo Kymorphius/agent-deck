@@ -458,32 +458,8 @@ body[data-rail="hidden"] .rightrail { display: none; }
   overflow: hidden;
   box-shadow: 0 20px 60px -20px rgba(0,0,0,0.5);
 }
-.term-strip {
-  display: flex; align-items: center; gap: 10px;
-  padding: 8px 12px;
-  background: linear-gradient(var(--tn-card), var(--panel));
-  border-bottom: 1px solid var(--border);
-  font-family: var(--mono); font-size: 11px; color: var(--text-dim);
-}
-.tdots { display: inline-flex; gap: 5px; }
-.tdots i {
-  display: inline-block; width: 9px; height: 9px; border-radius: 50%;
-  background: rgba(255,255,255,0.14);
-}
-.tdots i:nth-child(1) { background: #f7768e88; }
-.tdots i:nth-child(2) { background: #e0af6888; }
-.tdots i:nth-child(3) { background: #73daca88; }
-.tpath { color: var(--text); font-weight: 500; }
-/* matrix/hardened: terminal strip action (image upload). Touch-sized on phones. */
-.term-strip-btn {
-  display: inline-flex; align-items: center; gap: 5px;
-  padding: 3px 9px; border-radius: 6px;
-  border: 1px solid var(--border); background: transparent;
-  color: var(--text); font: inherit; cursor: pointer;
-}
-.term-strip-btn:hover { border-color: var(--border-hi); background: var(--card); }
-.term-strip-btn:disabled { opacity: 0.6; cursor: progress; }
-@media (pointer: coarse) { .term-strip-btn { padding: 6px 12px; font-size: 13px; } }
+/* matrix/hardened: terminal controls live in work-head at every screen size;
+   the redundant decorative strip and its styles have been removed. */
 .tmeta { font-family: var(--mono); font-size: 10.5px; color: var(--muted); }
 
 .term-body {
@@ -1470,13 +1446,11 @@ body[data-rail="hidden"] .rightrail { display: none; }
 }
 
 /* ==================== matrix/hardened: COMPACT TERMINAL HEAD ==================== */
-/* Phones and touch tablets: the terminal strip (dots, session id, Image) costs
-   a row the terminal needs. Hide it; the work head carries the short session
-   id and the Image button instead. Desktop keeps the strip. */
-.wh-image, .work-head .path .sid { display: none; }
+/* matrix/hardened: Image is a work-head action on desktop as well as touch
+   layouts. The terminal itself has no duplicate title row. */
+.wh-image { display: inline-flex; }
+.work-head .path .sid { display: none; }
 @media (max-width: 720px), (pointer: coarse) and (max-width: 1100px) {
-  .term-strip { display: none; }
-  .wh-image { display: inline-flex; }
   .work-head .path .sid {
     display: inline; flex: 0 1 auto; min-width: 0; overflow: hidden;
     font-family: var(--mono); font-size: 10.5px; color: var(--muted);
@@ -1509,6 +1483,4 @@ body[data-rail="hidden"] .rightrail { display: none; }
   .icon-btn:not(.active):hover { background: transparent; color: var(--text-dim); border-color: transparent; }
   .icon-btn:active { background: var(--card); color: var(--text); }
   .top-tab:not(.active):hover { color: var(--text-dim); background: transparent; }
-  .term-strip-btn:hover { border-color: var(--border); background: transparent; }
-  .term-strip-btn:active { border-color: var(--border-hi); background: var(--card); }
 }

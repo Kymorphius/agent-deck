@@ -120,10 +120,12 @@ test.describe('mobile phone layout', () => {
   test('terminal pane renders the selected session frame on phone', async ({ page }) => {
     await page.locator('[data-testid="fleet-session-tile"][data-session-id="sess-002"]').click()
     await expect(page.locator('.term-wrap')).toBeVisible()
-    // TerminalPanel renders the .term-frame chrome with the session id in
-    // its strip once a session is selected (no EmptyStateDashboard).
+    // matrix/hardened: the selected session is identified by the route and
+    // work head; the terminal frame no longer repeats a session-title strip.
     await expect(page.locator('.term-frame')).toBeVisible()
-    await expect(page.locator('.term-strip .tpath')).toContainText('sess-002')
+    await expect(page.locator('.xterm-screen')).toBeVisible()
+    await expect(page.locator('.work-head .cur')).toHaveText('frontend')
+    await expect(page.locator('.term-strip')).toHaveCount(0)
     await expect(page.locator('[data-testid="empty-state-dashboard"]')).toHaveCount(0)
   })
 

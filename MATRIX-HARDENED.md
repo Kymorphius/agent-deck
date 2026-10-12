@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.32`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.35`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -66,7 +66,7 @@
 - `internal/session/claude_hooks.go`：`isAgentDeckHookCommand` 的判断规则：先去掉开头的 `VAR=值`，再要求第二个词是 `hook-handler`、程序名的文件名部分是 `agent-deck`。`RemoveClaudeHooks` 会扫描全部事件，并做 UTC 时间戳备份（约 387–414 行）。
 - `cmd/agent-deck/main.go`（约 4845、5070 行）：`agent-deck uninstall` 会移除这些钩子。`uninstall.sh` 第 253 行附近的 jq 过滤用的是同一套规则（正则），写回时用 `cat >` 保持软链接和权限。
 
-**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.32`。
+**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.35`。
 
 **测试**：以 `_hardened_test.go` 结尾的文件、`update_check_disable_test.go`、`update_timer_wiring_test.go` 等是新增或调整过的测试；`testdata/goldens/*` 里的快照已经按加固后的输出更新。
 
@@ -353,3 +353,11 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 - `BenchmarkMatrixCodexRolloutPathLookup` 在 120 个合成日期目录、12,001 个日志文件上对比原始遍历与缓存命中；这是路径查找基准，不能直接当作整机或完整看板 CPU 降幅。
 - 部署后重启 Web 服务；已打开的 TUI 在会话列表按 `Ctrl+T` 原地重载。核对实际运行版本后再做 CPU 对比，安装磁盘文件不等于旧看板已加载优化。
 - **matrix/hardened:** 安装脚本的钩子状态摘要使用 `sed` 读完完整输出后显示前三行，避免 `head` 提前退出使成功安装在 `pipefail` 下报 SIGPIPE；真实钩子状态错误仍会传播。
+
+## 30. 所有尺寸移除网页终端的重复窗口头
+
+`1.16.26+matrix.35` 将终端内的三色圆点、完整会话 ID 和重复 Image 横条从组件中移除。此前 `matrix.17` 仅在手机和触屏平板隐藏横条，桌面仍然显示。
+
+- **matrix/hardened:** 所有尺寸统一使用已有会话操作栏的 Image 按钮；文件选择器仍由 `TerminalPanel` 持有并注册，上传、粘贴及只读门槛沿用现有路径。
+- **matrix/hardened:** 移除横条的样式，桌面 Image 按钮不再受手机媒体条件限制。终端获得原横条占用的高度。
+- 验证桌面、平板和手机的真实文件选择器事件，切换到 Costs 后按钮隐藏，返回 Terminal 后仍可打开；只读操作栏继续隐藏。真实页面验收需加载新构建后再核对。
