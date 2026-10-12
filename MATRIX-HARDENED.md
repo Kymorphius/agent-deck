@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.48`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.49`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -66,7 +66,7 @@
 - `internal/session/claude_hooks.go`：`isAgentDeckHookCommand` 的判断规则：先去掉开头的 `VAR=值`，再要求第二个词是 `hook-handler`、程序名的文件名部分是 `agent-deck`。`RemoveClaudeHooks` 会扫描全部事件，并做 UTC 时间戳备份（约 387–414 行）。
 - `cmd/agent-deck/main.go`（约 4845、5070 行）：`agent-deck uninstall` 会移除这些钩子。`uninstall.sh` 第 253 行附近的 jq 过滤用的是同一套规则（正则），写回时用 `cat >` 保持软链接和权限。
 
-**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.48`。
+**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.49`。
 
 **测试**：以 `_hardened_test.go` 结尾的文件、`update_check_disable_test.go`、`update_timer_wiring_test.go` 等是新增或调整过的测试；`testdata/goldens/*` 里的快照已经按加固后的输出更新。
 
@@ -453,3 +453,12 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 - **matrix/hardened:** 既有命令执行入口只统计实际启动，以固定命令类别汇总启动、完成、错误、等待壁钟时间及已等待客户端的 CPU 时间。构造命令、缓存命中和重复执行同一 Cmd 不重复计启动；异步 Start 的完成耗时不在同步指标覆盖内。
 - **matrix/hardened:** 指标仅由同用户 Unix socket 的 `monitor status` 返回，不保存参数、会话、socket 名、路径或终端内容；不新增定时器、磁盘历史、外部遥测或网络接口。
 - 等待壁钟总和可能包含并行重叠，不能当成进程 CPU。客户端 CPU 不含父进程 fork 或常驻 tmux server 的开销；这些仍需分别采样。实际查询分类和 CPU 接受结论由运行计数验证，不能把采样栈命中当作调用次数。
+
+## 39. 共享采集服务批量获取终端截图
+
+`1.16.26+matrix.49` 将同 socket 的少量只读截图查询合并到一次 tmux 命令队列，减少子进程启动，保留原状态采样节奏。
+
+- **matrix/hardened:** 每组最多四个已保留 worker 的探针，同 socket 共享一次原生调用；跨 socket 独立运行，等待 worker 前先启动已保留的小组，不能形成自锁。没有新的 attach 客户端、窗口尺寸更改或控制连接事件流。
+- **matrix/hardened:** 截图沿用原 `capture-pane -t Session.Name -p -e` 目标，包含当前窗口/窗格语义。独立 argv 的只读命令用随机边界分帧，ANSI 和空行逐字节保留；非零、超时、额外/缺失/重复边界、随机源失败或超过 8 MiB 均拒绝整批并回退原逐会话捕获。
+- **matrix/hardened:** 仅预热现有 raw capture cache，500ms 有效期从批次开始计算；过期不种入。普通捕获、Fresh 和失效的 acquisition/completion generation 拒绝旧批次覆盖新观察，已有独立采集的会话不参加批次。Fresh 继续独立子进程、绕过缓存；每次分类、确认、历史及完成时间动作沿用原探针。
+- 验证使用隔离入口：完整 monitor race、11 项 batch 和既有 capture/Fresh/发送验证/ACK/substate 回归；真实私有 tmux 核对跨 socket 同名、选中非首窗口、原始字节、子进程计数及 pane PID/尺寸保持。生产另做含计数的稳定采样，比较每轮查询数和 CPU，保留动态负载与错误回退的限制。

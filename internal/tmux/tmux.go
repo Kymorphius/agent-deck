@@ -1214,7 +1214,11 @@ type Session struct {
 	cacheMu      sync.RWMutex
 	cacheContent string
 	cacheTime    time.Time
-	captureSf    singleflight.Group // Deduplicates concurrent CapturePane subprocess calls
+	// matrix/hardened: every capture acquisition, publication and invalidation
+	// fences earlier in-flight captures, including monitor batch prefetches.
+	cacheGeneration uint64
+	cacheCaptures   int                // matrix/hardened: direct/ordinary acquisitions still running
+	captureSf       singleflight.Group // Deduplicates concurrent CapturePane subprocess calls
 
 	// Content tracking for HasUpdated (separate from StateTracker)
 	lastHash    string
@@ -1732,6 +1736,7 @@ func (s *Session) invalidateCache() {
 	defer s.cacheMu.Unlock()
 	s.cacheContent = ""
 	s.cacheTime = time.Time{}
+	s.cacheGeneration++
 	s.clearFrameTextCache()
 }
 
@@ -4160,22 +4165,19 @@ func (s *Session) CapturePane() (string, error) {
 	// Slow path: deduplicate concurrent calls via singleflight.
 	v, err, _ := s.captureSf.Do("capture", func() (interface{}, error) {
 		// Double-check cache inside singleflight
-		s.cacheMu.RLock()
-		if s.cacheContent != "" && time.Since(s.cacheTime) < 500*time.Millisecond {
-			content := s.cacheContent
-			s.cacheMu.RUnlock()
+		// matrix/hardened: reserve after the second cache check. A subsequent
+		// direct capture or invalidation cannot be overwritten by this call.
+		ticket, content, hit := s.reserveMatrixIndependentCapture(true)
+		if hit {
 			return content, nil
 		}
-		s.cacheMu.RUnlock()
+		defer ticket.finish()
 
 		// Try control mode pipe first (zero subprocess)
 		if pm := GetPipeManager(); pm != nil {
 			pipeStart := time.Now()
 			if content, pipeErr := pm.CapturePane(s.Name); pipeErr == nil {
-				s.cacheMu.Lock()
-				s.cacheContent = content
-				s.cacheTime = time.Now()
-				s.cacheMu.Unlock()
+				ticket.publish(content, time.Now())
 				logging.Aggregate(logging.CompPerf, "capture_pane_pipe",
 					slog.String("session", s.Name),
 					slog.Duration("elapsed", time.Since(pipeStart)))
@@ -4202,12 +4204,9 @@ func (s *Session) CapturePane() (string, error) {
 			return "", fmt.Errorf("failed to capture pane: %w", err)
 		}
 
-		content := string(output)
+		content = string(output)
 
-		s.cacheMu.Lock()
-		s.cacheContent = content
-		s.cacheTime = time.Now()
-		s.cacheMu.Unlock()
+		ticket.publish(content, time.Now())
 
 		return content, nil
 	})
@@ -4230,6 +4229,10 @@ func (s *Session) CapturePane() (string, error) {
 // stale pane content can hide unsent composer input.
 func (s *Session) CapturePaneFresh() (string, error) {
 	s.invalidateCache()
+	// matrix/hardened: direct acquisition remains uncached and also fences a
+	// batch or ordinary capture that was already running when it began.
+	ticket, _, _ := s.reserveMatrixIndependentCapture(false)
+	defer ticket.finish()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -4249,10 +4252,7 @@ func (s *Session) CapturePaneFresh() (string, error) {
 	}
 
 	content := string(output)
-	s.cacheMu.Lock()
-	s.cacheContent = content
-	s.cacheTime = time.Now()
-	s.cacheMu.Unlock()
+	ticket.publish(content, time.Now())
 
 	return content, nil
 }
