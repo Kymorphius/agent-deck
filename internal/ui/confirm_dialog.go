@@ -645,8 +645,8 @@ func (c *ConfirmDialog) View() string {
 	switch c.confirmType {
 	case ConfirmDeleteSession:
 		title = "⚠  Delete Session?"
-		warning = fmt.Sprintf("This will permanently delete the session:\n\n  \"%s\"", c.targetName)
-		details = "• The tmux session will be terminated\n• Any running processes will be killed\n• Terminal history will be lost"
+		warning = fmt.Sprintf("This will remove the session from Agent Deck:\n\n  \"%s\"", c.targetName)
+		details = "• The tmux session will be terminated\n• Any running processes will be killed\n• Terminal history will be lost\n• Native conversation logs are kept (p permanently deletes them)"
 		if c.worktree {
 			details += "\n• The git worktree directory will be removed"
 		}
@@ -659,7 +659,7 @@ func (c *ConfirmDialog) View() string {
 			renderButton("Delete", ColorRed, c.focusedButton == 0), "  ",
 			renderButton("Cancel", ColorAccent, c.focusedButton == 1))
 		buttons = lipgloss.JoinVertical(lipgloss.Left, buttonRow,
-			hintStyle.Render(glueHintGroups("y delete · n cancel · ←/→ navigate · Enter select · Esc")))
+			hintStyle.Render(glueHintGroups("y delete · p permanent delete (preview) · n cancel · ←/→ navigate · Enter select · Esc")))
 
 	case ConfirmArchiveSession, ConfirmArchiveRemoteSession:
 		title = "Archive Session?"

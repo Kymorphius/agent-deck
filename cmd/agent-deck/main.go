@@ -45,7 +45,7 @@ import (
 )
 
 // matrix/hardened: identifies our hardened build.
-var Version = "1.16.26+matrix.39" // overridden at build time via -ldflags "-X main.Version=..."
+var Version = "1.16.26+matrix.40" // overridden at build time via -ldflags "-X main.Version=..."
 
 // Table column widths for list command output
 const (
@@ -3317,6 +3317,10 @@ func listParentProjectPath(inst *session.Instance, instances []*session.Instance
 // handleRemove removes a session by ID or title
 func handleRemove(profile string, args []string) {
 	fs := flag.NewFlagSet("remove", flag.ExitOnError)
+	// matrix/hardened: explicit permanent deletion, separate from ordinary remove.
+	purge := fs.Bool("purge", false, "Permanently delete local native history, recall and costs")
+	dryRun := fs.Bool("dry-run", false, "Preview permanent deletion without changes")
+	yes := fs.Bool("yes", false, "Confirm permanent deletion without prompting")
 	jsonOutput := fs.Bool("json", false, "Output as JSON")
 	quiet := fs.Bool("quiet", false, "Minimal output")
 	quietShort := fs.Bool("q", false, "Minimal output (short)")
@@ -3325,6 +3329,8 @@ func handleRemove(profile string, args []string) {
 		fmt.Println("Usage: agent-deck remove <id|title>")
 		fmt.Println()
 		fmt.Println("Remove a session by ID or title.")
+		fmt.Println("  --purge --dry-run   Preview permanent deletion (Claude/Codex, local only)")
+		fmt.Println("  --purge            Preview and confirm permanent deletion; --yes for automation")
 		fmt.Println()
 		fmt.Println("Examples:")
 		fmt.Println("  agent-deck remove abc12345")
@@ -3366,6 +3372,17 @@ func handleRemove(profile string, args []string) {
 
 	removedID := inst.ID
 	removedTitle := inst.Title
+	if *purge {
+		if err := runPermanentDelete(storage, inst, *dryRun, *yes, *jsonOutput); err != nil {
+			out.Error(err.Error(), ErrCodeInvalidOperation)
+			os.Exit(1)
+		}
+		return
+	}
+	if *dryRun || *yes {
+		out.Error("--dry-run/--yes require --purge", ErrCodeInvalidOperation)
+		os.Exit(1)
+	}
 
 	// Snapshot service-unit ownership BEFORE teardown (issue #1721): the
 	// pid of the tmux server generation this session belongs to is only
