@@ -1,4 +1,4 @@
-// terminalImage.js -- matrix/hardened: the terminal strip's image button.
+// terminalImage.js -- matrix/hardened: the work head's image button.
 //
 // A phone cannot paste a screenshot into a tmux pane, and the host cannot see
 // the phone's files. So the button uploads each picked image to the host
@@ -12,9 +12,9 @@
 // and arrives bracketed. No DOM or xterm import here: upload and paste are
 // passed in, which keeps this module unit-testable on its own.
 //
-// On phones the terminal strip is hidden and the button sits in the work head
-// instead (AppShell.js). The file input stays in TerminalPanel, which owns the
-// pane; it registers its picker here and the work head opens it.
+// matrix/hardened: the button sits in the work head at every screen size
+// (AppShell.js). The file input stays in TerminalPanel, which owns the pane;
+// it registers its picker here and the work head opens it.
 import { signal } from '@preact/signals'
 
 export const imageUploadingSignal = signal(false)

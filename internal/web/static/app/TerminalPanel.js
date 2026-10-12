@@ -5,7 +5,6 @@ import { useEffect, useRef, useCallback, useState } from 'preact/hooks'
 import { effect } from '@preact/signals'
 import { selectedIdSignal, sessionsSignal, authTokenSignal, wsStateSignal, readOnlySignal } from './state.js'
 import { apiFetch, uploadSessionImage } from './api.js'
-import { Icon, ICONS } from './icons.js'
 import { addToast } from './toasts.js'
 import { uploadImagesToPane, imageUploadingSignal, registerImagePicker } from './terminalImage.js'
 import { Terminal } from '@xterm/xterm'
@@ -52,7 +51,6 @@ export function TerminalPanel() {
   const [reconnectKey, setReconnectKey] = useState(0)
   // matrix/hardened: image upload button state (handleImagePick below).
   const imageInputRef = useRef(null)
-  const uploading = imageUploadingSignal.value
   useEffect(() => registerImagePicker(() => imageInputRef.current?.click()), [])
 
   // Signal vanilla app.js to suppress its terminal path while TerminalPanel is mounted
@@ -503,22 +501,14 @@ export function TerminalPanel() {
   // The `.term-wrap` parent (provided by panes/TerminalPane.js) supplies
   // outer padding and flex sizing, so this component only renders the
   // inner frame + xterm canvas.
+  // matrix/hardened: all sizes use the existing work-head actions; retain the
+  // picker in the terminal without a second decorative header.
   return html`
     <div class="term-frame" style="position: relative;">
-      <div class="term-strip">
-        <span class="tdots"><i/><i/><i/></span>
-        <span class="tpath">session · ${sessionId}</span>
-        <span style="flex: 1;"/>
-        ${!readOnlySignal.value && html`
-          <button type="button" class="term-strip-btn" title="Send an image to this session"
-                  disabled=${uploading} onClick=${() => imageInputRef.current?.click()}>
-            <${Icon} d=${ICONS.image} size=${13}/>
-            <span>${uploading ? 'Uploading…' : 'Image'}</span>
-          </button>
-          <input ref=${imageInputRef} type="file" accept="image/png,image/jpeg,image/gif,image/webp"
-                 multiple hidden onChange=${handleImagePick}/>
-        `}
-      </div>
+      ${!readOnlySignal.value && html`
+        <input ref=${imageInputRef} type="file" accept="image/png,image/jpeg,image/gif,image/webp"
+               multiple hidden onChange=${handleImagePick}/>
+      `}
       <div style="flex: 1; min-height: 0; min-width: 0; overflow: hidden; padding: 14px 16px;">
         <div ref=${containerRef} style="height: 100%; width: 100%; overflow: hidden;"/>
       </div>
