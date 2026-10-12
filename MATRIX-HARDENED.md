@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.39`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.40`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -66,7 +66,7 @@
 - `internal/session/claude_hooks.go`：`isAgentDeckHookCommand` 的判断规则：先去掉开头的 `VAR=值`，再要求第二个词是 `hook-handler`、程序名的文件名部分是 `agent-deck`。`RemoveClaudeHooks` 会扫描全部事件，并做 UTC 时间戳备份（约 387–414 行）。
 - `cmd/agent-deck/main.go`（约 4845、5070 行）：`agent-deck uninstall` 会移除这些钩子。`uninstall.sh` 第 253 行附近的 jq 过滤用的是同一套规则（正则），写回时用 `cat >` 保持软链接和权限。
 
-**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.39`。
+**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.40`。
 
 **测试**：以 `_hardened_test.go` 结尾的文件、`update_check_disable_test.go`、`update_timer_wiring_test.go` 等是新增或调整过的测试；`testdata/goldens/*` 里的快照已经按加固后的输出更新。
 
@@ -399,3 +399,14 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 - **matrix/hardened:** 终端输出只唤醒本窗口读取已有观察；实际操作才请求新采样。窗口心跳、通知交互与预览保持，既有 idle timeout 和 conductor compact 动作由 profile 的 primary TUI 执行。
 - **matrix/hardened:** 安装后需分别核对 Web、monitor 以及 TUI 的实际运行版本。旧 TUI 仍运行旧构建，列表上的 `Ctrl+T` 原地重载后才接入共享服务；AI tmux pane 无需重启。
 - 验证包含多个 Unix 消费者共用一次采集、暂停与唤醒、有界历史和大小边界、失败恢复、同 ID 的 profile 隔离、慢调用与代次、确认与新回合、完整状态及消费者零全量探针；使用第 4 节隔离入口。真实验收另核对构建映射、socket 权限、采集计数、稳定 CPU 与 AI pane 身份。
+
+## 34. 本地会话永久删除
+
+`1.16.26+matrix.40` 增加普通删除之外的永久删除入口。主界面选中会话按 `d`，在确认框按 `p` 打开终端预览，再输入 `DELETE` 确认。CLI 为 `agent-deck remove --purge <id>`；`--dry-run` 只预览，`--yes` 显式确认，JSON 模式要求这两者之一。
+
+- 支持本地、非容器的 Claude/Codex 会话；先按当前及历史原生 ID 定位，再检查各 profile 的共享引用。远程、混合 harness 历史或共享对话拒绝执行。
+- 停止目标进程后清理原生日志、Claude 会话快照/子代理文件、原生历史 JSONL 中匹配的行及 Codex 线程数据库行；保留项目/worktree 文件。
+- 删除 recall 的目标及其子代理索引、FTS、费用、最近配置项、提示/标签、通知与钩子记录；仅保留不含正文的 deck ID 删除标记，阻止旧进程恢复会话/费用。
+- 历史 JSONL 匹配行原位置空，保持 inode、文件长度和其他进程的追加写入。跨文件和数据库无法形成单一事务；任何步骤失败均报告未完成，不能当作成功。
+- 不清除其他 fork 中已复制的正文、外部备份、云端数据或物理存储残留，也不提供安全擦除保证。
+- 验证：`TestPermanentDelete*` 使用隔离环境里的合成日志和数据库，覆盖预览、明确确认、共享引用/计划变化/外部符号链接拒绝、邻居数据及追加历史保留、索引清理和费用防复活。

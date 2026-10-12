@@ -1547,6 +1547,8 @@ func (h *Home) stackedPreviewTopY() int {
 }
 
 // Messages
+// matrix/hardened: keep the child CLI completion on Bubble Tea's update loop.
+type permanentDeleteResultMsg struct{ err error }
 type loadSessionsMsg struct {
 	loadSequence      uint64
 	loadWatcher       *StorageWatcher
@@ -7762,6 +7764,12 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return h, tea.Batch(h.fetchPreview(inst, key, winIdx), h.scheduleEmbeddedRefresh())
 
+	case permanentDeleteResultMsg:
+		if msg.err != nil {
+			h.setError(fmt.Errorf("permanent deletion: %w", msg.err))
+			return h, nil
+		}
+		return h, h.sessionLoadCmd(nil, false)
 	case loadSessionsMsg:
 		if msg.loadSequence != 0 && (msg.loadSequence != h.sessionLoadSequence || msg.loadWatcher != h.storageWatcher) {
 			return h, nil
@@ -13446,6 +13454,20 @@ func (h *Home) attachSelectedLegacy() tea.Cmd {
 
 // handleConfirmDialogKey handles keys when confirmation dialog is visible
 func (h *Home) handleConfirmDialogKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// matrix/hardened: 'p' from Delete opens the exact deletion preview and
+	// typed confirmation in a child CLI. Ordinary 'd' and 'D' keep their meaning.
+	if msg.String() == "p" && h.confirmDialog.GetConfirmType() == ConfirmDeleteSession {
+		id := h.confirmDialog.GetTargetID()
+		binary, err := os.Executable()
+		if err != nil {
+			h.setError(err)
+			return h, nil
+		}
+		h.confirmDialog.Hide()
+		return h, tea.ExecProcess(exec.Command(binary, "-p", h.storage.Profile(), "remove", "--purge", id), func(err error) tea.Msg {
+			return permanentDeleteResultMsg{err: err}
+		})
+	}
 	// Let the dialog handle arrow/tab navigation first.
 	h.confirmDialog.Update(msg)
 

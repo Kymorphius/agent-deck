@@ -1389,3 +1389,22 @@ Built with [Bubble Tea](https://github.com/charmbracelet/bubbletea) and [tmux](h
 **[Docs](skills/agent-deck/references/) . [Discord](https://discord.gg/e4xSs6NBN8) . [Issues](https://github.com/asheshgoplani/agent-deck/issues) . [Discussions](https://github.com/asheshgoplani/agent-deck/discussions)**
 
 </div>
+
+### Permanently delete local conversation records
+
+<!-- matrix/hardened: explicit preview and confirmation; ordinary delete is unchanged. -->
+Select a local Claude/Codex session, press `d`, then `p` in the delete dialog.
+Review the exact native IDs and transcript paths, then type `DELETE` to confirm.
+The command-line equivalent is:
+
+```bash
+agent-deck remove --purge --dry-run <session-id>
+agent-deck remove --purge <session-id>
+```
+
+Use `--yes` only for an explicitly confirmed automated deletion. Permanent
+removal stops the target, deletes its native transcript/history records and
+agent-deck recall/cost/recent records, and creates no undo entry. Shared native
+conversations, remote/sandbox sessions and mixed-harness history are refused.
+Project/worktree files are preserved. Copies in other forks, external backups,
+cloud records and physical storage remnants are outside this operation.
