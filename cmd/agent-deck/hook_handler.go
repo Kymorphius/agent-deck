@@ -266,28 +266,59 @@ func mapEventToStatus(event string) string {
 
 // handleHookHandler processes a Claude Code hook event.
 // Reads JSON from stdin, maps the event to a status, and writes a status file.
-// Always exits 0 to avoid blocking Claude Code.
+// matrix/hardened: legacy test callers do not terminate the process; the CLI
+// dispatcher handles the explicit prompt-protection blocking exit code.
 func handleHookHandler() {
+	_ = handleHookHandlerExitCode()
+}
+
+// matrix/hardened: only an opted-in Claude prompt rejection returns 2. All
+// existing status/context paths keep their original non-blocking behavior.
+func handleHookHandlerExitCode() (exitCode int) {
 	instanceID := os.Getenv("AGENTDECK_INSTANCE_ID")
-	if instanceID == "" {
-		// No instance ID means this Claude session isn't managed by agent-deck.
-		// Exit silently without error.
+	instanceValid := instanceID != "" && validInstanceID.MatchString(instanceID) && !strings.Contains(instanceID, "..")
+	guardState := readHookPromptGuardState()
+	// matrix/hardened: retain the no-stdin fast path when message protection
+	// is absent, including sessions not managed by agent-deck.
+	if !instanceValid && !guardState.enabled {
 		return
 	}
 
-	// Validate instance ID to prevent path traversal via crafted env vars.
-	if !validInstanceID.MatchString(instanceID) || strings.Contains(instanceID, "..") {
-		return
+	var data []byte
+	var err error
+	// matrix/hardened: scan guard metadata through EOF without retaining large
+	// prompts; then keep the legacy handler's original 1 MiB payload behavior.
+	if guardState.enabled {
+		metadata, prefix, scanErr := readHookPromptMetadata(os.Stdin)
+		if scanErr != nil {
+			if isClaudePromptGuardEvent(metadata) {
+				fmt.Fprintln(os.Stderr, "Claude 本机消息保护：消息钩子数据无效，已阻止本条消息；请检查钩子配置后重试。")
+				return 2
+			}
+			return
+		}
+		if rejectHookPromptGuard(guardState, metadata) {
+			return 2
+		}
+		if len(prefix) > maxHookPayloadSize {
+			return
+		}
+		data = prefix
+	} else {
+		// Read stdin with size limit to prevent DoS via oversized payloads.
+		data, err = io.ReadAll(io.LimitReader(os.Stdin, maxHookPayloadSize))
 	}
-
-	// Read stdin with size limit to prevent DoS via oversized payloads.
-	data, err := io.ReadAll(io.LimitReader(os.Stdin, maxHookPayloadSize))
 	if err != nil || len(data) == 0 {
 		return
 	}
 
 	var payload hookPayload
 	if err := json.Unmarshal(data, &payload); err != nil {
+		return
+	}
+	// matrix/hardened: guard before ID/cwd early exits or any spool, running
+	// status, or inbox consumption. Host protection also covers unmanaged CLI.
+	if !instanceValid {
 		return
 	}
 
@@ -464,6 +495,7 @@ func handleHookHandler() {
 			}
 		}
 	}
+	return // matrix/hardened: successful hook paths retain exit code zero.
 }
 
 // stopHookDrainEnabled reports whether this Stop hook may drain the parent's

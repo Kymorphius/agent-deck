@@ -582,7 +582,11 @@ func main() {
 			handleMigratePaths(args[1:])
 			return
 		case "hook-handler":
-			handleHookHandler()
+			// matrix/hardened: Claude blocks UserPromptSubmit on exit 2; tests
+			// call the returning handler without terminating their process.
+			if exitCode := handleHookHandlerExitCode(); exitCode != 0 {
+				os.Exit(exitCode)
+			}
 			return
 		case "codex-notify":
 			handleCodexNotify()
