@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.41`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.42`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -66,7 +66,7 @@
 - `internal/session/claude_hooks.go`：`isAgentDeckHookCommand` 的判断规则：先去掉开头的 `VAR=值`，再要求第二个词是 `hook-handler`、程序名的文件名部分是 `agent-deck`。`RemoveClaudeHooks` 会扫描全部事件，并做 UTC 时间戳备份（约 387–414 行）。
 - `cmd/agent-deck/main.go`（约 4845、5070 行）：`agent-deck uninstall` 会移除这些钩子。`uninstall.sh` 第 253 行附近的 jq 过滤用的是同一套规则（正则），写回时用 `cat >` 保持软链接和权限。
 
-**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.41`。
+**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.42`。
 
 **测试**：以 `_hardened_test.go` 结尾的文件、`update_check_disable_test.go`、`update_timer_wiring_test.go` 等是新增或调整过的测试；`testdata/goldens/*` 里的快照已经按加固后的输出更新。
 
@@ -418,4 +418,6 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 - **matrix/hardened:** 锁目录为 0700，稳定锁文件为 0600；校验目录和文件身份、所有者、链接数及权限，拒绝不安全路径。锁中 PID 仅供诊断，排他性由内核 flock 保证，关闭时不删除锁文件。
 - **matrix/hardened:** 非持锁窗口每 30 秒重试接管；持锁进程退出后内核释放锁，等待窗口可继续采集。读取与数据库关闭完成后才释放锁，取消和重复停止保持安全。
 - **matrix/hardened:** 持锁进程保留完整首次读取和增量 tail，沿用请求 ID 去重，不通过跳至日志末尾丢弃历史费用。只读会话存储使用已经解析的 profile，不增加状态采样或会话写回。
+- **matrix/hardened:** `matrix.42` 的成本读取先使用标准 JSON 解码识别记录类型，只将模型和用量记录送入原解析逻辑；不解码、拼接或分类聊天正文和工具输出。Recall 的完整对话解析与日志扫描边界保持原样；费用事件与原解析器做差分核对。
+- **matrix/hardened:** 普通 CLI 的认证状态写删也要先匹配数据库中的当前启动身份，再在相同数据水位事务内执行；旧 CLI 不能借用替换会话的新水位修改其认证 hold。
 - 验证：隔离 race 覆盖 1/4/16 消费者只进行一次首次读取、关闭前拒绝接管、真实子进程退出接管、profile 隔离、取消、稳定 inode 及不安全路径；并运行既有费用完整性、增量读取和去重回归。真实验收分别记录启动与稳定 CPU，核对运行构建、唯一持锁进程及 AI pane 身份。
