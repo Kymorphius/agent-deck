@@ -13,6 +13,6 @@
       carol  ×2  since 09:10  from 10.0.0.5                 
       bob    ×1  since 11:02  from 10.0.0.9                 
                                                             
-        • Press Enter on a session to attach via SSH        
+          • Press o on a session to attach via SSH          
                                                             
                                                             

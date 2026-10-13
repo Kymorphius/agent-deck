@@ -8,6 +8,6 @@
     agent-deck v1.16.9 · older than here (update available)    
     accounts unknown (remote does not report accounts)         
                                                                
-         • Press Enter on a session to attach via SSH          
+           • Press o on a session to attach via SSH            
                                                                
                                                                

@@ -45,7 +45,7 @@ import (
 )
 
 // matrix/hardened: identifies our hardened build.
-var Version = "1.16.26+matrix.62" // matrix/hardened: bounded Codex capacity retry; overridden via -ldflags.
+var Version = "1.16.26+matrix.65" // matrix/hardened: o opens sessions; overridden via -ldflags.
 
 // Table column widths for list command output
 const (
@@ -2847,7 +2847,7 @@ func handleAddCommand(profile string, args []string, inspectFlags func(*flag.Fla
 	humanLines = append(humanLines, "")
 	humanLines = append(humanLines, "Next steps:")
 	humanLines = append(humanLines, fmt.Sprintf("  agent-deck session start %s   # Start the session", sessionTitle))
-	humanLines = append(humanLines, "  agent-deck                         # Open TUI and press Enter to attach")
+	humanLines = append(humanLines, "  agent-deck                         # Open TUI and press o to attach")
 
 	// Build JSON data
 	jsonData := map[string]interface{}{
@@ -2904,7 +2904,7 @@ func handleAddCommand(profile string, args []string, inspectFlags func(*flag.Fla
 		)
 		humanLines = append(humanLines, "", "Next steps:",
 			fmt.Sprintf("  agent-deck session start %s   # Start the session", sessionTitle),
-			"  agent-deck                         # Open TUI and press Enter to attach",
+			"  agent-deck                         # Open TUI and press o to attach",
 		)
 	}
 
@@ -4738,7 +4738,8 @@ func printHelp() {
 	fmt.Println("Keyboard shortcuts (in TUI):")
 	fmt.Println("  n          New session")
 	fmt.Println("  g          New group")
-	fmt.Println("  Enter      Attach to session (with [ui].embedded_terminal = true: focus the embedded terminal pane)")
+	// matrix/hardened: o is the primary session-open shortcut.
+	fmt.Println("  o / Enter  Attach to session (with [ui].embedded_terminal = true: focus the embedded terminal pane)")
 	fmt.Println("  m          MCP Manager")
 	fmt.Println("  s          Skills Manager")
 	fmt.Println("  C          Inspect context (what is loaded into every turn)")

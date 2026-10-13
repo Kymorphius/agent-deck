@@ -15,6 +15,6 @@
       +11 more                                              
     ssh  6 users · 45 sessions                              
                                                             
-        • Press Enter on a session to attach via SSH        
+          • Press o on a session to attach via SSH          
                                                             
                                                             

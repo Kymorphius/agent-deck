@@ -255,7 +255,9 @@ func (h *HelpOverlay) View() string {
 	scrollbackKey := ResolvedScrollbackTrigger(session.GetHotkeyOverrides()).Label()
 	unreadKey := h.key(hotkeyMarkUnread, "u")
 	quickApproveKey := h.key(hotkeyQuickApprove, "a")
-	promptSessionKey := h.key(hotkeyPromptSession, "o")
+	// matrix/hardened: show the configured opening key and the compatible Enter alias separately from prompting.
+	openSessionKey := joinHotkeyLabels(h.key(hotkeyOpenSession, "o"), "Enter")
+	promptSessionKey := h.key(hotkeyPromptSession, "alt+o")
 	copyKey := h.key(hotkeyCopyOutput, "c")
 	copyPaneKey := h.key(hotkeyCopyPane, "V")
 	yoloKey := h.key(hotkeyToggleYolo, "y")
@@ -310,14 +312,14 @@ func (h *HelpOverlay) View() string {
 	if h.embeddedLayout {
 		quickStartEnter = "Focus embedded terminal for selected session"
 		navigationItems = append(navigationItems,
-			[2]string{"Enter", "Focus embedded terminal / toggle group"},
+			[2]string{openSessionKey, "Focus embedded terminal / toggle group"}, // matrix/hardened
 			[2]string{"Alt+Enter", "Full-screen attach"},
 			[2]string{"Shift+Enter", "Open session in new iTerm window (macOS)"},
 			[2]string{"Alt+V", "Toggle grouped / flat agent sidebar"},
 		)
 	} else {
 		navigationItems = append(navigationItems,
-			[2]string{"Enter", "Attach to session / toggle group"},
+			[2]string{openSessionKey, "Attach to session / toggle group"}, // matrix/hardened
 			[2]string{"Shift+Enter", "Open session in new iTerm window (macOS)"},
 		)
 	}
@@ -329,7 +331,7 @@ func (h *HelpOverlay) View() string {
 		{
 			title: "QUICK START",
 			items: [][2]string{
-				{"Enter", quickStartEnter},
+				{openSessionKey, quickStartEnter}, // matrix/hardened: primary open key follows configuration.
 				{restartKey, "Restart selected session"},
 				{detachKey + " / Alt+Q", "Detach from session"}, // matrix/hardened: Alt+Q too
 				{helpKey, "Open this help"},

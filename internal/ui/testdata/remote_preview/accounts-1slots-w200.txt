@@ -11,6 +11,6 @@
     accounts  1 slot · 5h 90%                                         
       alice-team-a  5h 90%  7d 40%  6 min ago                         
                                                                       
-             • Press Enter on a session to attach via SSH             
+               • Press o on a session to attach via SSH               
                                                                       
                                                                       

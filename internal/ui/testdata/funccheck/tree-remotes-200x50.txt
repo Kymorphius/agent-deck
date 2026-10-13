@@ -2,6 +2,6 @@
 2    └─ ○ local-last claude
 3   ▾ remotes/lab (2)
 4     ▾ work (2)
-5       └─ ○ remote-root claude
+5       └─ ○ remote-root claude                                                                                                                                                                         
 6       ▾ api (1)
-7         └─ ○ remote-nested claude
+7         └─ ○ remote-nested claude                                                                                                                                                                     

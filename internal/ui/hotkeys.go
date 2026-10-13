@@ -9,6 +9,7 @@ import (
 
 const (
 	hotkeyQuit             = "quit"
+	hotkeyOpenSession      = "open_session" // matrix/hardened: rebindable session opening, with Enter kept as an alias.
 	hotkeyNewSession       = "new_session"
 	hotkeyQuickCreate      = "quick_create"
 	hotkeyRename           = "rename"
@@ -119,6 +120,7 @@ const defaultScrollbackTrigger = "pageup"
 
 var hotkeyActionOrder = []string{
 	hotkeyQuit,
+	hotkeyOpenSession, // matrix/hardened: resolve the primary session-opening action early.
 	hotkeyNewSession,
 	hotkeyQuickCreate,
 	hotkeyRename,
@@ -181,6 +183,7 @@ var hotkeyActionOrder = []string{
 
 var defaultHotkeyBindings = map[string]string{
 	hotkeyQuit:             "q",
+	hotkeyOpenSession:      "o", // matrix/hardened: open the selected session with lowercase o.
 	hotkeyNewSession:       "n",
 	hotkeyQuickCreate:      "N",
 	hotkeyRename:           "r",
@@ -202,7 +205,7 @@ var defaultHotkeyBindings = map[string]string{
 	hotkeyCycleTimeFilter:  "*",
 	hotkeyMarkUnread:       "u",
 	hotkeyQuickApprove:     "a",
-	hotkeyPromptSession:    "o",
+	hotkeyPromptSession:    "alt+o", // matrix/hardened: retain inline prompting without claiming the open-session key.
 	hotkeyToggleYolo:       "y",
 	hotkeyQuickFork:        "f",
 	hotkeyForkInPlace:      "alt+f", // matrix/hardened: explicit fork without a new worktree.

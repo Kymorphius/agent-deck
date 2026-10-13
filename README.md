@@ -121,9 +121,11 @@ agent-deck web                    # Start web UI on http://127.0.0.1:8420
 
 ### Key Shortcuts
 
+<!-- matrix/hardened: lowercase o opens sessions; Enter stays compatible and prompting moves to Alt+O. -->
 | Key | Action |
 |-----|--------|
-| `Enter` | Attach to session |
+| `o` / `Enter` | Attach to session |
+| `Alt+O` | Prompt Claude session without attaching |
 | `Ctrl+Q` | Detach from session |
 | `n` | New session |
 | `f` / `F` | Fork (quick / dialog) |

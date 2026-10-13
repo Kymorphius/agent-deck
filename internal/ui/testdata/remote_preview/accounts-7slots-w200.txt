@@ -17,6 +17,6 @@
       alice-team-b    —       —       no feed                         
       carol-team-b    —       —       no feed                         
                                                                       
-             • Press Enter on a session to attach via SSH             
+               • Press o on a session to attach via SSH               
                                                                       
                                                                       
