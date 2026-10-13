@@ -16,7 +16,7 @@ import (
 	"github.com/asheshgoplani/agent-deck/internal/winipc"
 )
 
-const version = "0.1.0+matrix.prototype"
+const version = "0.2.0+matrix.prototype"
 
 func main() {
 	if err := run(os.Args[1:], os.Stdout, os.Stderr); err != nil {
@@ -26,6 +26,9 @@ func main() {
 }
 
 func run(args []string, stdout, stderr io.Writer) error {
+	if len(args) == 0 {
+		args = []string{"ui"}
+	}
 	if len(args) == 1 && (args[0] == "--version" || args[0] == "version") {
 		_, err := fmt.Fprintln(stdout, "agent-deck-native", version, "(experimental Windows native terminal prototype)")
 		return err
@@ -37,13 +40,23 @@ func run(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	if isFleetCommand(config.Command) {
+		return runFleet(config, stdout, stderr)
+	}
 	switch config.Command {
 	case "host":
 		return runHost(config, stdout)
 	case "attach":
 		return runAttach(config, os.Stdin, os.Stdout, stderr)
 	}
-	request := terminalhost.Request{Op: config.Command, Data: config.Data, After: config.After, Cols: config.Cols, Rows: config.Rows}
+	request := terminalhost.Request{Op: config.Command, Data: config.Data, After: config.After, Cols: config.Cols, Rows: config.Rows, SessionID: config.SessionID, RunID: config.RunID}
+	if config.SessionID != "" && config.RunID == "" && (config.Command == "send" || config.Command == "resize" || config.Command == "stop") {
+		info, err := lookupSession(context.Background(), config.Pipe, config.SessionID)
+		if err != nil {
+			return err
+		}
+		request.RunID = info.RunID
+	}
 	response, err := callHost(context.Background(), config.Pipe, request)
 	if err != nil {
 		return err

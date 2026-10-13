@@ -9,6 +9,8 @@ import (
 	"io"
 	"net"
 	"time"
+
+	"github.com/asheshgoplani/agent-deck/internal/conpty"
 )
 
 const (
@@ -30,31 +32,74 @@ type Process interface {
 }
 
 type Request struct {
-	Op    string `json:"op"`
-	Data  []byte `json:"data,omitempty"`
-	After uint64 `json:"after,omitempty"`
-	Cols  int    `json:"cols,omitempty"`
-	Rows  int    `json:"rows,omitempty"`
+	Op        string      `json:"op"`
+	Data      []byte      `json:"data,omitempty"`
+	After     uint64      `json:"after,omitempty"`
+	Cols      int         `json:"cols,omitempty"`
+	Rows      int         `json:"rows,omitempty"`
+	SessionID string      `json:"session_id,omitempty"`
+	RunID     string      `json:"run_id,omitempty"`
+	Name      string      `json:"name,omitempty"`
+	Tool      string      `json:"tool,omitempty"`
+	Launch    *LaunchSpec `json:"launch,omitempty"`
+	AutoStart bool        `json:"auto_start,omitempty"`
+}
+
+// LaunchSpec stores argv/env/cwd, never a command composed by the manager.
+// matrix/hardened: the multi-session manager persists explicit user launches.
+type LaunchSpec struct {
+	Executable string   `json:"executable"`
+	Args       []string `json:"args,omitempty"`
+	Env        []string `json:"env,omitempty"`
+	Dir        string   `json:"dir"`
+	Cols       int      `json:"cols"`
+	Rows       int      `json:"rows"`
+}
+
+func ValidateLaunchSpec(launch LaunchSpec) error {
+	if !validSize(launch.Cols, launch.Rows) {
+		return fmt.Errorf("terminal dimensions must be 1..500 by 1..300")
+	}
+	return conpty.ValidateOptions(conpty.Options{Executable: launch.Executable, Args: launch.Args, Env: launch.Env, Dir: launch.Dir, Cols: launch.Cols, Rows: launch.Rows})
+}
+
+// SessionInfo describes observed process state, not an AI task's semantic state.
+type SessionInfo struct {
+	ID        string    `json:"id"`
+	Name      string    `json:"name"`
+	Tool      string    `json:"tool"`
+	Dir       string    `json:"dir"`
+	State     string    `json:"state"`
+	PID       uint32    `json:"pid,omitempty"`
+	HostPID   int       `json:"host_pid,omitempty"`
+	RunID     string    `json:"run_id,omitempty"`
+	ExitCode  *uint32   `json:"exit_code,omitempty"`
+	Error     string    `json:"error,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 type Response struct {
-	OK          bool    `json:"ok"`
-	Error       string  `json:"error,omitempty"`
-	PID         uint32  `json:"pid"`
-	HostPID     int     `json:"host_pid"`
-	Running     bool    `json:"running"`
-	ExitCode    *uint32 `json:"exit_code,omitempty"`
-	Cols        int     `json:"cols"`
-	Rows        int     `json:"rows"`
-	StartOffset uint64  `json:"start_offset"`
-	EndOffset   uint64  `json:"end_offset"`
-	HeadOffset  uint64  `json:"head_offset"`
-	Truncated   bool    `json:"truncated,omitempty"`
-	Output      []byte  `json:"output,omitempty"`
-	Screen      string  `json:"screen,omitempty"`
-	Render      string  `json:"render,omitempty"`
-	CursorX     int     `json:"cursor_x"`
-	CursorY     int     `json:"cursor_y"`
+	OK          bool          `json:"ok"`
+	Error       string        `json:"error,omitempty"`
+	PID         uint32        `json:"pid"`
+	HostPID     int           `json:"host_pid"`
+	Running     bool          `json:"running"`
+	ExitCode    *uint32       `json:"exit_code,omitempty"`
+	Cols        int           `json:"cols"`
+	Rows        int           `json:"rows"`
+	StartOffset uint64        `json:"start_offset"`
+	EndOffset   uint64        `json:"end_offset"`
+	HeadOffset  uint64        `json:"head_offset"`
+	Truncated   bool          `json:"truncated,omitempty"`
+	Output      []byte        `json:"output,omitempty"`
+	Screen      string        `json:"screen,omitempty"`
+	Render      string        `json:"render,omitempty"`
+	CursorX     int           `json:"cursor_x"`
+	CursorY     int           `json:"cursor_y"`
+	SessionID   string        `json:"session_id,omitempty"`
+	RunID       string        `json:"run_id,omitempty"`
+	Sessions    []SessionInfo `json:"sessions,omitempty"`
 }
 
 // Call performs one request; the caller retains ownership of the connection.

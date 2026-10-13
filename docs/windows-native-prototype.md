@@ -3,9 +3,10 @@
 <!-- matrix/hardened: document the isolated experiment without claiming that the complete app is ported. -->
 
 `agent-deck-native` 是独立的 Windows 原生终端实验，版本为
-`0.1.0+matrix.prototype`。它不依赖 WSL 或 tmux，使用 ConPTY 启动一个
+`0.2.0+matrix.prototype`。它不依赖 WSL 或 tmux，使用 ConPTY 启动
 交互式子进程，通过本机命名管道提供输入、输出、截图、缩放和停止操作。
-它还没有接入现有 Agent Deck 的会话列表、分组、数据库、Web 页面或工具状态识别。
+第二阶段增加了独立的中文多会话列表、SQLite 注册库和管理进程；
+尚未接入现有 Agent Deck 的分组、生产数据库、Web 页面或工具状态识别。
 现有 macOS/Linux 程序继续沿用原来的入口。
 
 ## 构建
@@ -30,6 +31,71 @@ go build -trimpath -o .\agent-deck-native.exe .\cmd\agent-deck-native
 ```
 
 非 Windows 平台可以编译和测试参数解析，但运行命名管道或 ConPTY 会明确报错。
+
+## 多会话列表
+
+在第一个 PowerShell 终端运行管理进程：
+
+```powershell
+.\agent-deck-native.exe serve
+```
+
+默认注册目录为 `%LOCALAPPDATA%\AgentDeckNativeManager`，仅当前用户和 SYSTEM
+可以访问。每个专用目录只有一个管理进程持有注册库；默认命名管道根据用户和目录
+生成。测试或独立实例可显式指定 `--state-dir` 和 `--pipe`，所有客户端需使用同样的值。
+自选目录必须是已有可信父目录下的专用目录。
+
+在第二个 Windows Terminal 窗口进入列表：
+
+```powershell
+.\agent-deck-native.exe ui --cwd 'C:\Projects\demo'
+# 不带参数也会进入同一列表。
+.\agent-deck-native.exe
+```
+
+| 按键 | 操作 |
+|---|---|
+| 上/下或 j/k | 选择会话 |
+| n | 输入名称、目录，选择 Shell 或 Codex 后创建并进入 |
+| Enter 或 o | 打开；已停止或退出的会话会显式启动 |
+| Ctrl+Q | 从会话终端返回列表，后台进程继续运行 |
+| s | 确认后停止所选进程树，保留记录 |
+| r | 修改名称 |
+| d | 确认后停止所选进程树并移除列表记录，保留项目文件 |
+| q 或 Ctrl+C | 退出列表，管理进程和会话继续运行 |
+
+列表显示进程观测状态：正在运行、已退出、已停止或异常；不会把进程运行解释为模型忙碌、
+等待授权或已完成任务。列表每秒刷新一次，进入会话终端后暂停列表轮询。带运行标识
+的异常实例仍可按 s 精确清理；部分启动后的清理失败不会被报告成已停止或已移除。
+Codex 使用真实的原生 `codex.exe`；当前 Windows x64 查找也包含 npm 安装的
+`@openai/codex-win32-x64` 路径。其他安装布局可通过 `create` 指定实际程序。
+
+也可以用命令管理注册记录：
+
+```powershell
+.\agent-deck-native.exe create --name '工作 Shell' --cwd 'C:\Projects\demo' --tool shell --json
+.\agent-deck-native.exe list --json
+.\agent-deck-native.exe create --name '指定程序' --tool custom --cwd 'C:\Projects\demo' --no-start -- 'C:\Tools\agent.exe' '--model' 'two words'
+.\agent-deck-native.exe start --session '<session UUID>' --json
+.\agent-deck-native.exe rename --session '<session UUID>' --name '新名称'
+.\agent-deck-native.exe remove --session '<session UUID>'
+.\agent-deck-native.exe shutdown
+```
+
+`create` 先保存描述再启动。启动失败时仍返回保存的 ID，退出码为失败；列表提示
+“会话已创建，启动失败”，选择同一记录重试，不需要再次创建。
+注册库只保存名称、工具、目录、独立 argv 和显式 `--env` 覆盖；不保存继承环境、
+账户配置或屏幕历史。管理进程重启后记录仍在，所有记录处于已停止状态，
+程序不会自动重启 Agent。
+
+管理进程中的 `attach`、`send`、`capture`、`resize` 和 `stop` 使用同一管道，
+并增加 `--session UUID`。每次启动分配新的 `--run-id UUID`，旧查看者的输入和
+缩放请求无法送到后来启动的进程。交互查看者绑定该标识；脚本可明确指定它，
+未指定的单次操作先读取当前标识再提交。
+
+`serve` 持有所有会话。关闭它的终端、系统退出或它意外退出会结束所属进程树。
+要在 SSH 登出后保活，需要由独立启动器持有管理进程；程序没有自动安装系统服务。
+`shutdown` 清理所属进程树并关闭管理进程，保留注册库和项目文件。
 
 ## 手动运行一个 Shell 会话
 
@@ -138,15 +204,15 @@ host 在内存中保留最近 4 MiB 原始输出，退出 host 后这些记录�
 交叉编译、命名管道应答或 SSH 下输出读取不能代替第 6 项的可见界面验收。
 ConPTY API 存在也不能代替真实创建和交互证据。
 
-这还是单会话实验。它没有持久会话注册、自动恢复、完整滚动历史、查看者独占、
-完整终端模式恢复或多窗口协调。多个客户端可以同时发送输入，最后一个
+它没有崩溃后自动恢复、完整滚动历史、查看者独占、
+完整终端模式恢复或多窗口尺寸协调。多个客户端可以同时发送输入，最后一个
 尺寸请求决定终端尺寸。颜色、中文、全屏界面和终端设备查询需要真机验证；
-host 崩溃后的恢复与正式 TUI 集成属于后续阶段。
+host 崩溃后的恢复与现有完整 TUI 集成属于后续阶段。
 
 本机单元验证使用仓库规定的隔离入口：
 
 ```sh
-scripts/run-isolated.py go test ./cmd/agent-deck-native ./internal/conpty ./internal/winipc ./internal/terminalhost
+scripts/run-isolated.py go test ./cmd/agent-deck-native ./internal/conpty ./internal/winipc ./internal/terminalhost ./internal/nativeregistry ./internal/nativefleet ./internal/nativeui
 ```
 
 ## Windows 自动验收工具
@@ -164,6 +230,18 @@ scripts/run-isolated.py go test ./cmd/agent-deck-native ./internal/conpty ./inte
 供关闭 SSH 后用另一条连接核对同一会话。它保留临时任务，执行时间上限为五分钟。
 测试者完成核对后，用返回的管道执行 `stop`，并用返回的任务名精确停止和移除任务。
 此模式的 `passed` 仅表示启动成功，不表示完整验收通过。
+
+第二阶段使用独立的多会话验收工具：
+
+```powershell
+.\scripts\windows-native-fleet-smoke.ps1 -BinaryPath .\agent-deck-native.exe -ReportPath .\fleet-report.json
+```
+
+它创建当前 SID 下无触发器、十分钟时限的临时任务，验证两个 Shell、独立输出、
+选择性停止、重启标识、旧输入拒绝、改名与仅删除描述、所属进程清理，以及同一注册库
+恢复为已停止记录。测试结束精确移除本次任务，保留独立目录用于诊断。
+其 `-StartOnly` 返回管理进程和两个会话的精确标识，供另一条 SSH 连接验证保活；
+调用者需按返回的管道执行 `shutdown`，再停止和移除返回的任务。
 
 ## 2026-10-13 原生验证记录
 
@@ -186,3 +264,27 @@ scripts/run-isolated.py go test ./cmd/agent-deck-native ./internal/conpty ./inte
 
 这些是原生系统和控制台链路证据。可见 Windows Terminal 桌面操作尚未验收；
 也未证明已登录 Codex 的真实模型回合、Claude、MCP 或完整 Agent Deck TUI 已移植。
+
+## 第二阶段原生验证记录
+
+同一 Windows Server 2025 目标通过以下验证：
+
+- 注册库全套 Windows 测试：SQLite 持久化、真实子进程独占锁、中文名称、UUID、
+  损坏与未来 schema 拒绝、路径别名/硬链接拒绝和用户 DACL 原生回读。
+- 最新 CLI 在真实 ConPTY 控制台中操作中文列表：键盘输入名称、目录和工具，创建
+  两个 Shell，执行编码命令得到中文标记，Ctrl+Q 返回列表，退出 UI 后保留两个 PID，
+  新 UI 接回原屏幕和 PID，确认后停止一个而另一个保持运行。
+- 重启分配新 RunID，旧 RunID 输入被拒绝；改名与移除保留项目哨兵文件，管理进程
+  重启保留描述且不自动启动。失败的自动启动返回已保存的 ID，避免重复创建。
+- 首次默认注册目录可在仅有 LOCALAPPDATA 父目录的环境中成功建立。
+- 独立临时计划任务的完整多会话验收通过；关闭管理进程后所属根进程退出，任务
+  精确移除；重新打开注册库时记录为已停止、PID 为零，原生进程表无子进程。
+- 前一条 SSH 连接退出后，另一条连接确认管理进程和两个 Shell 的相同 PID/RunID，
+  在原 Shell 执行新编码命令。默认 Codex 查找路径也启动真实原生程序，使用独立
+  CODEX_HOME 并读取启动屏幕，不提交模型消息；随后精确停止并移除该测试描述。
+- 管理器全套测试在 Windows 实际执行：并发启动一次、旧代请求拒绝、异常输出仍可
+  停止、typed-nil 启动失败、部分清理失败保留记录/独占锁、独立慢停止、断开客户端
+  保活、关闭等待应答排空，以及 32 会话/64 客户端上限。七个相关包的隔离 race 和
+  Windows amd64 vet 通过。
+
+上述 UI 流程是实际 Windows 控制台链路的自动化证据，仍不代表可见桌面的人工验收。

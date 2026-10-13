@@ -32,10 +32,26 @@ func runAttach(config options, input, output *os.File, stderr io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("read console dimensions: %w", err)
 	}
-	if _, err = callHost(ctx, config.Pipe, terminalhost.Request{Op: "resize", Cols: cols, Rows: rows}); err != nil {
+	// matrix/hardened: bind the selected run before any input or geometry change.
+	if config.SessionID != "" {
+		initial, initialErr := callHost(ctx, config.Pipe, terminalhost.Request{Op: "status", SessionID: config.SessionID, RunID: config.RunID})
+		if initialErr != nil {
+			return initialErr
+		}
+		config.RunID = initial.RunID
+		if config.RunID == "" {
+			return errors.New("selected session has no live terminal; start it first")
+		}
+	}
+	requestFor := func(op string) terminalhost.Request {
+		return terminalhost.Request{Op: op, SessionID: config.SessionID, RunID: config.RunID}
+	}
+	resizeRequest := requestFor("resize")
+	resizeRequest.Cols, resizeRequest.Rows = cols, rows
+	if _, err = callHost(ctx, config.Pipe, resizeRequest); err != nil {
 		return err
 	}
-	snapshot, err := callHost(ctx, config.Pipe, terminalhost.Request{Op: "capture"})
+	snapshot, err := callHost(ctx, config.Pipe, requestFor("capture"))
 	if err != nil {
 		return err
 	}
@@ -69,7 +85,9 @@ func runAttach(config options, input, output *os.File, stderr io.Writer) error {
 		case chunk := <-inputChunks:
 			forward, detach := splitDetach(chunk.data)
 			if len(forward) > 0 {
-				if _, err := callHost(ctx, config.Pipe, terminalhost.Request{Op: "send", Data: forward}); err != nil {
+				sendRequest := requestFor("send")
+				sendRequest.Data = forward
+				if _, err := callHost(ctx, config.Pipe, sendRequest); err != nil {
 					return err
 				}
 			}
@@ -89,13 +107,17 @@ func runAttach(config options, input, output *os.File, stderr io.Writer) error {
 				return fmt.Errorf("read console dimensions: %w", sizeErr)
 			}
 			if newCols != cols || newRows != rows {
-				if _, err := callHost(ctx, config.Pipe, terminalhost.Request{Op: "resize", Cols: newCols, Rows: newRows}); err != nil {
+				resizeRequest := requestFor("resize")
+				resizeRequest.Cols, resizeRequest.Rows = newCols, newRows
+				if _, err := callHost(ctx, config.Pipe, resizeRequest); err != nil {
 					return err
 				}
 				cols, rows = newCols, newRows
 			}
 		case <-poll.C:
-			response, err := callHost(ctx, config.Pipe, terminalhost.Request{Op: "capture", After: after})
+			captureRequest := requestFor("capture")
+			captureRequest.After = after
+			response, err := callHost(ctx, config.Pipe, captureRequest)
 			if err != nil {
 				return err
 			}

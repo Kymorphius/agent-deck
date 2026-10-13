@@ -10,6 +10,8 @@ import (
 	"io"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"github.com/asheshgoplani/agent-deck/internal/winipc"
 )
 
@@ -17,12 +19,14 @@ const pipePrefix = winipc.PipePrefix
 const maxInputBytes = 64 << 10
 
 type options struct {
-	Command, Pipe, Cwd, Executable string
-	Args, Env                      []string
-	Cols, Rows                     int
-	After                          uint64
-	Screen, JSON                   bool
-	Data                           []byte
+	Command, Pipe, Cwd, Executable         string
+	Args, Env                              []string
+	Cols, Rows                             int
+	After                                  uint64
+	Screen, JSON                           bool
+	Data                                   []byte
+	StateDir, SessionID, RunID, Name, Tool string
+	NoStart                                bool
 }
 
 type envFlags []string
@@ -44,6 +48,9 @@ func parseOptions(args []string, help io.Writer) (options, error) {
 		return result, flag.ErrHelp
 	}
 	result.Command = args[0]
+	if isFleetCommand(result.Command) {
+		return parseFleetOptions(args, help)
+	}
 	switch result.Command {
 	case "host", "status", "send", "capture", "resize", "stop", "attach":
 	default:
@@ -52,6 +59,10 @@ func parseOptions(args []string, help io.Writer) (options, error) {
 	flags := flag.NewFlagSet(result.Command, flag.ContinueOnError)
 	flags.SetOutput(help)
 	flags.StringVar(&result.Pipe, "pipe", "", "required local pipe: "+pipePrefix+"NAME")
+	if result.Command != "host" {
+		flags.StringVar(&result.SessionID, "session", "", "managed session UUID (omit for single host)")
+		flags.StringVar(&result.RunID, "run-id", "", "expected managed process generation UUID")
+	}
 	if result.Command != "attach" && result.Command != "host" {
 		flags.BoolVar(&result.JSON, "json", false, "emit one protocol response as JSON")
 	}
@@ -98,6 +109,13 @@ func parseOptions(args []string, help io.Writer) (options, error) {
 	}
 	if err := validatePipe(result.Pipe); err != nil {
 		return result, err
+	}
+	for _, id := range []string{result.SessionID, result.RunID} {
+		if id != "" {
+			if _, err := uuid.Parse(id); err != nil {
+				return result, errors.New("--session and --run-id must be UUIDs")
+			}
+		}
 	}
 	seen := make(map[string]bool)
 	flags.Visit(func(f *flag.Flag) { seen[f.Name] = true })
@@ -190,11 +208,19 @@ func mergedEnv(base, overrides []string) []string {
 }
 
 func printHelp(output io.Writer) {
-	fmt.Fprintln(output, `agent-deck-native 0.1.0+matrix.prototype
+	fmt.Fprintln(output, `agent-deck-native 0.2.0+matrix.prototype
 Experimental standalone Windows terminal host; this is not the complete Agent Deck port.
 
 Usage:
   agent-deck-native --version
+  agent-deck-native serve [--state-dir DIR] [--pipe NAME]
+  agent-deck-native ui [--state-dir DIR] [--pipe NAME] [--cwd DIR]
+  agent-deck-native list [--state-dir DIR] [--pipe NAME] [--json]
+  agent-deck-native create --name NAME [--tool shell|codex|custom] [--cwd DIR] [--no-start] [--pipe NAME] [-- executable args...]
+  agent-deck-native start --session UUID [--pipe NAME] [--json]
+  agent-deck-native rename --session UUID --name NAME [--pipe NAME]
+  agent-deck-native remove --session UUID [--run-id UUID] [--pipe NAME]
+  agent-deck-native shutdown [--pipe NAME]
   agent-deck-native host --pipe NAME [--cwd DIR] [--cols N --rows N] [--env NAME=VALUE] -- executable [args...]
   agent-deck-native status --pipe NAME [--json]
   agent-deck-native send --pipe NAME [--text TEXT] [--enter] [--json]
@@ -208,5 +234,7 @@ NAME is a full local path such as \\.\pipe\agent-deck-native-demo.
 host runs in the foreground and owns one ConPTY child. Launch it independently
 to keep the child alive when a client closes. Ctrl+Q detaches attach only.
 No service, scheduled task, hook, update check or telemetry is installed.
+serve owns multiple sessions and a private local registry; ui exits independently.
+Managed attach/send/capture/resize/stop accept --session UUID and --run-id UUID.
 Use COMMAND --help for flags.`)
 }
