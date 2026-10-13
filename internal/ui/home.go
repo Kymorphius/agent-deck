@@ -942,6 +942,7 @@ type Home struct {
 	costLastMonth        atomic.Int64 // microdollars
 	costProjected        atomic.Int64 // microdollars
 	costRefreshTime      time.Time
+	costRefreshTemplate  string // matrix/hardened: new header windows bypass the old cooldown.
 	costLineTemplate     string // resolved at construction; see session.ResolveCostLineTemplate
 	costLineHideWhenZero bool
 	showCostDashboard    bool
@@ -2941,29 +2942,13 @@ func (h *Home) groupScopeDisplayName() string {
 }
 
 // refreshCostTotals updates cached cost totals from the store.
-// Throttled to run at most every 10 seconds.
+// matrix/hardened: only displayed windows are read; the same template retains
+// the 10-second cadence while a changed template refreshes on the next tick.
 func (h *Home) refreshCostTotals() {
 	if h.costStore == nil {
 		return
 	}
-	if time.Since(h.costRefreshTime) < 10*time.Second {
-		return
-	}
-	h.costRefreshTime = time.Now()
-	today, _ := h.costStore.TotalToday()
-	yesterday, _ := h.costStore.TotalYesterday()
-	week, _ := h.costStore.TotalThisWeek()
-	lastWeek, _ := h.costStore.TotalLastWeek()
-	thisMonth, _ := h.costStore.TotalThisMonth()
-	lastMonth, _ := h.costStore.TotalLastMonth()
-	projected, _ := h.costStore.ProjectedMonthly()
-	h.costToday.Store(today.TotalCostMicrodollars)
-	h.costYesterday.Store(yesterday.TotalCostMicrodollars)
-	h.costWeek.Store(week.TotalCostMicrodollars)
-	h.costLastWeek.Store(lastWeek.TotalCostMicrodollars)
-	h.costThisMonth.Store(thisMonth.TotalCostMicrodollars)
-	h.costLastMonth.Store(lastMonth.TotalCostMicrodollars)
-	h.costProjected.Store(projected)
+	h.refreshCostTotalsForTemplate(time.Now(), h.queryCostLineTotal)
 }
 
 func (h *Home) publishWebMenuSnapshot() {

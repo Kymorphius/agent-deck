@@ -1,10 +1,52 @@
 package costs_test
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/asheshgoplani/agent-deck/internal/costs"
 )
+
+// matrix/hardened: query discovery must follow the renderer's placeholder
+// boundaries, not find known strings inside unknown or unclosed placeholders.
+func TestMatrixCostLineVariables(t *testing.T) {
+	for _, tc := range []struct {
+		name, template string
+		want           []string
+	}{
+		{"empty", "", nil},
+		{"literal", "cost_today today", nil},
+		{"unknown", "{cost_galaxy}", nil},
+		{"unclosed", "{cost_today", nil},
+		{"nested", "{{cost_today}}", nil},
+		{"nested-known-tail", "{unknown{cost_today}}{cost_yesterday}", []string{"cost_yesterday"}},
+		{"unclosed-tail", "{cost_today} {cost_this_week", []string{"cost_today"}},
+		{"default", "{cost_today} today", []string{"cost_today"}},
+		{"deduplicated-order", "{cost_last_week}{cost_today}{cost_last_week}{cost_today}", []string{"cost_last_week", "cost_today"}},
+		{"unknown-next-to-known", "{cost_galaxy}{cost_this_month}", []string{"cost_this_month"}},
+		{"literal-closing-brace", "}{cost_today}}", []string{"cost_today"}},
+		{"all-windows", "{cost_today}{cost_yesterday}{cost_this_week}{cost_last_week}{cost_this_month}{cost_last_month}{cost_projected}", []string{"cost_today", "cost_yesterday", "cost_this_week", "cost_last_week", "cost_this_month", "cost_last_month", "cost_projected"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := costs.CostLineVariables(tc.template)
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("variables = %v, want %v", got, tc.want)
+			}
+			// Supplying only discovered values must produce exactly the same
+			// output as all known values, including hide-when-zero behavior.
+			all := map[string]int64{"cost_today": 1_000_000, "cost_yesterday": 2_000_000, "cost_this_week": 3_000_000, "cost_last_week": 4_000_000, "cost_this_month": 5_000_000, "cost_last_month": 6_000_000, "cost_projected": 7_000_000}
+			needed := make(map[string]int64, len(got))
+			for _, name := range got {
+				needed[name] = all[name]
+			}
+			for _, hide := range []bool{false, true} {
+				if full, selected := costs.RenderCostLine(tc.template, all, hide), costs.RenderCostLine(tc.template, needed, hide); full != selected {
+					t.Fatalf("query discovery changed render: %q != %q", full, selected)
+				}
+			}
+		})
+	}
+}
 
 func TestRenderCostLine(t *testing.T) {
 	vars := map[string]int64{

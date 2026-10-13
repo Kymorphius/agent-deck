@@ -325,8 +325,8 @@ func RefreshSessionCache() {
 	// Subprocess fallback: list-windows -a (3s timeout to prevent freeze when server is dead)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	cmd := tmuxExecContext(ctx, DefaultSocketName(), "list-windows", "-a", "-F", tmuxFmt("#{session_name}", "#{window_activity}", "#{window_index}", "#{window_id}", "#{window_name}"))
-	output, err := commandOutput(cmd)
+	// matrix/hardened: reuse the owned query channel within this original budget.
+	output, err := matrixMetadataQueryOutput(ctx, DefaultSocketName(), "list-windows", "-a", "-F", tmuxFmt("#{session_name}", "#{window_activity}", "#{window_index}", "#{window_id}", "#{window_name}"))
 	if err != nil {
 		sessionCacheMu.Lock()
 		sessionCacheData = nil
@@ -346,6 +346,16 @@ func RefreshSessionCache() {
 	windowCacheData = newWindowCache
 	windowCacheTime = time.Now()
 	windowCacheMu.Unlock()
+}
+
+// matrix/hardened: only the four existing metadata readers use this adapter.
+// Both the channel attempt and unchanged native fallback share the caller's
+// original context, socket and argv; native errors remain authoritative.
+func matrixMetadataQueryOutput(ctx context.Context, socket string, args ...string) ([]byte, error) {
+	if output, ok := matrixQueryOutput(ctx, socket, args...); ok {
+		return output, nil
+	}
+	return commandOutput(tmuxExecContext(ctx, socket, args...))
 }
 
 // parseListWindowsOutput parses the output of `tmux list-windows -a` with the
@@ -2399,7 +2409,8 @@ func (s *Session) ApplyThemeOptions() error {
 func (s *Session) ReadEnvironment(key string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	output, err := commandOutput(s.tmuxCmdContext(ctx, "show-environment", "-t", s.Name))
+	// matrix/hardened: a framed error still uses the original native error path.
+	output, err := matrixMetadataQueryOutput(ctx, s.SocketName, "show-environment", "-t", s.Name)
 	if err != nil {
 		return "", err
 	}
@@ -2440,8 +2451,8 @@ func (s *Session) GetEnvironment(key string) (string, error) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	cmd := s.tmuxCmdContext(ctx, "show-environment", "-t", s.Name, key)
-	output, err := commandOutput(cmd)
+	// matrix/hardened: retain the existing key query and hit/miss cache semantics.
+	output, err := matrixMetadataQueryOutput(ctx, s.SocketName, "show-environment", "-t", s.Name, key)
 	if err != nil {
 		s.storeEnvCacheEntry(key, envCacheEntry{time: time.Now()})
 		return "", fmt.Errorf("variable not found or session doesn't exist: %s", key)

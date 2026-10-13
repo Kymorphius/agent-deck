@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.54`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.55`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -66,7 +66,7 @@
 - `internal/session/claude_hooks.go`：`isAgentDeckHookCommand` 的判断规则：先去掉开头的 `VAR=值`，再要求第二个词是 `hook-handler`、程序名的文件名部分是 `agent-deck`。`RemoveClaudeHooks` 会扫描全部事件，并做 UTC 时间戳备份（约 387–414 行）。
 - `cmd/agent-deck/main.go`（约 4845、5070 行）：`agent-deck uninstall` 会移除这些钩子。`uninstall.sh` 第 253 行附近的 jq 过滤用的是同一套规则（正则），写回时用 `cat >` 保持软链接和权限。
 
-**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.54`。
+**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.55`。
 
 **测试**：以 `_hardened_test.go` 结尾的文件、`update_check_disable_test.go`、`update_timer_wiring_test.go` 等是新增或调整过的测试；`testdata/goldens/*` 里的快照已经按加固后的输出更新。
 
@@ -514,3 +514,11 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 - 手动 Claude 来源按持久会话的实际账号和 EffectiveWorkingDir 解析精确原生 ID；不借用其它账号同名记录，拒绝非本地及软链接来源。
 - 手动 Web 同步要求鉴权及现有写入/origin 边界，一次只处理一个请求，只返回计数。请求取消停止后续来源读取；已经导入的事件保留，重复同步通过既有 native usage 身份去重。查看页面、汇总 GET、主题变化不会启动同步。
 - 验证默认与 opt-in、hook/Recall 无隐式费用写入、取消、Web 写入边界、重复请求及前端显式按钮。生产必须重载所有旧管理进程，避免旧版等待者接管费用锁继续扫描，并保留原 AI pane PID 与原费用记录。
+
+## 46. 复用元数据查询通道与按顶栏模板查询费用
+
+`1.16.26+matrix.55` 把 session/window、pane 目录与 session environment 的只读查询接入已有 socket-local query transport。这四类新接入调用的原生回退沿用原调用已经建立的 context 和时限，保留原参数、解析、cache TTL、失败与所有权判断；不为各个客户端新增 query connection。
+
+- **matrix/hardened:** 仅额外允许 `list-panes -s -t <明确会话> -F <既有安全字段>`，以读取该会话所有窗口的 pane PID。隐式 anchor、额外/重复 flags、依赖 client 的 format 和命令注入仍拒绝；不改变 Fresh 重查、不将 query failure 当确定 absence；该 PID probe 继续使用既有 OutputBounded 时限，未把它改成新的三秒总预算。framed command error 仍原生回退，错误计数要与 framing/timeout 分开判断。
+- **matrix/hardened:** TUI 顶栏按当前费用模板真正引用的七种已知变量调度查询，去重并沿用 renderer 的首个右括号语义。默认只查今日金额；空模板、纯文本或未知变量不查费用汇总。保留原 Store 日期/rolling 数学、被引用变量的十秒刷新、完整费用看板及预算查询。已加载的 Home 模板依赖变化在下个既有 tick 重取，TOML 配置仍按原有加载方式生效，本轮不新增热加载。
+- 验证包括 broker/native 输出与失败语义、socket/session/all-window 边界、原 context 预算、环境正负缓存、query transport 原回归、模板解析与查询次数及切换/刷新。生产另核对加载版本、query 命令计数/child CPU、管理进程 CPU、源错误和原 pane 身份；本机采样不能外推为整机瓦数或固定节能比例。

@@ -172,10 +172,10 @@ func RefreshPaneInfoCache() {
 	// pane_title is free-text (apps set it via OSC) so it goes LAST; every
 	// other field is a sanitized name, integer, or 0/1 flag that cannot
 	// contain tmuxFieldSep. See tmuxFieldSep for why TAB is unusable here.
-	cmd := tmuxExecContext(ctx, DefaultSocketName(),
+	// matrix/hardened: the existing query budget also bounds the channel attempt.
+	output, err := matrixMetadataQueryOutput(ctx, DefaultSocketName(),
 		"list-panes", "-a", "-F",
 		tmuxFmt("#{session_name}", "#{pane_current_command}", "#{pane_dead}", "#{window_index}", "#{pane_index}", "#{pane_title}"))
-	output, err := commandOutput(cmd)
 	if err != nil {
 		statusLog.Debug("pane_cache_refresh_failed", "error", err)
 		return

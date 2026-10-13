@@ -407,6 +407,13 @@ func matrixQueryAllowed(c []string) bool {
 			return false
 		}
 	}
+	// matrix/hardened: only the existing explicit-session all-window PID probe
+	// gains -s. Only ordinary session names, never client-relative selectors.
+	if c[0] == "list-panes" && len(c) > 1 && c[1] == "-s" {
+		return len(c) == 6 && c[2] == "-t" && c[3] != "" &&
+			!strings.ContainsAny(c[3], ":.*?[]{}") && !strings.ContainsAny(c[3][:1], "$%@!=") &&
+			c[4] == "-F" && matrixQuerySafeFormat(c[5])
+	}
 	flags, values := "", ""
 	target, print, all := false, false, false
 	switch c[0] {
