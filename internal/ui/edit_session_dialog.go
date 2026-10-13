@@ -275,6 +275,13 @@ func (d *EditSessionDialog) ShowRemote(info session.RemoteSessionInfo, remoteNam
 			pillCursor:  cursor,
 		})
 	}
+	if info.PinKnown() { // matrix/hardened: older remotes cannot report a pin baseline.
+		d.fields = append(d.fields, editField{
+			key: session.FieldPin, label: "Pin position", kind: editFieldPills,
+			pillOptions: []string{string(session.PinNone), string(session.PinTop), string(session.PinBottom)},
+			pillLabels:  []string{"Off", "Top", "Bottom"}, pillCursor: pinCursorFor(info.PinPosition()),
+		})
+	}
 	d.updateFocus()
 }
 
@@ -303,7 +310,7 @@ func (d *EditSessionDialog) SetRemoteAccounts(accounts map[string][]string) {
 // remoteEditInstance is the row as an Instance carrying only the fields the
 // remote dialog edits, so GetChanges diffs a remote row the same way.
 func remoteEditInstance(info session.RemoteSessionInfo) *session.Instance {
-	return &session.Instance{ID: info.ID, Title: info.Title, Tool: info.Tool, Account: info.Account}
+	return &session.Instance{ID: info.ID, Title: info.Title, Tool: info.Tool, Account: info.Account, Pin: info.PinPosition()} // matrix/hardened
 }
 
 func (d *EditSessionDialog) Hide() {

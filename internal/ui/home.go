@@ -897,7 +897,8 @@ type Home struct {
 	// remotePending marks remote session rows with an action underway
 	// (sessionID -> "deleting…"), drawn on the row so the screen says what
 	// is happening while the remote answers instead of freezing.
-	remotePending map[string]string
+	remotePending          map[string]string
+	matrixRemotePinPending map[matrixRemotePinTarget]session.PinMode // matrix/hardened: pin actions scoped by host and ID.
 	// remoteSessionRefreshSec is the poll cadence (seconds) for re-fetching
 	// the remote session list, resolved once at construction from
 	// [ui] remote_session_refresh_secs. Issue #1170.
@@ -1408,6 +1409,9 @@ func (h *Home) collapseOrNavUp() {
 			}
 		}
 	} else if item.Type == session.ItemTypeRemoteSession {
+		if h.groupViewMode == session.GroupViewPinnedOnly { // matrix/hardened: pins have no visible group to fold.
+			return
+		}
 		// Item.Path is the owning group header's path.
 		h.setRemoteGroupCollapsed(item.RemoteName, item.Path, true)
 	}
@@ -3429,9 +3433,6 @@ func (h *Home) rebuildFlatItemsAt(now time.Time) {
 	remotes := make(map[string][]session.RemoteSessionInfo, len(h.remoteSessions))
 	remoteGroupLists := make(map[string][]string, len(h.remoteGroups))
 	for name, sessions := range h.remoteSessions {
-		if pinnedOnly { // matrix/hardened: remote rows do not expose pin metadata.
-			continue
-		}
 		// Partition remote rows the way local ones were above: the active
 		// view hides remote sessions the remote reports archived, and the ^
 		// archived view shows only those. In the plain active view a remote
@@ -3439,14 +3440,24 @@ func (h *Home) rebuildFlatItemsAt(now time.Time) {
 		// session, like an empty local group renders "name (0)", so a fresh
 		// remote or one whose last session was archived stays a target for
 		// n, N and g. The archived view and any filter hide such a remote.
-		partitioned := make([]session.RemoteSessionInfo, 0, len(sessions))
+		capacity := len(sessions)
+		if pinnedOnly { // matrix/hardened: allocate only for retained remote pins.
+			capacity = 0
+		}
+		partitioned := make([]session.RemoteSessionInfo, 0, capacity)
 		for _, remote := range sessions {
+			if pinnedOnly && !matrixRemoteSessionIsPinned(remote) { // matrix/hardened: omitted pin metadata is unknown.
+				continue
+			}
+			if pinnedOnly && !h.isInGroupScope("remotes/"+name+"/"+normalizeRemoteGroupPath(remote.Group)) { // matrix/hardened: compose the aggregate scope.
+				continue
+			}
 			// matrix/hardened: compose remote status filters with archive/time filters.
 			if remote.Archived == viewArchived && h.matrixMatchesRemoteFilter(h.statusFilter, remote) {
 				partitioned = append(partitioned, remote)
 			}
 		}
-		plainActiveView := !viewArchived && h.timeFilter == session.TimeFilterAll && h.statusFilter == ""
+		plainActiveView := !pinnedOnly && !viewArchived && h.timeFilter == session.TimeFilterAll && h.statusFilter == "" // matrix/hardened
 		if len(partitioned) == 0 && !plainActiveView {
 			continue
 		}
@@ -3598,7 +3609,7 @@ func (h *Home) rebuildFlatItemsAt(now time.Time) {
 	h.remoteHeaderCounts = make(map[string]remoteHeaderCount)
 	if len(remotes) > 0 {
 		collapsed := h.remoteGroupsCollapsed
-		if h.embeddedLayout && h.sidebarMode == sidebarFlat {
+		if pinnedOnly || (h.embeddedLayout && h.sidebarMode == sidebarFlat) { // matrix/hardened: aggregate pins are collapse-agnostic.
 			// Flat presentation has no headers to reopen hidden descendants.
 			// Keep the saved folds for the next switch to grouped presentation.
 			collapsed = nil
@@ -3628,8 +3639,11 @@ func (h *Home) rebuildFlatItemsAt(now time.Time) {
 			// the remote's own group order to the group headers. In the plain
 			// active view, empty remote groups get a header row too, like an
 			// empty local group; any filter or the archived view hides them.
-			showEmptyGroups := !viewArchived && h.timeFilter == session.TimeFilterAll && h.statusFilter == ""
+			showEmptyGroups := !pinnedOnly && !viewArchived && h.timeFilter == session.TimeFilterAll && h.statusFilter == "" // matrix/hardened
 			rows := buildRemoteFlatItemsWithEmptyGroups(remoteName, sessions, collapsed, h.remoteSessionOrder.forRemote(remoteName), remoteGroupLists[remoteName], showEmptyGroups)
+			if pinnedOnly { // matrix/hardened: only standalone sessions, with their host in the title.
+				rows = matrixPinnedRemoteRows(rows)
+			}
 			for _, row := range rows {
 				// An empty group's header has no session to count; give it
 				// a zero entry so the renderer never falls back to a scan.
@@ -4678,12 +4692,16 @@ func (h *Home) noteRemoteActionSettled(remoteName string) {
 type remoteActionRecord struct {
 	at       time.Time
 	archived *bool
+	pin      *session.PinMode // matrix/hardened: confirmed remote pins also reject contradictory queued pushes.
 }
 
 // contradicts reports whether a pushed listing still shows the session as
 // it was before the action: a removed session listed at all, an archived
 // one listed active or the reverse.
 func (r remoteActionRecord) contradicts(s *session.RemoteSessionInfo) bool {
+	if r.pin != nil { // matrix/hardened
+		return !s.PinKnown() || s.PinPosition() != *r.pin
+	}
 	return r.archived == nil || s.Archived != *r.archived
 }
 
@@ -4712,6 +4730,11 @@ func (h *Home) noteRemoteAction(remoteName, sessionID string, rec remoteActionRe
 // remoteActionInProgress reports whether a user action on remoteName is
 // still waiting for the remote's answer.
 func (h *Home) remoteActionInProgress(remoteName string) bool {
+	for target := range h.matrixRemotePinPending { // matrix/hardened: in-flight pins participate in the existing remote fetch fence.
+		if target.remoteName == remoteName {
+			return true
+		}
+	}
 	if len(h.remotePending) == 0 {
 		return false
 	}
@@ -8814,6 +8837,8 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case remoteSessionsFetchedMsg:
 		return h.applyRemoteFetch(msg)
+	case matrixRemotePinResultMsg: // matrix/hardened
+		return h, h.applyMatrixRemotePin(msg)
 
 	case remoteChangedMsg:
 		if msg.change.Pane != nil {
@@ -12270,6 +12295,8 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				h.rebuildFlatItems()
 				h.moveCursorToSession(inst.ID)
 				h.saveInstances()
+			} else if item.Type == session.ItemTypeRemoteSession && item.RemoteSession != nil { // matrix/hardened
+				return h, h.startMatrixRemotePin(item.RemoteName, item.RemoteSession.ID, matrixNextPin(item.RemoteSession.PinPosition()))
 			}
 		}
 		return h, nil
@@ -23284,7 +23311,7 @@ func (h *Home) renderRemoteLatencyMarker(remoteName string, selected bool) strin
 
 // renderRemoteSessionItem renders a single remote session row
 func (h *Home) renderRemoteSessionItem(b *strings.Builder, item session.Item, selected bool) {
-	h.renderRemoteSessionItemAtWidth(b, item, selected, embeddedCardMinWidth-1)
+	h.renderRemoteSessionItemAtWidth(b, item, selected, 0) // matrix/hardened: legacy/test entry point has no width constraint.
 }
 
 func (h *Home) renderRemoteSessionItemAtWidth(b *strings.Builder, item session.Item, selected bool, listWidth int) {
@@ -23292,6 +23319,7 @@ func (h *Home) renderRemoteSessionItemAtWidth(b *strings.Builder, item session.I
 	if rs == nil {
 		return
 	}
+	remoteTitle := matrixRemotePinTitle(*rs, item.RemoteName, h.groupViewMode == session.GroupViewPinnedOnly) // matrix/hardened
 	if h.embeddedLayout && listWidth >= embeddedCardMinWidth {
 		statusIcon, statusStyle := remoteRowStatusGlyph(rs.Status, rs.Substate, rs.Archived)
 		// Same freshness rule as the classic row below: a failed/cached poll
@@ -23321,12 +23349,12 @@ func (h *Home) renderRemoteSessionItemAtWidth(b *strings.Builder, item session.I
 		if rowLines == 1 && rs.Tool != "" {
 			toolPrefix = sidebarToolIcon(rs.Tool) + " "
 		}
-		firstPlain := indent + marker + statusIcon + " " + toolPrefix + rs.Title
+		firstPlain := indent + marker + statusIcon + " " + toolPrefix + remoteTitle
 		first := indent + marker + statusStyle.Render(statusIcon) + " "
 		if toolPrefix != "" {
 			first += GetToolStyle(strings.ToLower(rs.Tool)).Bold(true).Render(sidebarToolIcon(rs.Tool)) + " "
 		}
-		first = fitCellWidth(first+rs.Title, max(1, listWidth))
+		first = fitCellWidth(first+remoteTitle, max(1, listWidth))
 		secondText := strings.TrimSpace(rs.Status)
 		if rs.Archived {
 			secondText = "archived"
@@ -23341,6 +23369,9 @@ func (h *Home) renderRemoteSessionItemAtWidth(b *strings.Builder, item session.I
 			secondText += " · " + item.RemoteName
 		}
 		secondText += staleNote
+		if _, pending := h.matrixRemotePinPending[matrixRemotePinTarget{item.RemoteName, rs.ID}]; pending { // matrix/hardened
+			secondText += " · saving pin…"
+		}
 		second := fitCellWidth(indent+"  ╰ "+secondText, max(1, listWidth))
 		if selected || embedded {
 			style := lipgloss.NewStyle().Foreground(ColorText).Background(ColorSurface)
@@ -23372,10 +23403,7 @@ func (h *Home) renderRemoteSessionItemAtWidth(b *strings.Builder, item session.I
 		titleStyle = SessionStatusSelStyle
 	}
 
-	titleStr := rs.Title
-	if len(titleStr) > 25 {
-		titleStr = titleStr[:22] + "..."
-	}
+	titleStr := cellTruncate(remoteTitle, 25, "…") // matrix/hardened: pins and Chinese titles stay valid UTF-8.
 
 	toolStr := ""
 	if rs.Tool != "" && !h.toolBadgeHidden(rs.Tool) {
@@ -23398,6 +23426,9 @@ func (h *Home) renderRemoteSessionItemAtWidth(b *strings.Builder, item session.I
 		}
 	} else if item.IsLastInGroup {
 		treeConnector = "└─"
+	}
+	if h.groupViewMode == session.GroupViewPinnedOnly && item.Level == 0 { // matrix/hardened
+		treeConnector = ""
 	}
 
 	// #1553: indent by the item's level so sessions sit one step below their
@@ -23430,12 +23461,15 @@ func (h *Home) renderRemoteSessionItemAtWidth(b *strings.Builder, item session.I
 			pendingStr = " " + DimStyle.Render("· "+verb)
 		}
 	}
+	if _, pending := h.matrixRemotePinPending[matrixRemotePinTarget{item.RemoteName, rs.ID}]; pending { // matrix/hardened
+		pendingStr = " " + DimStyle.Render("· saving pin…")
+	}
 
 	// Viewers badge, as on local rows; nothing when the remote did not say.
 	remoteViewers, remoteViewersKnown := rs.ViewerList()
 	remoteViewersBadge := renderViewersBadge(remoteViewers, remoteViewersKnown, selected)
 
-	b.WriteString(fmt.Sprintf("%s%s%s %s %s%s%s%s\n",
+	line := fmt.Sprintf("%s%s%s %s %s%s%s%s",
 		remoteRowGutter(selected), // align with group/session hotkey gutter
 		indent,
 		DimStyle.Render(treeConnector),
@@ -23444,7 +23478,11 @@ func (h *Home) renderRemoteSessionItemAtWidth(b *strings.Builder, item session.I
 		toolStr,
 		remoteViewersBadge,
 		pendingStr,
-	))
+	)
+	if listWidth > 0 { // matrix/hardened: host/pin prefixes share the real row budget, including narrow embedded fallback.
+		line = fitCellWidth(line, listWidth)
+	}
+	b.WriteString(line + "\n")
 }
 
 func (h *Home) renderLaunchingState(inst *session.Instance, width int, startTime time.Time) string {
