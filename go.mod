@@ -6,6 +6,7 @@ require (
 	al.essio.dev/pkg/shellescape v1.6.0
 	cloud.google.com/go/pubsub v1.51.1
 	github.com/BurntSushi/toml v1.6.0
+	github.com/Microsoft/go-winio v0.6.2 // matrix/hardened: native Windows pipe transport.
 	github.com/SherClockHolmes/webpush-go v1.4.0
 	github.com/charmbracelet/bubbles v1.0.0
 	github.com/charmbracelet/bubbletea v1.3.10
