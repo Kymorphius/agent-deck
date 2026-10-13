@@ -106,7 +106,7 @@ func matrixMonitorBatchInstances(n int) []*session.Instance {
 }
 
 func TestMatrixCaptureBatchCollectFlushesReservationsBelowGroupLimit(t *testing.T) {
-	for _, workers := range []int{1, 2, 3} {
+	for _, workers := range []int{1, 2, 3, 10} {
 		t.Run(fmt.Sprint(workers), func(t *testing.T) {
 			calls := matrixMonitorBatchFixture(t)
 			reg := &matrixCaptureBatchRegistry{instances: matrixMonitorBatchInstances(7)}

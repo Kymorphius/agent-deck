@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.49`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.50`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -66,7 +66,7 @@
 - `internal/session/claude_hooks.go`：`isAgentDeckHookCommand` 的判断规则：先去掉开头的 `VAR=值`，再要求第二个词是 `hook-handler`、程序名的文件名部分是 `agent-deck`。`RemoveClaudeHooks` 会扫描全部事件，并做 UTC 时间戳备份（约 387–414 行）。
 - `cmd/agent-deck/main.go`（约 4845、5070 行）：`agent-deck uninstall` 会移除这些钩子。`uninstall.sh` 第 253 行附近的 jq 过滤用的是同一套规则（正则），写回时用 `cat >` 保持软链接和权限。
 
-**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.49`。
+**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.50`。
 
 **测试**：以 `_hardened_test.go` 结尾的文件、`update_check_disable_test.go`、`update_timer_wiring_test.go` 等是新增或调整过的测试；`testdata/goldens/*` 里的快照已经按加固后的输出更新。
 
@@ -462,3 +462,11 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 - **matrix/hardened:** 截图沿用原 `capture-pane -t Session.Name -p -e` 目标，包含当前窗口/窗格语义。独立 argv 的只读命令用随机边界分帧，ANSI 和空行逐字节保留；非零、超时、额外/缺失/重复边界、随机源失败或超过 8 MiB 均拒绝整批并回退原逐会话捕获。
 - **matrix/hardened:** 仅预热现有 raw capture cache，500ms 有效期从批次开始计算；过期不种入。普通捕获、Fresh 和失效的 acquisition/completion generation 拒绝旧批次覆盖新观察，已有独立采集的会话不参加批次。Fresh 继续独立子进程、绕过缓存；每次分类、确认、历史及完成时间动作沿用原探针。
 - 验证使用隔离入口：完整 monitor race、11 项 batch 和既有 capture/Fresh/发送验证/ACK/substate 回归；真实私有 tmux 核对跨 socket 同名、选中非首窗口、原始字节、子进程计数及 pane PID/尺寸保持。生产另做含计数的稳定采样，比较每轮查询数和 CPU，保留动态负载与错误回退的限制。
+
+## 40. 并发饱和时合并相邻查询
+
+`1.16.26+matrix.50` 在实际采集的并发槽位饱和时，给未凑齐的截图小组一次至多 3ms 的合并机会，减少每次只空出一个槽位就发出独立查询的情况。
+
+- **matrix/hardened:** 合并窗口按小组累计，不为每个新槽位重置。小组占满全部 worker、采集预算耗尽、取消、队列结束或超时时立即启动；保留原 worker 上限、逐 ID 在途与退休代次、观察时间及跨 socket 隔离。没有空闲后台定时器，也不改变采集周期或截图缓存有效期。
+- **matrix/hardened:** 私有 `monitor status` 提供固定大小的逻辑小组和实际 socket 分组大小、启动原因及等待计数，不记录目标和内容。分组计数不等于原生进程数，仍与既有 tmux 执行指标一起验证。
+- 验证包含 1/2/3/10 worker 的自锁保护、相邻完成合并、超时/取消/预算、快慢 socket、普通不需截图探针以及既有 monitor 代次与公平性回归；真实采样再核对分组分布、每轮启动数、CPU 和快会话延迟。

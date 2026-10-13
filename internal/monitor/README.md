@@ -80,6 +80,14 @@ completion and invalidation fence older batch publications. Prefetch does not
 classify, acknowledge, or stamp completion; original probes still perform those
 actions. It creates no attach clients and does not alter window sizes.
 
+`matrix/hardened:` while actual worker slots are saturated, a pending capture
+group may coalesce adjacent completions within one cumulative 3ms window.
+Groups holding all worker capacity flush immediately; deadline, collection
+budget, cancellation and queue exhaustion also flush. This adds no idle timer
+and does not change polling cadence, capture TTL or independent observation
+actions. Status exposes fixed group-size/flush/wait counters, distinct from
+actual tmux subprocess execution counters.
+
 Regression coverage uses real Unix clients and the repository's isolated test
 entry point. The external pane probe is replaced only where deterministic
 hangs, demand expiry or generation changes are required; a two-profile test

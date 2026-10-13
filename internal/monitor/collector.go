@@ -407,6 +407,12 @@ func (s *Server) launchProbeGroup(p *profileState, group []matrixProbeLaunch, pa
 	}
 	if len(group) == 1 || s.opts.Probe != nil {
 		for _, launch := range group {
+			// A singleton still represents a socket capture dispatch, even
+			// though no native prefetch command can combine it with a neighbor.
+			inst := launch.record.instance
+			if s.opts.Probe == nil && !inst.IsArchived() && inst.GetStatusThreadSafe() != session.StatusStopped && inst.GetTmuxSession() != nil {
+				matrixRecordSocketBatch(1)
+			}
 			go s.probe(p, launch.record, pass, launch.at, hooks)
 		}
 		return
@@ -443,6 +449,7 @@ func (s *Server) launchProbeGroup(p *profileState, group []matrixProbeLaunch, pa
 }
 
 func (s *Server) launchCaptureProbeGroup(p *profileState, group []matrixProbeLaunch, pass *session.StatusUpdatePass, hooks *session.StatusFileWatcher) {
+	matrixRecordSocketBatch(len(group))
 	if len(group) == 1 {
 		launch := group[0]
 		go s.probe(p, launch.record, pass, launch.at, hooks)
@@ -546,13 +553,16 @@ func (s *Server) collect(p *profileState) {
 	if remaining > 0 {
 		index = p.rotation % remaining
 	}
-	// matrix/hardened: reserve at most one bounded group at a time. Flush before
-	// waiting for a full worker channel; retained reservations must never prevent
-	// their own probes from starting and releasing the slots being awaited.
+	// matrix/hardened: adjacent worker completions may join one pending group
+	// within 3ms of its first reservation. Never wait behind its own full pool;
+	// original probes remain the sole releasers of every reserved worker slot.
 	var group []matrixProbeLaunch
-	flush := func() {
+	scheduler := matrixBatchScheduler{ctx: s.ctx, budget: budget, workers: s.workers, window: matrixCaptureCoalesceWindow}
+	flush := func(reason matrixBatchFlushReason) {
+		matrixRecordLogicalBatch(len(group), reason)
 		s.launchProbeGroup(p, group, pass, hooks)
 		group = nil
+		scheduler.groupFlushed()
 	}
 	for remaining > 0 && s.ctx.Err() == nil && budget.Err() == nil {
 		record := p.records[p.order[index]]
@@ -561,19 +571,23 @@ func (s *Server) collect(p *profileState) {
 		if record == nil || record.inflight || blocked[record.instance.ID] || (record.instance.IsArchived() && !record.row.ObservedAt.IsZero()) {
 			continue
 		}
-		reserved := false
-		select {
-		case s.workers <- struct{}{}:
-			reserved = true
-		default:
-			flush()
-			select {
-			case s.workers <- struct{}{}:
-				reserved = true
-			case <-budget.Done():
+		inst := record.instance
+		nonCapture := s.opts.Probe != nil || inst.IsArchived() || inst.GetStatusThreadSafe() == session.StatusStopped || inst.GetTmuxSession() == nil
+		if nonCapture && len(group) != 0 {
+			// Non-capture demand cannot benefit from holding a capture group.
+			// Start its pending neighbors before the ordinary worker wait.
+			flush(matrixBatchNonCapture)
+		}
+		reserved, reason := scheduler.reserve(len(group))
+		if reason != matrixBatchNoFlush {
+			flush(reason)
+			if reason == matrixBatchCancel || reason == matrixBatchBudget {
 				remaining = 0
-			case <-s.ctx.Done():
-				remaining = 0
+			} else {
+				reserved, _ = scheduler.reserve(0)
+				if !reserved {
+					remaining = 0
+				}
 			}
 		}
 		if reserved {
@@ -585,13 +599,31 @@ func (s *Server) collect(p *profileState) {
 			record.done = make(chan session.RuntimeSessionSnapshot, 1)
 			observedAt := time.Now().UTC()
 			record.instance.SetRuntimeProducerObservedAt(observedAt)
+			// Non-capture paths have no batch work to combine and must not spend
+			// their slots on a capture admission window (including stopped/nil).
+			if nonCapture {
+				reason := matrixBatchNonCapture
+				if s.opts.Probe != nil {
+					reason = matrixBatchOverride
+				}
+				matrixRecordLogicalBatch(1, reason)
+				go s.probe(p, record, pass, observedAt, hooks)
+				continue
+			}
+			if len(group) == 0 {
+				scheduler.groupStarted(time.Now())
+			}
 			group = append(group, matrixProbeLaunch{record, observedAt})
-			if len(group) == tmux.CapturePaneBatchLimit || s.opts.Probe != nil {
-				flush()
+			if len(group) == tmux.CapturePaneBatchLimit {
+				flush(matrixBatchFull)
 			}
 		}
 	}
-	flush()
+	reason := scheduler.interrupted()
+	if reason == matrixBatchNoFlush {
+		reason = matrixBatchEnd
+	}
+	flush(reason)
 	p.rotation = index
 	// Collect completed calls within the same bounded pass, without blocking
 	// the sampler behind one pane. Fast panes remain publishable beside a hang.

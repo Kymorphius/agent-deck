@@ -53,6 +53,8 @@ type Status struct {
 	Inflight       int       `json:"inflight"`
 	// matrix/hardened: local, fixed-category counters expose query cost, not argv.
 	TmuxCommands tmux.SubprocessMetricsSnapshot `json:"tmuxCommands"`
+	// matrix/hardened: fixed batch admission/dispatch counters contain no targets.
+	BatchScheduling CaptureBatchScheduleStats `json:"batchScheduling"`
 }
 
 type publication struct {
