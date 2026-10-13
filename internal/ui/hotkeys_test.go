@@ -146,9 +146,9 @@ func TestCostAndErrorFilterKeysAlwaysHaveSeparateMeanings(t *testing.T) {
 	home := NewHome()
 	home.statusFilter = session.StatusRunning
 
-	// With no cost store, $ remains reserved for Cost Dashboard and must not
+	// matrix/hardened: without a cost store, Alt+$ must not
 	// fall back to changing the filter.
-	home.handleMainKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(CostDashboardKey)})
+	home.handleMainKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("$"), Alt: true})
 	if home.statusFilter != session.StatusRunning {
 		t.Fatalf("%s changed status filter to %q without a cost store", CostDashboardKey, home.statusFilter)
 	}
@@ -397,5 +397,32 @@ func TestOpenShellHereHotkey(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("hotkeyOpenShellHere is missing from hotkeyActionOrder")
+	}
+}
+
+// matrix/hardened: use real Alt-modified input and a migrated cost store through
+// Home.Update; dashboard return must preserve the selected abnormal list.
+func TestMatrixCostDashboardModifiedShortcut(t *testing.T) {
+	for _, closeKey := range []tea.KeyMsg{
+		{Type: tea.KeyRunes, Runes: []rune("$"), Alt: true},
+		{Type: tea.KeyRunes, Runes: []rune("q")},
+		{Type: tea.KeyEsc},
+	} {
+		t.Run(closeKey.String(), func(t *testing.T) {
+			home, _ := buildFocusHome(t)
+			home.costStore = matrixCostTotalsStore(t)
+			home.Update(plainKeyMsg('$'))
+			if home.statusFilter != session.StatusError || home.showCostDashboard {
+				t.Fatal("$ did not select abnormal with costs enabled")
+			}
+			home.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("$"), Alt: true})
+			if !home.showCostDashboard || home.statusFilter != session.StatusError {
+				t.Fatal("Alt+$ did not open costs independently of filter")
+			}
+			home.Update(closeKey)
+			if home.showCostDashboard || home.statusFilter != session.StatusError {
+				t.Fatal("cost return did not preserve abnormal view")
+			}
+		})
 	}
 }

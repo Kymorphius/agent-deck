@@ -50,7 +50,7 @@ func TestMatrixStatusFilterKeyboard_FullwidthShortcuts(t *testing.T) {
 		key  rune
 		want session.Status
 	}{{'！', session.StatusRunning}, {'＠', session.StatusWaiting}, {'＃', session.StatusIdle},
-		{'＆', session.StatusError}, {'％', FilterModeActive}, {'＾', FilterModeArchived}, {'～', FilterModeInterrupted}} {
+		{'＄', session.StatusError}, {'￥', session.StatusError}, {'＆', session.StatusError}, {'％', FilterModeActive}, {'＾', FilterModeArchived}, {'～', FilterModeInterrupted}} {
 		t.Run(string(tc.key), func(t *testing.T) {
 			home, _ := buildFocusHome(t)
 			home.Update(plainKeyMsg(tc.key))
@@ -93,5 +93,39 @@ func TestMatrixStatusFilterKeyboard_CtrlShiftDoesNotFilter(t *testing.T) {
 				t.Fatalf("Ctrl+Shift input %q executed Shift-only shortcut", input)
 			}
 		})
+	}
+}
+
+// matrix/hardened: $ always means abnormal, including real terminal encodings,
+// independently of cost availability; pending navigation must not steal it.
+func TestMatrixStatusFilterKeyboard_Abnormal(t *testing.T) {
+	for _, input := range []string{"$", "&", "\x1b[52;2u", "\x1b[36;2u", "\x1b[27;2;36~"} {
+		for _, prefix := range []rune{0, '3', '\''} {
+			t.Run(input+"/"+string(prefix), func(t *testing.T) {
+				home, instances := buildFocusHome(t)
+				instances[0].Status = session.StatusError
+				instances[1].Status = session.StatusWaiting
+				home.rebuildFlatItems()
+				if prefix != 0 {
+					home.Update(plainKeyMsg(prefix))
+				}
+				decoded, err := io.ReadAll(NewCSIuReader(bytes.NewBufferString(input)))
+				if err != nil {
+					t.Fatal(err)
+				}
+				key := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(string(decoded))}
+				home.Update(key)
+				if home.statusFilter != session.StatusError || home.showCostDashboard || home.matrixPendingNav() || home.err != nil {
+					t.Fatalf("input %q: filter=%q costs=%v pending=%v error=%v", input, home.statusFilter, home.showCostDashboard, home.matrixPendingNav(), home.err)
+				}
+				if home.flatItemIndexByID(instances[0].ID) < 0 || home.flatItemIndexByID(instances[1].ID) >= 0 {
+					t.Fatal("abnormal filter membership incorrect")
+				}
+				home.Update(key)
+				if home.statusFilter != "" {
+					t.Fatal("second press did not clear abnormal filter")
+				}
+			})
+		}
 	}
 }

@@ -125,7 +125,8 @@ func (d costDashboard) View() string {
 	if end-start < page {
 		body += strings.Repeat("\n", page-(end-start))
 	}
-	help := "↑/↓ scroll • PgUp/PgDn page • q/$ return"
+	// matrix/hardened: match the modified cost-dashboard binding.
+	help := "↑/↓ scroll • PgUp/PgDn page • q/Esc/Alt+$ return"
 	if len(lines) > page {
 		help += fmt.Sprintf(" • %d–%d/%d", start+1, end, len(lines))
 	}
