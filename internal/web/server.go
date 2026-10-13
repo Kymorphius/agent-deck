@@ -196,7 +196,13 @@ type Server struct {
 	menuSubscribersMu sync.Mutex
 	menuSubscribers   map[chan struct{}]struct{}
 
-	costStore       *costs.Store
+	costStore *costs.Store
+	// matrix/hardened: manual cost synchronization is injected explicitly and
+	// never started by a GET, page subscription or server construction.
+	costSyncMu      sync.RWMutex
+	costSync        func(context.Context) (*costs.SyncResult, error)
+	costSyncRunning atomic.Bool
+	costAutoCollect atomic.Bool // matrix/hardened: actual startup mode, not pending config.
 	mutator         SessionMutator
 	skills          SkillsService
 	mcpMgr          MCPManager
@@ -552,6 +558,22 @@ func (s *Server) unsubscribeMenuChanges(ch chan struct{}) {
 
 func (s *Server) SetCostStore(store *costs.Store) {
 	s.costStore = store
+}
+
+// SetCostSync injects the explicit manual synchronization operation. A nil
+// callback disables the endpoint; replacing it never starts collection.
+// matrix/hardened: synchronize injection with request reads without holding a
+// server lock while transcript parsing and cost database writes execute.
+func (s *Server) SetCostSync(syncCosts func(context.Context) (*costs.SyncResult, error)) {
+	s.costSyncMu.Lock()
+	s.costSync = syncCosts
+	s.costSyncMu.Unlock()
+}
+
+// SetCostAutoCollect reports the mode actually started by the process owner.
+// matrix/hardened: pending config edits cannot mislabel a manual runtime as live.
+func (s *Server) SetCostAutoCollect(enabled bool) {
+	s.costAutoCollect.Store(enabled)
 }
 
 // SetMutator injects the session mutator implementation (typically *ui.WebMutator).

@@ -31,6 +31,10 @@ type ConfigKey struct {
 func boolRef(b bool) *bool { return &b }
 
 var configKeys = []ConfigKey{
+	// matrix/hardened: this collector switch is shared by CLI and hook paths.
+	{Key: "costs.auto_collect", Section: "Costs", Label: "Automatic collection", Help: "Collect transcript usage in the background; default off. Run costs sync for a manual update. Reload Agent Deck management windows after changing this setting.", Type: "bool", RestartRequired: true,
+		get: func(c *UserConfig) any { return c.Costs.GetAutoCollect() },
+		set: func(c *UserConfig, v any) { c.Costs.AutoCollect = boolRef(v.(bool)) }},
 	{Key: "theme", Section: "General", Label: "Theme", Help: "Color theme: dark, light, or follow the system appearance", Type: "enum", Values: []string{"dark", "light", "system"}, Aliases: []string{"ui.theme"},
 		get: func(c *UserConfig) any {
 			if c.Theme == "light" || c.Theme == "system" {

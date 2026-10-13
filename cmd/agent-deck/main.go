@@ -45,7 +45,7 @@ import (
 )
 
 // matrix/hardened: identifies our hardened build.
-var Version = "1.16.26+matrix.53" // overridden at build time via -ldflags "-X main.Version=..."
+var Version = "1.16.26+matrix.54" // overridden at build time via -ldflags "-X main.Version=..."
 
 // Table column widths for list command output
 const (
@@ -1072,11 +1072,13 @@ func main() {
 	// Cost Tracking Initialization
 	// ═══════════════════════════════════════════════════════════════════
 	var costStore *costs.Store
+	var costAutoCollect bool // matrix/hardened: actual mode of this loaded process.
 	if db := statedb.GetGlobal(); db != nil {
 		costStore = costs.NewStore(db.DB())
 
 		// Load user config for pricing overrides and budgets
 		userCfg, _ := session.LoadUserConfig()
+		costAutoCollect = userCfg != nil && userCfg.Costs.GetAutoCollect()
 
 		// Set up pricer with overrides
 		cacheDir, cacheErr := effectiveCacheDir()
@@ -1102,11 +1104,14 @@ func main() {
 		if cacheDir != "" {
 			_ = pricer.LoadCache()
 
-			// Start daily price fetcher
-			fetchCtx, fetchCancel := context.WithCancel(context.Background())
-			defer fetchCancel()
-			fetcher := &costs.Fetcher{CachePath: filepath.Join(cacheDir, "pricing.json"), Pricer: pricer}
-			go fetcher.StartDaily(fetchCtx)
+			// matrix/hardened: manual collection does not start price maintenance.
+			if costAutoCollect {
+				// Start daily price fetcher
+				fetchCtx, fetchCancel := context.WithCancel(context.Background())
+				defer fetchCancel()
+				fetcher := &costs.Fetcher{CachePath: filepath.Join(cacheDir, "pricing.json"), Pricer: pricer}
+				go fetcher.StartDaily(fetchCtx)
+			}
 		}
 
 		// Set up budget checker
@@ -1129,41 +1134,45 @@ func main() {
 		homeModel.SetCostStore(costStore)
 		homeModel.SetCostPricer(pricer)
 		homeModel.SetCostBudget(budgetChecker)
-		// matrix/hardened: native Codex usage feeds the same cost dashboard.
-		stopCodexCosts := startCodexCostCollection(profile, costStore)
-		defer stopCodexCosts()
+		// matrix/hardened: all automatic costs work requires explicit opt-in.
+		// Stored totals and explicit costs sync remain available in manual mode.
+		if costAutoCollect {
+			// matrix/hardened: native Codex usage feeds the same cost dashboard.
+			stopCodexCosts := startCodexCostCollection(profile, costStore)
+			defer stopCodexCosts()
 
-		// Start cost event watcher (for Claude hook events)
-		costEventsDir := getCostEventsDir()
-		costWatcher, watchErr := costs.NewCostEventWatcher(costEventsDir)
-		if watchErr == nil {
-			go costWatcher.Start()
-			defer costWatcher.Stop()
+			// Start cost event watcher (for Claude hook events)
+			costEventsDir := getCostEventsDir()
+			costWatcher, watchErr := costs.NewCostEventWatcher(costEventsDir)
+			if watchErr == nil {
+				go costWatcher.Start()
+				defer costWatcher.Stop()
 
-			// Process incoming cost events from hooks
-			go func() {
-				for raw := range costWatcher.EventCh() {
-					ev := costs.CostEvent{
-						ID:               fmt.Sprintf("%s_%d", raw.InstanceID, raw.Timestamp),
-						SessionID:        raw.InstanceID,
-						Timestamp:        time.Unix(0, raw.Timestamp),
-						Model:            raw.Model,
-						InputTokens:      raw.InputTokens,
-						OutputTokens:     raw.OutputTokens,
-						CacheReadTokens:  raw.CacheReadTokens,
-						CacheWriteTokens: raw.CacheWriteTokens,
-						CostMicrodollars: pricer.ComputeCost(raw.Model, raw.InputTokens, raw.OutputTokens, raw.CacheReadTokens, raw.CacheWriteTokens),
+				// Process incoming cost events from hooks
+				go func() {
+					for raw := range costWatcher.EventCh() {
+						ev := costs.CostEvent{
+							ID:               fmt.Sprintf("%s_%d", raw.InstanceID, raw.Timestamp),
+							SessionID:        raw.InstanceID,
+							Timestamp:        time.Unix(0, raw.Timestamp),
+							Model:            raw.Model,
+							InputTokens:      raw.InputTokens,
+							OutputTokens:     raw.OutputTokens,
+							CacheReadTokens:  raw.CacheReadTokens,
+							CacheWriteTokens: raw.CacheWriteTokens,
+							CostMicrodollars: pricer.ComputeCost(raw.Model, raw.InputTokens, raw.OutputTokens, raw.CacheReadTokens, raw.CacheWriteTokens),
+						}
+						_ = costStore.WriteCostEvent(ev)
 					}
-					_ = costStore.WriteCostEvent(ev)
-				}
-			}()
-		}
+				}()
+			}
 
-		// Run retention cleanup on startup
-		if userCfg != nil {
-			retDays := userCfg.Costs.GetRetentionDays()
-			if retDays > 0 {
-				_, _ = costStore.PurgeOlderThan(retDays)
+			// Run retention cleanup on startup
+			if userCfg != nil {
+				retDays := userCfg.Costs.GetRetentionDays()
+				if retDays > 0 {
+					_, _ = costStore.PurgeOlderThan(retDays)
+				}
 			}
 		}
 	}
@@ -1206,6 +1215,11 @@ func main() {
 		}
 		if costStore != nil {
 			server.SetCostStore(costStore)
+			server.SetCostAutoCollect(costAutoCollect)
+			// matrix/hardened: only an explicit authenticated sync action reads usage.
+			server.SetCostSync(func(ctx context.Context) (*costs.SyncResult, error) {
+				return syncCostsForProfile(ctx, effectiveProfile, costStore, newPricerFromConfig())
+			})
 		}
 
 		if webHeadless {

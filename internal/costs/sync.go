@@ -34,6 +34,8 @@ type SyncSession struct {
 	ClaudeSessionID string
 	ProjectPath     string
 	Tool            string
+	// matrix/hardened: exact account-bound Claude path for managed sync sources.
+	ClaudePath string
 	// matrix/hardened: resolved by the session's account-aware artifact resolver.
 	CodexPath      string
 	CodexSessionID string
@@ -42,6 +44,12 @@ type SyncSession struct {
 // SyncFromTranscripts reads historical usage from Claude transcript files
 // and backfills cost_events for managed sessions.
 func SyncFromTranscripts(store *Store, pricer *Pricer, sessions []SyncSession) SyncResult {
+	return SyncFromTranscriptsContext(context.Background(), store, pricer, sessions)
+}
+
+// matrix/hardened: an explicit Web sync stops reading when its request ends.
+// Events already imported remain durable and are deduplicated on the next sync.
+func SyncFromTranscriptsContext(ctx context.Context, store *Store, pricer *Pricer, sessions []SyncSession) SyncResult {
 	var result SyncResult
 
 	home, err := os.UserHomeDir()
@@ -52,13 +60,21 @@ func SyncFromTranscripts(store *Store, pricer *Pricer, sessions []SyncSession) S
 
 	importer := NewUsageImporter(store, pricer)
 	for _, sess := range sessions {
+		if err := ctx.Err(); err != nil {
+			result.Errors = append(result.Errors, err.Error())
+			return result
+		}
 		// matrix/hardened: native Codex per-response usage, not terminal text.
 		if sess.CodexPath != "" && sess.CodexSessionID != "" {
 			result.SessionsScanned++
-			events, err := reader.ScanCodexUsage(context.Background(), sess.CodexPath, sess.CodexSessionID)
+			events, err := reader.ScanCodexUsage(ctx, sess.CodexPath, sess.CodexSessionID)
 			if err != nil {
 				result.Errors = append(result.Errors, fmt.Sprintf("scan Codex %s: %v", sess.InstanceID, err))
 				continue
+			}
+			if err := ctx.Err(); err != nil {
+				result.Errors = append(result.Errors, err.Error())
+				return result
 			}
 			imported, skipped, errs := importer.Import(sess.InstanceID, events)
 			result.EventsImported += imported
@@ -74,15 +90,24 @@ func SyncFromTranscripts(store *Store, pricer *Pricer, sessions []SyncSession) S
 
 		// Derive transcript path: ~/.claude/projects/<slugified-path>/<session-id>.jsonl
 		sluggedPath := slugifyProjectPath(sess.ProjectPath)
-		transcriptPath := filepath.Join(home, ".claude", "projects", sluggedPath, sess.ClaudeSessionID+".jsonl")
+		transcriptPath := sess.ClaudePath
+		if transcriptPath == "" {
+			// Retain the original direct-caller default; managed sources supply
+			// their exact account/cwd path instead of guessing another home.
+			transcriptPath = filepath.Join(home, ".claude", "projects", sluggedPath, sess.ClaudeSessionID+".jsonl")
+		}
 
 		if _, err := os.Stat(transcriptPath); os.IsNotExist(err) {
 			continue
 		}
 
-		events, err := reader.ScanClaudeUsage(context.Background(), transcriptPath)
+		events, err := reader.ScanClaudeUsage(ctx, transcriptPath)
 		if err != nil {
 			result.Errors = append(result.Errors, fmt.Sprintf("scan %s: %v", transcriptPath, err))
+		}
+		if err := ctx.Err(); err != nil {
+			result.Errors = append(result.Errors, err.Error())
+			return result
 		}
 		imported, skipped, errs := importer.Import(sess.InstanceID, events)
 		result.EventsImported += imported

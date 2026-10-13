@@ -1080,6 +1080,11 @@ type transcriptMessage struct {
 
 // writeCostEvent reads usage from the Claude transcript file on Stop events.
 func writeCostEvent(instanceID string, rawPayload []byte) {
+	// matrix/hardened: a disabled collector must not read usage or spool events.
+	cfg, err := session.LoadUserConfig()
+	if err != nil || cfg == nil || !cfg.Costs.GetAutoCollect() {
+		return
+	}
 	logCostDebug("writeCostEvent called for instance=%s", instanceID)
 
 	var stop stopHookPayload

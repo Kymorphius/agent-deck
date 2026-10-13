@@ -503,6 +503,10 @@ func TestRecall_OpenResumesCodexThread(t *testing.T) {
 // `recall open` must start it under its own profile.
 func TestRecall_SweepUnderOneProfileKeepsTheOthersCardsAndCosts(t *testing.T) {
 	home, stats := recallHome(t, 2)
+	// matrix/hardened: cost handoff is an explicit automatic-mode behavior.
+	if out, stderr, code := runAgentDeck(t, home, "config", "set", "costs.auto_collect", "true"); code != 0 {
+		t.Fatalf("enable automatic cost handoff: %s %s", out, stderr)
+	}
 	native := stats.Sessions[0]
 	data, err := os.ReadFile(stats.Paths[0])
 	if err != nil {

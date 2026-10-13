@@ -223,6 +223,12 @@ func (r *recallRegistry) close() { r.Close() }
 // Usage implements ingest.UsageSink: cost events go to the state.db that
 // holds the deck session's link, whichever profile that is.
 func (r *recallRegistry) Usage(profile, deck string, events []reader.Usage) error {
+	// matrix/hardened: Recall keeps raw usage, but incidental indexing must not
+	// update the costs database when the user chose manual cost collection.
+	cfg, err := session.LoadUserConfig()
+	if err != nil || cfg == nil || !cfg.Costs.GetAutoCollect() {
+		return nil
+	}
 	db := r.DB(r.OwnerProfile(deck))
 	if db == nil {
 		db = r.DB(r.Profile())

@@ -82,6 +82,8 @@ func costEventFiles(t *testing.T) []string {
 func TestWriteCostEvent_ContainmentAndTailWalk(t *testing.T) {
 	initTestLogging(t)
 	home, personal, work := hookHome(t, true)
+	// matrix/hardened: this test exercises the explicitly enabled producer.
+	enableAutomaticCostsForTest(t)
 	scratchRoot, err := session.WorkerScratchDirRoot()
 	if err != nil {
 		t.Fatal(err)
