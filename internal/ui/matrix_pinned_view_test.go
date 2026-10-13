@@ -168,6 +168,8 @@ func TestMatrixPinnedViewHotkeyDispatchAndSelection(t *testing.T) {
 		key  tea.KeyMsg
 	}{
 		{"ctrl+p", tea.KeyMsg{Type: tea.KeyCtrlP}},
+		{"alt+p", altKeyMsg('p')},
+		{"mac Option+P", plainKeyMsg('π')},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			home := matrixPinnedHome(t)
@@ -323,9 +325,11 @@ func TestMatrixPinnedViewHotkeyRebindAndDisable(t *testing.T) {
 	}
 	home.groupViewMode = session.GroupViewNormal
 	home.setHotkeys(resolveHotkeys(map[string]string{hotkeyTogglePinnedView: ""}))
-	home.Update(tea.KeyMsg{Type: tea.KeyCtrlP})
-	if home.groupViewMode != session.GroupViewNormal {
-		t.Fatal("disabled shortcut opened pinned view")
+	for _, key := range []tea.KeyMsg{{Type: tea.KeyCtrlP}, altKeyMsg('p'), plainKeyMsg('π')} {
+		home.Update(key)
+		if home.groupViewMode != session.GroupViewNormal {
+			t.Fatalf("disabled shortcut %q opened pinned view", key.String())
+		}
 	}
 }
 
@@ -355,10 +359,64 @@ func TestMatrixPinnedControlKeysDoNotNavigate(t *testing.T) {
 	if home.cursor != before || home.groupViewMode != session.GroupViewNormal {
 		t.Fatal("default Ctrl+N moved cursor or changed view")
 	}
-	for _, key := range []tea.KeyMsg{altKeyMsg('p'), plainKeyMsg('π')} {
+}
+
+// matrix/hardened: supplementary aliases yield to explicit bindings on either
+// side of the action order, and disappear when the primary action is rebound.
+func TestMatrixPinnedViewAliasRemapAndConflict(t *testing.T) {
+	home := matrixPinnedHome(t)
+	home.setHotkeys(resolveHotkeys(map[string]string{hotkeyTogglePinnedView: "ctrl+g"}))
+	for _, key := range []tea.KeyMsg{{Type: tea.KeyCtrlP}, altKeyMsg('p'), plainKeyMsg('π')} {
 		home.Update(key)
-		if home.cursor != before || home.groupViewMode != session.GroupViewNormal {
-			t.Fatal("old Alt/Option+P shortcut remains active by default")
+		if home.groupViewMode != session.GroupViewNormal {
+			t.Fatalf("default alias %q survived rebinding", key.String())
+		}
+	}
+	home.Update(tea.KeyMsg{Type: tea.KeyCtrlG})
+	if home.groupViewMode != session.GroupViewPinnedOnly {
+		t.Fatal("rebound shortcut did not open pinned view")
+	}
+	for _, action := range []string{hotkeyNewSession, hotkeyCopyPane} {
+		home := matrixPinnedHome(t)
+		home.setHotkeys(resolveHotkeys(map[string]string{action: "alt+p"}))
+		for _, raw := range []string{"alt+p", "π"} {
+			if got := home.normalizeMainKey(raw); got != defaultHotkeyBindings[action] {
+				t.Fatalf("%s did not retain explicit %s: got %q", action, raw, got)
+			}
+		}
+		home.Update(tea.KeyMsg{Type: tea.KeyCtrlP})
+		if home.groupViewMode != session.GroupViewPinnedOnly {
+			t.Fatal("explicit Alt+P conflict disabled Ctrl+P")
+		}
+	}
+}
+
+func TestMatrixPinnedViewHelpShowsOnlyActiveAlias(t *testing.T) {
+	for _, tc := range []struct {
+		overrides map[string]string
+		want      string
+	}{
+		{nil, "ctrl+p/alt+p"},
+		{map[string]string{hotkeyCopyPane: "alt+p"}, "ctrl+p"},
+		{map[string]string{hotkeyTogglePinnedView: "ctrl+g"}, "ctrl+g"},
+		{map[string]string{hotkeyTogglePinnedView: ""}, ""},
+	} {
+		h := NewHelpOverlay()
+		h.SetHotkeys(resolveHotkeys(tc.overrides))
+		h.Show()
+		h.SetSize(200, 200)
+		found := false
+		for _, line := range strings.Split(h.View(), "\n") {
+			if strings.Contains(line, "Toggle pinned-only view") {
+				found = true
+				if tc.want == "" || !strings.Contains(line, tc.want) || (tc.want != "ctrl+p/alt+p" && strings.Contains(line, "/alt+p")) {
+					t.Fatalf("unexpected pinned help row: %q", line)
+				}
+				break
+			}
+		}
+		if found != (tc.want != "") {
+			t.Fatalf("pinned help row visibility = %v, wanted binding %q", found, tc.want)
 		}
 	}
 }

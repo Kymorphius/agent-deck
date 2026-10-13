@@ -48,7 +48,7 @@ panes are untouched: they receive the raw bytes exactly as typed.
 | `Alt+g` / `Alt+G` | First / last session in group |
 | `Alt+/` | Filter search within group |
 
-<!-- matrix/hardened: o opens sessions; Alt+O opens the prompt dialog. -->
+<!-- matrix/hardened: o opens sessions; Alt+O opens the prompt dialog; Ctrl+P and Option+P toggle pinned view. -->
 ### Session Actions
 
 | Key | Action |
@@ -70,6 +70,7 @@ panes are untouched: they receive the raw bytes exactly as typed.
 | `s` | Skills Manager (**rebindable**) |
 | `$` | Cost Dashboard |
 | `v` | Cycle preview mode: output / stats / both (**rebindable**) |
+| `Ctrl+P` / `Alt+P` (`Option+P` on macOS) | Toggle pinned-only view (`toggle_pinned_view` is **rebindable**; rebinding or disabling releases both defaults) |
 | `O` | Toggle preview orientation (right / below — portrait monitors) |
 | `<` / `>` | Shrink / grow preview pane by 5% (or drag the divider with the mouse) |
 | `u` | Mark unread, idle -> waiting (**rebindable**) |

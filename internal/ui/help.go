@@ -83,6 +83,7 @@ type HelpOverlay struct {
 	height       int
 	scrollOffset int // Current scroll position for small screens
 	hotkeys      map[string]string
+	hotkeyLookup map[string]string // matrix/hardened: display only aliases that actually own their key.
 	// hasAgents gates the Agents row. The feature is opt-in by presence, and
 	// this overlay is part of the TUI: a user who has adopted nothing must not
 	// find a key here for a surface that does not exist for them.
@@ -108,7 +109,9 @@ func (h *HelpOverlay) SetEmbeddedLayout(enabled bool) {
 
 // NewHelpOverlay creates a new help overlay
 func NewHelpOverlay() *HelpOverlay {
-	return &HelpOverlay{hotkeys: resolveHotkeys(nil)}
+	h := &HelpOverlay{}
+	h.SetHotkeys(resolveHotkeys(nil)) // matrix/hardened: cache alias ownership when bindings change.
+	return h
 }
 
 // Show makes the help overlay visible
@@ -139,6 +142,7 @@ func (h *HelpOverlay) SetHotkeys(bindings map[string]string) {
 	for action, key := range bindings {
 		h.hotkeys[action] = key
 	}
+	h.hotkeyLookup, _ = buildHotkeyLookup(h.hotkeys) // matrix/hardened: no lookup rebuild during rendering.
 }
 
 func (h *HelpOverlay) key(action, fallback string) string {
@@ -225,7 +229,10 @@ func (h *HelpOverlay) View() string {
 	reorderDownKeys := "- / J / Shift+↓"
 	indentKeys := "Shift+→/←"
 	pinKeys := ","
-	pinnedViewKey := h.key(hotkeyTogglePinnedView, "Ctrl+P") // matrix/hardened
+	pinnedViewKey := h.key(hotkeyTogglePinnedView, "Ctrl+P / Alt+P") // matrix/hardened
+	if pinnedViewKey == defaultHotkeyBindings[hotkeyTogglePinnedView] && h.hotkeyLookup["alt+p"] == defaultHotkeyBindings[hotkeyTogglePinnedView] {
+		pinnedViewKey = joinHotkeyLabels(pinnedViewKey, "alt+p") // matrix/hardened: both default pinned-view entry points.
+	}
 	searchKey := h.key(hotkeySearch, "/")
 	settingsKey := h.key(hotkeySettings, "S")
 	helpKey := h.key(hotkeyHelp, "?")

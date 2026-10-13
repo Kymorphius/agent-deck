@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.66`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.67`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -66,7 +66,7 @@
 - `internal/session/claude_hooks.go`：`isAgentDeckHookCommand` 的判断规则：先去掉开头的 `VAR=值`，再要求第二个词是 `hook-handler`、程序名的文件名部分是 `agent-deck`。`RemoveClaudeHooks` 会扫描全部事件，并做 UTC 时间戳备份（约 387–414 行）。
 - `cmd/agent-deck/main.go`（约 4845、5070 行）：`agent-deck uninstall` 会移除这些钩子。`uninstall.sh` 第 253 行附近的 jq 过滤用的是同一套规则（正则），写回时用 `cat >` 保持软链接和权限。
 
-**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.65`。
+**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.67`。
 
 **测试**：以 `_hardened_test.go` 结尾的文件、`update_check_disable_test.go`、`update_timer_wiring_test.go` 等是新增或调整过的测试；`testdata/goldens/*` 里的快照已经按加固后的输出更新。
 
@@ -590,7 +590,7 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 
 `1.16.26+matrix.64` 将置顶视图默认入口改为 `Ctrl+P`；再次按键回到普通列表，`t` 的视图循环保持。帮助、筛选栏和空视图提示读取实际绑定。
 
-- **matrix/hardened:** `[hotkeys].toggle_pinned_view` 默认 `ctrl+p`，仍可重绑或置空。主列表不再将 `Ctrl+P`、`Ctrl+N` 作为上下移动或数字计数导航；重绑或禁用置顶入口也不会恢复旧导航别名。
+- **matrix/hardened:** `[hotkeys].toggle_pinned_view` 默认 `ctrl+p`，仍可重绑或置空；`matrix.67` 起同时提供 `Alt+P`（macOS `Option+P`）默认别名。主列表不再将 `Ctrl+P`、`Ctrl+N` 作为上下移动或数字计数导航；重绑或禁用置顶入口会释放两个默认入口，也不会恢复旧导航别名。
 - **matrix/hardened:** 技能、Agents、Watcher、Dead letters、分支、目录、分组、新建和路径弹窗消费这两个旧导航键，防止子输入组件继续移动选择或焦点。原方向键、`j/k`、Tab 流程保持；路径编辑建议用上下方向键。Notes 和未启用的 Feedback 文本编辑器也移除组件默认的 `Ctrl+N/P` 行移动。
 - **matrix/hardened:** 已连接的本地/远程终端以及 insert mode 继续接收原始控制按键。按键映射沿用 `config.toml` 的 `[hotkeys]`；`?` 展示当前映射。
 - 验证使用第 4 节隔离入口，覆盖置顶切换与选择保持、重绑和禁用、旧入口不再触发、主列表无移动、弹窗输入及选择不变、方向键和文本编辑保持可用；安装后以原生窗口和原会话 pane 身份验收。
@@ -602,3 +602,10 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 - **matrix/hardened:** 费用面板移到 `Alt+$`（Alt+Shift+4）；用 `q`、Esc 或 `Alt+$` 返回。帮助页与费用面板底栏同步显示新绑定，普通 `$` 不再打开费用页。中文输入法的 `＄` / `￥` 同样筛选异常。
 - 改动地图：`internal/ui/home.go`（绑定与关闭）、`cost_dashboard.go`（返回提示）；帮助和顶栏使用共享常量，自动跟随新绑定；相关筛选栏快照同步更新。
 - 验证：`matrix_status_filter_keyboard_test.go` 经 Home.Update 覆盖原始字符、两种终端协议、全角符号、导航前缀及再次取消；`hotkeys_test.go` 验证费用入口独立、缺少费用存储的提示，以及实际费用面板开关。
+
+## 55. 置顶视图的双入口
+
+`1.16.26+matrix.67` 保留 `Ctrl+P` 主入口，同时恢复 `Alt+P` / macOS `Option+P` 的默认备用入口。两者切换同一置顶视图，Mac 普通 Option 字符 `π` 也沿用主列表的字符转换。
+
+- **matrix/hardened:** 快捷键先解析用户显式绑定，再为未重绑的动作加入未被占用的默认别名，最后解析布局字符别名。其它动作显式绑定 `alt+p` 时优先；重绑或禁用 `toggle_pinned_view` 会释放两个默认入口。帮助页缓存按键归属，仅显示实际可用的别名；紧凑筛选栏继续显示主入口。
+- 不改变已关闭的 `Ctrl+N/P` 导航、弹窗输入或已连接终端的按键透传，不增加后台任务或渲染时映射重建。验证覆盖真实按键派发、选中条目保持、Mac Option 字符、重绑、禁用及显式冲突。
