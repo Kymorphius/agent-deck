@@ -19,7 +19,7 @@ func TestRowStatusGlyph_MatrixAPIInterrupted(t *testing.T) {
 		{"waiting", session.StatusWaiting, false, "↯"},
 		{"idle (acknowledged)", session.StatusIdle, false, "↯"},
 		{"running: a new turn may be under way", session.StatusRunning, false, "●"},
-		{"error keeps the error glyph", session.StatusError, false, "✕"},
+		{"error with interrupted turn keeps interruption glyph", session.StatusError, false, "↯"},
 		{"stopped", session.StatusStopped, false, "■"},
 		{"archived", session.StatusWaiting, true, "■"},
 	}

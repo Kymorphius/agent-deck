@@ -9,7 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-// matrix/hardened: the "↯ N" pill and the "~" filter (matrix_turn_interrupt_filter.go).
+// matrix/hardened: the abnormal pill and the "~" subset filter.
 
 func matrixInterruptHome(t *testing.T, snap map[string]sessionRenderState, rows ...*session.Instance) *Home {
 	t.Helper()
@@ -52,8 +52,8 @@ func TestMatrixInterruptedPillAndFilter(t *testing.T) {
 	if got := h.matrixCountTurnInterrupted(); got != 2 {
 		t.Fatalf("count = %d, want 2 (waiting + idle; not running, not archived)", got)
 	}
-	if bar := stripAnsi(h.renderFilterBar()); !strings.Contains(bar, "↯ 2") {
-		t.Errorf("filter bar has no ↯ 2 pill: %q", bar)
+	if bar := stripAnsi(h.renderFilterBar()); !strings.Contains(bar, "✕ Abnormal 2") {
+		t.Errorf("filter bar has no abnormal 2 pill: %q", bar)
 	}
 
 	press := func() { _, _ = h.handleMainKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'~'}}) }
@@ -73,13 +73,13 @@ func TestMatrixInterruptedPillAndFilter(t *testing.T) {
 	}
 }
 
-// Nothing interrupted: the pill still shows (↯ 0) and the filter shows an
+// Nothing interrupted: the abnormal pill still shows zero; the subset shows an
 // empty list that says what would appear there.
 func TestMatrixInterruptedFilter_Empty(t *testing.T) {
 	rows := []*session.Instance{{ID: "a", Title: "a-row", GroupPath: "g", Status: session.StatusWaiting}}
 	h := matrixInterruptHome(t, map[string]sessionRenderState{"a": {status: session.StatusWaiting}}, rows...)
-	if bar := stripAnsi(h.renderFilterBar()); !strings.Contains(bar, "↯ 0") {
-		t.Errorf("filter bar has no ↯ 0 pill: %q", bar)
+	if bar := stripAnsi(h.renderFilterBar()); !strings.Contains(bar, "✕ Abnormal 0") {
+		t.Errorf("filter bar has no abnormal 0 pill: %q", bar)
 	}
 	_, _ = h.handleMainKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'~'}})
 	if h.statusFilter != FilterModeInterrupted || len(matrixSessionTitles(h)) != 0 {

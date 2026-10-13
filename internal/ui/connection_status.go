@@ -63,14 +63,17 @@ func rowStatusGlyph(status session.Status, substate session.Substate, archived b
 	// supervisor must act on differently — a dead-model no-op loop and an
 	// auth/login failure both render as "error", but a generic "✕" hides which.
 	// "⚡" = model unavailable (the Fable-down no-op), "🔒" = auth/login needed.
-	// Gated on StatusError so a stale cached substate cannot leak the glyph onto
-	// a session that is no longer in error.
-	if status == session.StatusError {
+	// matrix/hardened: running/stopped rows retain their lifecycle glyph;
+	// waiting/idle diagnostics share the abnormal presentation bucket.
+	if matrixDisplayStatus(status, substate, archived) == session.StatusError {
+		style = SessionStatusError
 		switch substate {
 		case session.SubstateModelUnavailable:
 			icon = "⚡"
 		case session.SubstateAuth401:
 			icon = "🔒"
+		case session.SubstateUsageLimit:
+			icon = "✕"
 		}
 	}
 

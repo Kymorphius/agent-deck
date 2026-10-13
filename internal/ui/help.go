@@ -434,8 +434,8 @@ func (h *HelpOverlay) View() string {
 			title: "SEARCH & FILTER",
 			items: [][2]string{
 				{searchKey, "Open search"},
-				{FilterKeyError, "Filter errors"},
-				{FilterKeyActive, "Filter open (hide errors)"},
+				{FilterKeyError, "Filter abnormal (errors + interruptions)"},
+				{FilterKeyActive, "Filter open (hide abnormal)"},
 				{FilterKeyInterrupted, "Filter interrupted turns ↯"}, // matrix/hardened
 				{"/waiting", "Filter waiting"},
 				{"/running", "Filter running"},

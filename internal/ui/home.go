@@ -3439,7 +3439,8 @@ func (h *Home) rebuildFlatItemsAt(now time.Time) {
 		// n, N and g. The archived view and any filter hide such a remote.
 		partitioned := make([]session.RemoteSessionInfo, 0, len(sessions))
 		for _, remote := range sessions {
-			if remote.Archived == viewArchived {
+			// matrix/hardened: compose remote status filters with archive/time filters.
+			if remote.Archived == viewArchived && h.matrixMatchesRemoteFilter(h.statusFilter, remote) {
 				partitioned = append(partitioned, remote)
 			}
 		}
@@ -18932,7 +18933,8 @@ func (h *Home) countSessionStatuses() (running, waiting, idle, stopped, errored 
 		if state.archivedSuperseded {
 			continue
 		}
-		switch statusBucket(state.status) {
+		// matrix/hardened: count each row once in its presentation bucket.
+		switch matrixDisplayStatus(state.status, state.substate, state.matrixArchived) {
 		case session.StatusRunning:
 			running++
 		case session.StatusWaiting:
@@ -18966,7 +18968,8 @@ func (h *Home) countSessionStatuses() (running, waiting, idle, stopped, errored 
 		age, known := h.remoteRowAgeLocked(name)
 		stale := known && age >= remoteRowStaleAge
 		for _, rs := range sessions {
-			switch statusBucket(session.Status(rs.Status)) {
+			// matrix/hardened: remote counts share the local abnormal classifier.
+			switch matrixDisplayStatus(session.Status(rs.Status), session.Substate(rs.Substate), rs.Archived) {
 			case session.StatusRunning:
 				if stale {
 					continue
@@ -19081,8 +19084,31 @@ func (h *Home) renderFilterBar() string {
 			Padding(0, 1).Render(idleLabel))
 	}
 
-	// matrix/hardened: interrupted turns, always shown (dim at 0).
-	pills = append(pills, h.matrixInterruptedPill(dimPillStyle))
+	// matrix/hardened: the abnormal entry remains discoverable even at zero.
+	{
+		errorLabel := fmt.Sprintf("✕ Abnormal %d", errored)
+		if h.statusFilter == session.StatusError {
+			pills = append(pills, lipgloss.NewStyle().
+				Foreground(ColorBg).
+				Background(ColorRed).
+				Bold(true).
+				Padding(0, 1).Render(errorLabel))
+		} else if isActive && h.activeFilterExcludes[session.StatusError] {
+			pills = append(pills, dimPillStyle.Render(errorLabel))
+		} else if errored > 0 {
+			pills = append(pills, lipgloss.NewStyle().
+				Foreground(ColorRed).
+				Background(ColorSurface).
+				Padding(0, 1).Render(errorLabel))
+		} else {
+			pills = append(pills, dimPillStyle.Render(errorLabel))
+		}
+	}
+
+	// matrix/hardened: interruption is a drill-down, not a competing main bucket.
+	if h.statusFilter == FilterModeInterrupted {
+		pills = append(pills, h.matrixInterruptedPill(dimPillStyle))
+	}
 
 	// Stopped pill (issue #953): manually-stopped sessions deserve their own
 	// affordance — they're not errors, they're intentional. Render-only-if
@@ -19103,24 +19129,6 @@ func (h *Home) renderFilterBar() string {
 				Foreground(ColorTextDim).
 				Background(ColorSurface).
 				Padding(0, 1).Render(stoppedLabel))
-		}
-	}
-
-	if errored > 0 || h.statusFilter == session.StatusError {
-		errorLabel := fmt.Sprintf("✕ %d", errored)
-		if h.statusFilter == session.StatusError {
-			pills = append(pills, lipgloss.NewStyle().
-				Foreground(ColorBg).
-				Background(ColorRed).
-				Bold(true).
-				Padding(0, 1).Render(errorLabel))
-		} else if isActive && h.activeFilterExcludes[session.StatusError] {
-			pills = append(pills, dimPillStyle.Render(errorLabel))
-		} else if errored > 0 {
-			pills = append(pills, lipgloss.NewStyle().
-				Foreground(ColorRed).
-				Background(ColorSurface).
-				Padding(0, 1).Render(errorLabel))
 		}
 	}
 
@@ -19153,7 +19161,7 @@ func (h *Home) statusFilterLabel() string {
 	case session.StatusStopped:
 		return "Stopped"
 	case session.StatusError:
-		return "Error"
+		return "Abnormal" // matrix/hardened: faults and interrupted turns
 	default:
 		return "All"
 	}
@@ -20301,6 +20309,13 @@ func (h *Home) filteredEmptyState() (EmptyStateConfig, bool) {
 			Subtitle: "Archive a session to see it here",
 			Hints:    hints,
 		}, true
+	}
+	// matrix/hardened: describe the shared abnormal entry when it is empty.
+	if h.statusFilter == session.StatusError && h.timeFilter == session.TimeFilterAll {
+		return EmptyStateConfig{Icon: "✕", Title: "No abnormal sessions",
+			Subtitle:            "All clear",
+			ShowSubtitleMinimal: true, ShowAllHintsMinimal: true,
+			Hints: []string{FilterKeyError + " or 0 show all"}}, true
 	}
 	if h.statusFilter == FilterModeInterrupted && h.timeFilter == session.TimeFilterAll { // matrix/hardened
 		return matrixInterruptedEmptyState(), true
@@ -25354,7 +25369,9 @@ func (h *Home) renderGroupPreview(group *session.Group, width, height int) strin
 	// Status breakdown with inline badges
 	running, waiting, idle, stopped, errored := 0, 0, 0, 0, 0
 	for _, sess := range visibleSessions {
-		switch statusBucket(sess.Status) {
+		// matrix/hardened: group preview shares the abnormal presentation bucket.
+		state := h.getSessionRenderState(sess)
+		switch matrixDisplayStatus(state.status, state.substate, sess.IsArchived()) {
 		case session.StatusRunning:
 			running++
 		case session.StatusWaiting:
