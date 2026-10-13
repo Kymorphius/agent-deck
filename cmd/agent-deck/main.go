@@ -45,7 +45,7 @@ import (
 )
 
 // matrix/hardened: identifies our hardened build.
-var Version = "1.16.26+matrix.56" // matrix/hardened: Codex handoff readiness without global notify changes; overridden via -ldflags.
+var Version = "1.16.26+matrix.57" // matrix/hardened: dedicated pinned-only session view; overridden via -ldflags.
 
 // Table column widths for list command output
 const (

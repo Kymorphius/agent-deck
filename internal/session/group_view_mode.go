@@ -19,10 +19,12 @@ const (
 	// (with all their sessions, unsplit) and sinks empty groups below the
 	// divider.
 	GroupViewPopulatedTop
+	// matrix/hardened: aggregate explicitly pinned sessions, across folded groups.
+	GroupViewPinnedOnly
 )
 
 // GroupViewModeCount is the number of cycle-able modes (used for "(mode+1)%N").
-const GroupViewModeCount = 3
+const GroupViewModeCount = 4 // matrix/hardened: include the pinned-only view.
 
 // Label returns a short human-readable name for the mode (for status hints).
 func (m GroupViewMode) Label() string {
@@ -31,6 +33,8 @@ func (m GroupViewMode) Label() string {
 		return "Active on top"
 	case GroupViewPopulatedTop:
 		return "Populated on top"
+	case GroupViewPinnedOnly: // matrix/hardened
+		return "Pinned only"
 	default:
 		return "Normal"
 	}
@@ -192,7 +196,7 @@ func PartitionByViewMode(items []Item, mode GroupViewMode, activity map[string]G
 // PartitionByViewModeWith is PartitionByViewMode with view-mode options (see
 // ViewModeOptions). The zero options value reproduces PartitionByViewMode.
 func PartitionByViewModeWith(items []Item, mode GroupViewMode, activity map[string]GroupActivity, opts ViewModeOptions) []Item {
-	if mode == GroupViewNormal {
+	if mode == GroupViewNormal || mode == GroupViewPinnedOnly { // matrix/hardened: Home builds the collapse-agnostic pinned list.
 		return items
 	}
 

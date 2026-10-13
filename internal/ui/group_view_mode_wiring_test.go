@@ -291,8 +291,13 @@ func TestCycleGroupViewKeyTogglesMode(t *testing.T) {
 		t.Fatalf("after 2 presses expected PopulatedTop, got %v", home.groupViewMode)
 	}
 	press()
+	// matrix/hardened: pinned-only is the fourth mode in the existing cycle.
+	if home.groupViewMode != session.GroupViewPinnedOnly {
+		t.Fatalf("after 3 presses expected PinnedOnly, got %v", home.groupViewMode)
+	}
+	press()
 	if home.groupViewMode != session.GroupViewNormal {
-		t.Fatalf("after 3 presses expected Normal again, got %v", home.groupViewMode)
+		t.Fatalf("after 4 presses expected Normal again, got %v", home.groupViewMode)
 	}
 }
 

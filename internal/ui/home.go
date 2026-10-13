@@ -382,7 +382,7 @@ type Home struct {
 	initialSelect       string                 // Session ID or title to preselect on first load (#709). Does NOT scope groups.
 	initialSelectDone   bool                   // Guard so preselection only fires once
 	previewMode         PreviewMode            // What to show in preview pane (both, output-only, analytics-only)
-	groupViewMode       session.GroupViewMode  // List partition: normal, active-on-top, populated-on-top (cycled by hotkey 't')
+	groupViewMode       session.GroupViewMode  // matrix/hardened: normal, active-on-top, populated-on-top, pinned-only (hotkey 't').
 	timeFilter          session.TimeFilterMode // Recency filter: all, today, 3 days, 7 days, 30 days (cycled by hotkey '*')
 	sidebarMode         sidebarPresentation    // Session navigation: grouped (default) or flat
 	compactSidebar      bool                   // Narrow session rail; manual split resizing opts out
@@ -1387,6 +1387,8 @@ func (h *Home) collapseOrNavUp() {
 	} else if item.Type == session.ItemTypeSession && h.sessionHasWindows(item) && !h.windowsCollapsed[item.Session.ID] {
 		h.windowsCollapsed[item.Session.ID] = true
 		h.rebuildFlatItems()
+	} else if item.Type == session.ItemTypeSession && h.groupViewMode == session.GroupViewPinnedOnly { // matrix/hardened: a standalone pin has no visible parent group to fold.
+		return
 	} else if item.Type == session.ItemTypeSession {
 		h.groupTree.CollapseGroup(item.Path)
 		h.rebuildFlatItems()
@@ -3342,6 +3344,12 @@ func (h *Home) rebuildFlatItemsAt(now time.Time) {
 	if h.embeddedLayout && h.sidebarMode == sidebarFlat {
 		allItems = flatSidebarItemsFromTree(h.groupTree)
 	}
+	// matrix/hardened: pins remain visible even inside folded groups; their
+	// original group/parent expansion state is preserved when leaving this view.
+	pinnedOnly := h.groupViewMode == session.GroupViewPinnedOnly
+	if pinnedOnly {
+		allItems = matrixPinnedItemsFromTree(h.groupTree)
+	}
 
 	// Partition archived vs active before status filters. Group membership is
 	// resolved from the full group tree — not the flattened view — so
@@ -3403,7 +3411,7 @@ func (h *Home) rebuildFlatItemsAt(now time.Time) {
 				}
 			}
 		}
-		if len(filtered) == 0 && len(allItems) > 0 && !h.keepEmptyFilter && h.statusFilter != FilterModeActive {
+		if len(filtered) == 0 && len(allItems) > 0 && !h.keepEmptyFilter && !pinnedOnly && h.statusFilter != FilterModeActive { // matrix/hardened: retain empty pinned filters.
 			h.statusFilter = ""
 			h.flatItems = allItems
 		} else {
@@ -3419,6 +3427,9 @@ func (h *Home) rebuildFlatItemsAt(now time.Time) {
 	remotes := make(map[string][]session.RemoteSessionInfo, len(h.remoteSessions))
 	remoteGroupLists := make(map[string][]string, len(h.remoteGroups))
 	for name, sessions := range h.remoteSessions {
+		if pinnedOnly { // matrix/hardened: remote rows do not expose pin metadata.
+			continue
+		}
 		// Partition remote rows the way local ones were above: the active
 		// view hides remote sessions the remote reports archived, and the ^
 		// archived view shows only those. In the plain active view a remote
@@ -3460,6 +3471,9 @@ func (h *Home) rebuildFlatItemsAt(now time.Time) {
 				if inst == nil || inst.IsArchived() != viewArchived {
 					continue
 				}
+				if pinnedOnly && !matrixSessionIsPinned(inst) { // matrix/hardened
+					continue
+				}
 				if h.statusFilter != "" && !viewArchived && !h.matchesSessionFilter(h.statusFilter, inst) { // matrix/hardened
 					continue
 				}
@@ -3482,7 +3496,7 @@ func (h *Home) rebuildFlatItemsAt(now time.Time) {
 				}
 			}
 		}
-		if hasCandidates && !hasMatches && !h.keepEmptyFilter {
+		if hasCandidates && !hasMatches && !h.keepEmptyFilter && !pinnedOnly { // matrix/hardened
 			h.timeFilter = session.TimeFilterAll
 		} else {
 			filtered := make([]session.Item, 0, len(h.flatItems))
@@ -3656,6 +3670,9 @@ func (h *Home) rebuildFlatItemsAt(now time.Time) {
 
 	// Inject creating session placeholders (worktree creation in progress)
 	for _, creating := range h.creatingSessions {
+		if pinnedOnly { // matrix/hardened: a pending session has no explicit pin.
+			continue
+		}
 		item := session.Item{
 			Type:          session.ItemTypeSession,
 			Level:         1,
@@ -13054,12 +13071,24 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return h, h.fetchSelectedPreview()
 
 	case "t":
-		// Cycle list partition: normal → active-on-top → populated-on-top → normal.
+		// matrix/hardened: normal → active-on-top → populated-on-top → pinned-only → normal.
 		// Preserve the cursor's row identity across the rebuild.
 		selectedBefore := h.captureSelectedItemIdentity()
 		h.groupViewMode = session.GroupViewMode((int(h.groupViewMode) + 1) % session.GroupViewModeCount)
 		h.rebuildFlatItemsPreservingSelection(selectedBefore)
 		h.skipDivider(1)
+		h.syncViewport()
+		h.saveUIState()
+		return h, h.fetchSelectedPreview()
+
+	case "alt+p": // matrix/hardened: direct toggle, also reached by macOS Option+P.
+		selectedBefore := h.captureSelectedItemIdentity()
+		if h.groupViewMode == session.GroupViewPinnedOnly {
+			h.groupViewMode = session.GroupViewNormal
+		} else {
+			h.groupViewMode = session.GroupViewPinnedOnly
+		}
+		h.rebuildFlatItemsPreservingSelection(selectedBefore)
 		h.syncViewport()
 		h.saveUIState()
 		return h, h.fetchSelectedPreview()
@@ -20258,6 +20287,9 @@ func renderEmptyStateResponsive(config EmptyStateConfig, width, height int) stri
 
 // filteredEmptyState describes an empty view without treating it as a new workspace.
 func (h *Home) filteredEmptyState() (EmptyStateConfig, bool) {
+	if h.groupViewMode == session.GroupViewPinnedOnly { // matrix/hardened
+		return h.matrixPinnedEmptyState(), true
+	}
 	if h.statusFilter == FilterModeArchived {
 		hints := []string{FilterKeyArchived + " back to active"}
 		if key := h.actionKey(hotkeyArchiveSession); key != "" {
@@ -22450,6 +22482,9 @@ func (h *Home) renderSessionItem(
 		}
 	} else if item.IsLastInGroup {
 		treeConnector = treeLast
+	}
+	if h.groupViewMode == session.GroupViewPinnedOnly && item.Level == 0 { // matrix/hardened: standalone pins have no tree parent.
+		treeConnector = ""
 	}
 
 	// Status indicator with consistent sizing. rowStatusGlyph maps the coarse
@@ -26318,7 +26353,13 @@ func (h *Home) renderFilterBarHint() []string {
 				label = "Populated top"
 			}
 		}
-		segs = append(segs, mark("t", true)+dim.Render(" "+label))
+		viewKey := "t"
+		if h.groupViewMode == session.GroupViewPinnedOnly { // matrix/hardened
+			if key := h.actionKey(hotkeyTogglePinnedView); key != "" {
+				viewKey = key
+			}
+		}
+		segs = append(segs, mark(viewKey, true)+dim.Render(" "+label))
 	}
 	segs = append(segs, []string{
 		mark("!", h.statusFilter == session.StatusRunning) +
@@ -26335,6 +26376,9 @@ func (h *Home) renderFilterBarHint() []string {
 	// View-mode indicator (running-on-top / populated-on-top), only when active.
 	if h.groupViewMode == session.GroupViewNormal {
 		segs = append(segs, mark("t", false)+dim.Render(" view"))
+		if key := h.actionKey(hotkeyTogglePinnedView); key != "" { // matrix/hardened
+			segs = append(segs, mark(key, false)+dim.Render(" pinned"))
+		}
 	}
 
 	// Time-range filter indicator (today / 3 days / 7 days / 30 days), only when active.
