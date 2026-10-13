@@ -1,9 +1,11 @@
 package web
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -18,6 +20,185 @@ import (
 	"github.com/asheshgoplani/agent-deck/internal/session"
 	"github.com/gorilla/websocket"
 )
+
+// matrix/hardened: stable valid row identities leave enough unchanged content
+// for a runtime-only whole-row delta to be smaller than a versioned full menu.
+func matrixDashboardDeltaMenu() *MenuSnapshot {
+	menu := &MenuSnapshot{Profile: "private-publisher-profile", GeneratedAt: time.Now().UTC(), TotalGroups: 1, TotalSessions: 8}
+	menu.Items = append(menu.Items, MenuItem{Index: 0, Type: MenuItemTypeGroup, Group: &MenuGroup{Name: "work", Path: "work", Expanded: true}})
+	for index := 1; index <= menu.TotalSessions; index++ {
+		menu.Items = append(menu.Items, MenuItem{Index: index, Type: MenuItemTypeSession, Level: 1, Path: "work", Session: &MenuSession{
+			ID: fmt.Sprintf("stage52-session-%d", index), Title: fmt.Sprintf("worker-%d", index), Tool: "shell", GroupPath: "work",
+			Status: session.StatusRunning, LatestPrompt: strings.Repeat("unchanged prompt ", 30),
+			Hints: map[string]string{"remove": "old", "keep": "same"}, Tags: []string{"old"},
+		}})
+	}
+	return menu
+}
+
+type matrixDashboardMenuEnvelope struct {
+	Type        string          `json:"type"`
+	Version     string          `json:"version"`
+	BaseVersion string          `json:"baseVersion"`
+	Data        json.RawMessage `json:"data"`
+	encoded     []byte
+}
+
+// matrix/hardened: consume CC/keepalive independently so these menu assertions
+// never suppress or gate completion delivery on the menu's content version.
+func matrixDashboardReadMenuEnvelope(t *testing.T, conn *websocket.Conn) matrixDashboardMenuEnvelope {
+	t.Helper()
+	for {
+		_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		kind, payload, err := conn.ReadMessage()
+		if err != nil || kind != websocket.TextMessage {
+			t.Fatalf("read dashboard menu envelope: kind=%d error=%v", kind, err)
+		}
+		var envelope matrixDashboardMenuEnvelope
+		if err := json.Unmarshal(payload, &envelope); err != nil {
+			t.Fatalf("invalid menu envelope %s: %v", payload, err)
+		}
+		if envelope.Type == "command-center" || envelope.Type == "heartbeat" {
+			continue
+		}
+		envelope.encoded = payload
+		return envelope
+	}
+}
+
+// matrix/hardened: actual WS opt-in is exact; old/unknown clients retain the
+// original bytes. Runtime changes remove nested fields through whole-row delta,
+// new connections and identical source recovery always start with a full value.
+func TestMatrixDashboardWSDeltaOptInLegacyAndRecovery(t *testing.T) {
+	for _, tc := range []struct {
+		name, query string
+		optIn       bool
+	}{
+		{"legacy", "", false},
+		{"unknown", "?menu_protocol=delta-v2", false},
+		{"ambiguous", "?menu_protocol=delta-v1&menu_protocol=legacy", false},
+		{"delta", "?menu_protocol=delta-v1", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			source := &matrixPublisherIntegrationSource{snapshot: matrixDashboardDeltaMenu()}
+			srv, ts, _, _, _ := matrixDashboardFixture(t, source, "")
+			conn, _, err := websocket.DefaultDialer.Dial(wsURL(ts.URL, "/ws/dashboard"+tc.query), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer conn.Close()
+			initial := matrixDashboardReadMenuEnvelope(t, conn)
+			if initial.Type != "menu" || (initial.Version != "") != tc.optIn || initial.BaseVersion != "" {
+				t.Fatalf("initial opt-in contract: %+v", initial)
+			}
+			next := matrixDashboardDeltaMenu()
+			next.Items[1].Session.Status = session.StatusWaiting
+			next.Items[1].Session.ModelID = "new-runtime-model"
+			next.Items[1].Session.Hints, next.Items[1].Session.Tags = nil, nil
+			source.replace(next, nil)
+			srv.notifyMenuChanged()
+			changed := matrixDashboardReadMenuEnvelope(t, conn)
+			if tc.optIn {
+				var data menuDeltaData
+				if err := json.Unmarshal(changed.Data, &data); err != nil {
+					t.Fatal(err)
+				}
+				if changed.Type != "menu-delta" || changed.BaseVersion != initial.Version || changed.Version == initial.Version || len(data.Changes) != 1 || data.Changes[0].Index != 1 || data.Changes[0].Item.Session.ModelID != "new-runtime-model" || data.Changes[0].Item.Session.Hints != nil || data.Changes[0].Item.Session.Tags != nil {
+					t.Fatalf("runtime delta/deletion contract: %+v, %+v", changed, data)
+				}
+				var raw struct {
+					Changes []struct {
+						Item struct {
+							Session map[string]json.RawMessage `json:"session"`
+						} `json:"item"`
+					} `json:"changes"`
+				}
+				if err := json.Unmarshal(changed.Data, &raw); err != nil {
+					t.Fatal(err)
+				}
+				if _, exists := raw.Changes[0].Item.Session["hints"]; exists {
+					t.Fatal("whole-row delta retained deleted hints")
+				}
+				fresh, _, err := websocket.DefaultDialer.Dial(wsURL(ts.URL, "/ws/dashboard"+tc.query), nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer fresh.Close()
+				first := matrixDashboardReadMenuEnvelope(t, fresh)
+				if first.Type != "menu" || first.Version != changed.Version || first.BaseVersion != "" {
+					t.Fatalf("new client received a delta: %+v", first)
+				}
+			} else {
+				srv.menuPublisher.mu.Lock()
+				want := srv.menuPublisher.current.dashboardMenu
+				srv.menuPublisher.mu.Unlock()
+				if changed.Type != "menu" || changed.Version != "" || changed.BaseVersion != "" || !bytes.Equal(changed.encoded, want) {
+					t.Fatalf("legacy menu envelope changed: %+v", changed)
+				}
+			}
+			source.replace(nil, errors.New("delta-source-error"))
+			srv.notifyMenuChanged()
+			if failed := matrixDashboardReadMenuEnvelope(t, conn); failed.Type != "error" {
+				t.Fatalf("expected source error: %+v", failed)
+			}
+			source.replace(next, nil)
+			srv.notifyMenuChanged()
+			recovered := matrixDashboardReadMenuEnvelope(t, conn)
+			if recovered.Type != "menu" || recovered.BaseVersion != "" || recovered.Version != changed.Version {
+				t.Fatalf("identical recovery did not send full baseline: %+v", recovered)
+			}
+		})
+	}
+}
+
+// matrix/hardened: skipped content generations cannot be patched from a wrong
+// base. A slow writer receives current full state and every observed completion.
+func TestMatrixDashboardWSDeltaSlowGapUsesFullAndPreservesCompletion(t *testing.T) {
+	source := &matrixPublisherIntegrationSource{snapshot: matrixDashboardDeltaMenu()}
+	gate := &matrixDashboardWriteGate{entered: make(chan struct{}), release: make(chan struct{}), closed: make(chan struct{})}
+	release := func() { gate.releaseOnce.Do(func() { close(gate.release) }) }
+	t.Cleanup(release)
+	srv, ts, _, _, _ := matrixDashboardFixture(t, source, "", func(listener net.Listener) net.Listener {
+		return &matrixDashboardGatedListener{Listener: listener, gate: gate}
+	})
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL(ts.URL, "/ws/dashboard?menu_protocol=delta-v1"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	select {
+	case <-gate.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("initial menu write did not block")
+	}
+	for _, state := range []struct {
+		title  string
+		status session.Status
+	}{
+		{"completed-during-gap", session.StatusWaiting},
+		{"restarted-during-gap", session.StatusRunning},
+		{"latest-after-gap", session.StatusRunning},
+	} {
+		menu := matrixDashboardDeltaMenu()
+		menu.Items[1].Session.Title, menu.Items[1].Session.Status = state.title, state.status
+		source.replace(menu, nil)
+		srv.notifyMenuChanged()
+		if _, err := srv.menuPublisher.loadWire(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	release()
+	initial, _ := matrixDashboardReadState(t, conn)
+	if initial.Items[1].Session.Title != "worker-1" {
+		t.Fatalf("blocked initial bytes lost ownership: %+v", initial)
+	}
+	// ReadState intentionally rejects menu-delta; this missed-version update
+	// must be a full menu even though current has a valid delta from its predecessor.
+	latest, cc := matrixDashboardReadState(t, conn)
+	if latest.Items[1].Session.Title != "latest-after-gap" || len(cc.RecentlyCompleted) != 1 || cc.RecentlyCompleted[0].Title != "completed-during-gap" {
+		t.Fatalf("gap/full/completion contract: %+v, %+v", latest, cc)
+	}
+}
 
 // matrix/hardened: exercise the real HTTP upgrade and count handler completion
 // so socket cleanup is proven without relying on process-wide goroutine counts.

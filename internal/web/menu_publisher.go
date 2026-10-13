@@ -19,7 +19,12 @@ type menuPublication struct {
 	// matrix/hardened: immutable transport/derived payloads are shared by all
 	// consumers of this generation, independent of menu fingerprint equality.
 	dashboardMenu []byte
-	commandCenter *commandCenterDerived
+	// matrix/hardened: opt-in dashboard clients share one versioned full value
+	// and at most one smaller delta from the previous different content version.
+	versionedMenu    []byte
+	menuDelta        []byte
+	deltaBaseVersion string
+	commandCenter    *commandCenterDerived
 }
 
 type menuPublisherSubscriber struct {
@@ -43,18 +48,22 @@ type menuSnapshotPublisher struct {
 	ttl    time.Duration
 	wake   chan struct{}
 
-	mu          sync.Mutex
-	current     menuPublication
-	at          time.Time
-	generation  uint64
-	revision    uint64
-	refreshes   uint64
-	errors      uint64
-	dirty       bool
-	closed      bool
-	running     bool
-	loading     chan struct{}
-	subscribers map[chan menuPublication]menuPublisherSubscriber
+	mu      sync.Mutex
+	current menuPublication
+	// matrix/hardened: successful content survives equal polls and source errors;
+	// only one prior content DTO is retained, without old CC/artifact owners.
+	content         menuDeltaContent
+	previousContent menuDeltaContent
+	at              time.Time
+	generation      uint64
+	revision        uint64
+	refreshes       uint64
+	errors          uint64
+	dirty           bool
+	closed          bool
+	running         bool
+	loading         chan struct{}
+	subscribers     map[chan menuPublication]menuPublisherSubscriber
 }
 
 // matrix/hardened: construction is lazy and creates no background collector.
@@ -159,6 +168,11 @@ func (p *menuSnapshotPublisher) loadOwned(ctx context.Context) (menuPublication,
 // matrix/hardened: source collection never holds the publisher mutex. Its
 // generation must still match after mutations before any result can publish.
 func (p *menuSnapshotPublisher) collect(ready chan struct{}, generation uint64) {
+	// matrix/hardened: capture immutable content owners briefly; diff/encoding
+	// stay outside the lock and the original generation fence still admits them.
+	p.mu.Lock()
+	content, previousContent := p.content, p.previousContent
+	p.mu.Unlock()
 	snapshot, err := p.loader()
 	v := menuPublication{Err: err}
 	if err == nil {
@@ -174,11 +188,22 @@ func (p *menuSnapshotPublisher) collect(ready chan struct{}, generation uint64) 
 			// writers use these owned bytes directly without rescanning RawMessage.
 			v.dashboardMenu = append([]byte(`{"type":"menu","data":`), v.encoded...)
 			v.dashboardMenu = append(v.dashboardMenu, '}')
+			base := content
+			if v.Fingerprint == content.version {
+				base = previousContent
+			}
+			v = withVersionedMenu(base.snapshot, base.version, v)
 			v.commandCenter = &commandCenterDerived{}
 		}
 	}
 	p.mu.Lock()
 	if !p.closed && p.ctx.Err() == nil && generation == p.generation {
+		if v.Err == nil {
+			if v.Fingerprint != p.content.version {
+				p.previousContent = p.content
+			}
+			p.content = menuDeltaContent{snapshot: v.Snapshot, version: v.Fingerprint}
+		}
 		p.current, p.at, p.dirty = v, time.Now(), false
 		p.revision++
 		if v.Err != nil {

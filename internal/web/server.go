@@ -295,6 +295,8 @@ func NewServer(cfg Config) *Server {
 	mux := http.NewServeMux()
 	// matrix/hardened: read-only diagnostic route has the same auth as menu REST.
 	mux.HandleFunc("/api/diagnostics/menu-publisher", s.handleMenuPublisherDiagnostics)
+	// matrix/hardened: aggregate catalogue reuse counters share existing auth.
+	mux.HandleFunc("/api/diagnostics/menu-catalogue", s.handleMenuCatalogueDiagnostics)
 	mux.HandleFunc("/", s.handleIndex)
 	mux.HandleFunc("/s/", s.handleIndex)
 	mux.HandleFunc("/g/", s.handleIndex)
@@ -411,6 +413,7 @@ func (s *Server) Start() error {
 	// matrix/hardened: the collector cannot outlive the HTTP server lifecycle.
 	s.cancelBase()
 	s.menuPublisher.Close()
+	s.closeMenuCatalogue()
 	if s.hookWatcher != nil {
 		s.hookWatcher.Stop()
 		s.hookWatcher = nil
@@ -435,6 +438,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	}
 	// matrix/hardened: unblock subscriber and lazy-read waiters before HTTP shutdown.
 	s.menuPublisher.Close()
+	s.closeMenuCatalogue()
 	// matrix/hardened: close the reader even when Handler was embedded without
 	// Start; its permanent gate prevents a late collector from reopening it.
 	if s.annotationReader != nil {

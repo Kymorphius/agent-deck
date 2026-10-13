@@ -89,6 +89,10 @@ func (s *Server) handleDashboardWS(w http.ResponseWriter, r *http.Request) {
 		<-closerDone
 	}()
 	tracker := &ccPublicationTracker{}
+	// matrix/hardened: only this exact opt-in uses versioned/delta menu messages.
+	// Missing/unknown values retain the original full-menu envelope unchanged.
+	protocol := r.URL.Query()["menu_protocol"]
+	deltaMenu := len(protocol) == 1 && protocol[0] == "delta-v1"
 	updates, release := s.menuPublisher.subscribeWire(dashboardEventsPollInterval, tracker.observe)
 	defer release()
 	write := func(encoded []byte) error {
@@ -122,11 +126,10 @@ func (s *Server) handleDashboardWS(w http.ResponseWriter, r *http.Request) {
 			// as success. Keep the transport alive for the next successful poll.
 			return writeEnvelope("error", apiError{Code: "SNAPSHOT_UNAVAILABLE", Message: "Dashboard snapshot is temporarily unavailable"})
 		}
-		if menu.Fingerprint != lastMenu {
-			if err := write(menu.dashboardMenu); err != nil {
-				return err
-			}
-			lastMenu = menu.Fingerprint
+		// matrix/hardened: CC capture can upgrade a queued value to current. Select
+		// menu bytes from that returned owner; advance the version only after write.
+		if err := writeDashboardMenu(menu, deltaMenu, &lastMenu, write); err != nil {
+			return err
 		}
 		if cc.fingerprint != lastCC || len(cc.snapshot.RecentlyCompleted) > 0 {
 			// Base CC encoding is shared; only a connection's completion
