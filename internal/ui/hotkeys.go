@@ -198,7 +198,7 @@ var defaultHotkeyBindings = map[string]string{
 	hotkeySkillsManager:    "s",
 	hotkeyTogglePreview:    "v",
 	hotkeyCycleGroupView:   "t",
-	hotkeyTogglePinnedView: "alt+p", // matrix/hardened
+	hotkeyTogglePinnedView: "ctrl+p", // matrix/hardened: reserve Ctrl+P for pinned sessions instead of upward navigation.
 	hotkeyCycleTimeFilter:  "*",
 	hotkeyMarkUnread:       "u",
 	hotkeyQuickApprove:     "a",

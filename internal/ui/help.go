@@ -225,7 +225,7 @@ func (h *HelpOverlay) View() string {
 	reorderDownKeys := "- / J / Shift+↓"
 	indentKeys := "Shift+→/←"
 	pinKeys := ","
-	pinnedViewKey := h.key(hotkeyTogglePinnedView, "Alt+P") // matrix/hardened
+	pinnedViewKey := h.key(hotkeyTogglePinnedView, "Ctrl+P") // matrix/hardened
 	searchKey := h.key(hotkeySearch, "/")
 	settingsKey := h.key(hotkeySettings, "S")
 	helpKey := h.key(hotkeyHelp, "?")

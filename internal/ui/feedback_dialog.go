@@ -75,6 +75,9 @@ type FeedbackDialog struct {
 // NewFeedbackDialog creates a new FeedbackDialog in hidden state.
 func NewFeedbackDialog() *FeedbackDialog {
 	ta := textarea.New()
+	// matrix/hardened: owned text editors do not restore Ctrl+N/P navigation.
+	ta.KeyMap.LineNext.SetKeys("down")
+	ta.KeyMap.LinePrevious.SetKeys("up")
 	ta.ShowLineNumbers = false
 	ta.Prompt = ""
 	ta.Blur()

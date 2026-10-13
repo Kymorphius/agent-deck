@@ -2053,6 +2053,10 @@ func (d *NewDialog) Update(msg tea.Msg) (*NewDialog, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		// matrix/hardened: disable Ctrl+N/P navigation before any picker or input receives it.
+		if msg.String() == "ctrl+n" || msg.String() == "ctrl+p" {
+			return d, nil
+		}
 		// matrix/hardened: saving defaults never enters the create-session path.
 		if msg.String() == "ctrl+d" || (msg.String() == "enter" && d.currentTarget() == focusSaveDefaults) {
 			d.saveDefaultsFromUI()
@@ -2076,11 +2080,11 @@ func (d *NewDialog) Update(msg tea.Msg) (*NewDialog, tea.Cmd) {
 		// Recent sessions picker handling
 		if d.showRecentPicker && len(d.recentSessions) > 0 {
 			switch msg.String() {
-			case "ctrl+n", "down", "j":
+			case "down", "j":
 				d.recentSessionCursor = (d.recentSessionCursor + 1) % len(d.recentSessions)
 				d.previewRecentSession(d.recentSessions[d.recentSessionCursor])
 				return d, nil
-			case "ctrl+p", "up", "k":
+			case "up", "k":
 				d.recentSessionCursor--
 				if d.recentSessionCursor < 0 {
 					d.recentSessionCursor = len(d.recentSessions) - 1
@@ -2161,10 +2165,10 @@ func (d *NewDialog) Update(msg tea.Msg) (*NewDialog, tea.Cmd) {
 			}
 			total := len(d.pathSuggestions) + 1 // +1 for the "Type custom" entry
 			switch msg.String() {
-			case "down", "j", "ctrl+n":
+			case "down", "j":
 				d.pathSuggestionCursor = (d.pathSuggestionCursor + 1) % total
 				return d, nil
-			case "up", "k", "ctrl+p":
+			case "up", "k":
 				d.pathSuggestionCursor--
 				if d.pathSuggestionCursor < 0 {
 					d.pathSuggestionCursor = total - 1
@@ -2263,7 +2267,7 @@ func (d *NewDialog) Update(msg tea.Msg) (*NewDialog, tea.Cmd) {
 				d.pathSoftSelected = false
 				d.pathInput.Focus() // exit soft-select, allow editing
 			}
-			// Tab, Enter, Esc, Ctrl+N, Ctrl+P, Up, Down fall through to existing handlers
+			// Tab, Enter, Esc, Up, Down fall through to existing handlers
 		}
 
 		if isNewDialogTabKey(msg) {
@@ -2365,71 +2369,6 @@ func (d *NewDialog) Update(msg tea.Msg) (*NewDialog, tea.Cmd) {
 		}
 
 		switch msg.String() {
-		case "ctrl+n":
-			// Next suggestion (cursor space includes synthetic "Type custom" at 0).
-			if (cur == focusPath || d.multiRepoEditing) && len(d.pathSuggestions) > 0 {
-				d.pathSoftSelected = false
-				d.pathInput.Focus() // exit soft-select, focus for future input.
-				d.pathSuggestionCursor = (d.pathSuggestionCursor + 1) % (len(d.pathSuggestions) + 1)
-				d.suggestionNavigated = true
-				return d, nil
-			}
-			// Emacs fallback: advance to next form field (mirrors "down").
-			if cur == focusConductor {
-				total := len(d.conductorSessions) + 1
-				if d.conductorCursor < total-1 {
-					d.conductorCursor++
-					return d, nil
-				}
-			}
-			if cur == focusMultiRepo && d.multiRepoEnabled && !d.multiRepoEditing {
-				if d.multiRepoPathCursor < len(d.multiRepoPaths)-1 {
-					d.multiRepoPathCursor++
-					return d, nil
-				}
-			}
-			if cur == focusOptions && d.toolOptions != nil && !d.toolOptions.AtBottom() {
-				return d, d.toolOptions.Update(tea.KeyMsg{Type: tea.KeyDown})
-			}
-			if d.focusIndex < maxIdx {
-				d.focusIndex++
-				d.updateFocus()
-			}
-			return d, nil
-
-		case "ctrl+p":
-			// Previous suggestion (cursor space includes synthetic "Type custom" at 0).
-			if (cur == focusPath || d.multiRepoEditing) && len(d.pathSuggestions) > 0 {
-				d.pathSoftSelected = false
-				d.pathInput.Focus() // exit soft-select, focus for future input.
-				d.pathSuggestionCursor--
-				if d.pathSuggestionCursor < 0 {
-					d.pathSuggestionCursor = len(d.pathSuggestions)
-				}
-				d.suggestionNavigated = true
-				return d, nil
-			}
-			// Emacs fallback: retreat to previous form field (mirrors "shift+tab"/"up").
-			if cur == focusConductor {
-				if d.conductorCursor > 0 {
-					d.conductorCursor--
-					return d, nil
-				}
-			}
-			if cur == focusMultiRepo && d.multiRepoEnabled && !d.multiRepoEditing {
-				if d.multiRepoPathCursor > 0 {
-					d.multiRepoPathCursor--
-					return d, nil
-				}
-			}
-			if cur == focusOptions && d.toolOptions != nil && !d.toolOptions.AtTop() {
-				return d, d.toolOptions.Update(tea.KeyMsg{Type: tea.KeyUp})
-			}
-			// Same walk as ↑/Shift+Tab, so moving back into the options
-			// panel lands on its last row.
-			d.moveFocus(-1)
-			return d, nil
-
 		case "ctrl+w":
 			// Path-aware backward word delete: stop at '/', not just whitespace.
 			// Default bubbles textinput behaviour wipes the entire field for

@@ -542,7 +542,7 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 
 - **matrix/hardened:** 置顶视图集中显示本地会话的两种固定位置，读取完整分组成员，折叠分组或父会话不会隐藏置顶条目。各条目独立显示，退出后保持原分组的折叠状态。
 - **matrix/hardened:** 归档、状态、时间和分组范围继续组合；零匹配保留空视图并显示返回入口。未固定会话、创建中的占位条目及尚无固定位置元数据的远程行不进入此列表。`matrix.60` 接入已报告固定位置的远程会话，见第 50 节。
-- **matrix/hardened:** `[hotkeys].toggle_pinned_view` 默认 `alt+p`，可重绑或禁用；现有 `group_view_mode` 存储恢复所选视图。帮助页和筛选栏显示入口及当前模式。
+- **matrix/hardened:** `[hotkeys].toggle_pinned_view` 可重绑或禁用，`matrix.64` 起默认 `ctrl+p`（此前为 `alt+p`）；现有 `group_view_mode` 存储恢复所选视图。帮助页和筛选栏显示入口及当前模式。
 - 验证使用第 4 节的隔离入口，覆盖折叠分组、两种固定位置、独立子会话、筛选组合、空视图、取消最后一个固定位置、快捷键与持久化。安装后在新开或已重载的 TUI 使用此入口，原 AI pane 不需重启。
 
 ## 49. 置顶视图减少无用重建
@@ -577,3 +577,12 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 - **matrix/hardened: 开销及运行范围**：复用现有状态观察节奏，不加定时器。无容量候选时只是内存判断；有候选时每 5 秒最多检查一次，只有首次安排或实际领取时落盘。详情缓存到已有子状态详情，TUI/Web 渲染不读侧文件。需要观察进程持续运行；TUI/Web 无人访问而观察进程不再采样时，延后到下次采样，不承诺无人值守常驻调度。
 - **改动地图**：`internal/session/matrix_codex_capacity_retry.go`（计划、耐久去重、发送保护，新文件）、`matrix_turn_interrupt.go`（原生容量错误及刷新接入）、`instance.go`（缓存重试详情）、`userconfig.go` 和 `config_keys.go`（开关）。
 - **验证**：`matrix_codex_capacity_retry_test.go` 覆盖真实记录结构、继续/成功清除、子代理、30/60/120 退避、每小时上限、跨进程与并发领取、发送不确定、旧回合重放、草稿/审批/工作状态、只读消费者、损坏状态及配置往返。使用隔离 runner，含 race 检查；不会为了测试向真实会话发消息。另用真实 tmux 与无网络的 Python 模拟终端验证单次消息送达及草稿保留。没有人为制造真实模型容量失败或承诺重试一定成功。
+
+## 53. Ctrl+P 置顶视图与移除 Ctrl+N/P 导航
+
+`1.16.26+matrix.64` 将置顶视图默认入口改为 `Ctrl+P`；再次按键回到普通列表，`t` 的视图循环保持。帮助、筛选栏和空视图提示读取实际绑定。
+
+- **matrix/hardened:** `[hotkeys].toggle_pinned_view` 默认 `ctrl+p`，仍可重绑或置空。主列表不再将 `Ctrl+P`、`Ctrl+N` 作为上下移动或数字计数导航；重绑或禁用置顶入口也不会恢复旧导航别名。
+- **matrix/hardened:** 技能、Agents、Watcher、Dead letters、分支、目录、分组、新建和路径弹窗消费这两个旧导航键，防止子输入组件继续移动选择或焦点。原方向键、`j/k`、Tab 流程保持；路径编辑建议用上下方向键。Notes 和未启用的 Feedback 文本编辑器也移除组件默认的 `Ctrl+N/P` 行移动。
+- **matrix/hardened:** 已连接的本地/远程终端以及 insert mode 继续接收原始控制按键。按键映射沿用 `config.toml` 的 `[hotkeys]`；`?` 展示当前映射。
+- 验证使用第 4 节隔离入口，覆盖置顶切换与选择保持、重绑和禁用、旧入口不再触发、主列表无移动、弹窗输入及选择不变、方向键和文本编辑保持可用；安装后以原生窗口和原会话 pane 身份验收。

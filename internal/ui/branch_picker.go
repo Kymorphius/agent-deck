@@ -149,6 +149,9 @@ func (d *BranchPickerDialog) Update(msg tea.KeyMsg) (string, bool) {
 	}
 
 	switch msg.String() {
+	case "ctrl+n", "ctrl+p":
+		// matrix/hardened: reserve Ctrl+P for the main pinned view and disable both navigation aliases.
+		return "", true
 	case "esc":
 		d.Hide()
 		return "", true
@@ -159,13 +162,13 @@ func (d *BranchPickerDialog) Update(msg tea.KeyMsg) (string, bool) {
 		selected := d.branches[d.cursor]
 		d.Hide()
 		return selected, true
-	case "up", "ctrl+k", "ctrl+p":
+	case "up", "ctrl+k":
 		if len(d.branches) > 0 && d.cursor > 0 {
 			d.cursor--
 			d.ensureCursorVisible()
 		}
 		return "", true
-	case "down", "ctrl+j", "ctrl+n":
+	case "down", "ctrl+j":
 		if len(d.branches) > 0 && d.cursor < len(d.branches)-1 {
 			d.cursor++
 			d.ensureCursorVisible()

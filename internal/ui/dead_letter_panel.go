@@ -106,17 +106,20 @@ func (p *DeadLetterPanel) Update(msg tea.Msg) (*DeadLetterPanel, tea.Cmd) {
 	}
 
 	switch key.String() {
+	case "ctrl+n", "ctrl+p":
+		// matrix/hardened: reserve Ctrl+P for the main pinned view and disable both navigation aliases.
+		return p, nil
 	case "esc", "q", "alt+d":
 		if p.detail {
 			p.detail = false
 		} else {
 			p.Hide()
 		}
-	case "j", "down", "ctrl+n":
+	case "j", "down":
 		if !p.detail && p.cursor+1 < len(p.records) {
 			p.cursor++
 		}
-	case "k", "up", "ctrl+p":
+	case "k", "up":
 		if !p.detail && p.cursor > 0 {
 			p.cursor--
 		}

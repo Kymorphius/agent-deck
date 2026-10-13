@@ -240,40 +240,30 @@ func TestWatcherPanelTruncate(t *testing.T) {
 	}
 }
 
-// TestWatcherPanelNoActionOnEmptyList verifies no panic or cmd when list is empty.
-func TestWatcherPanel_CtrlN_CtrlP_Navigation(t *testing.T) {
+// matrix/hardened: removed aliases leave both list and detail cursors unchanged.
+func TestWatcherPanel_MatrixCtrlNPCannotNavigate(t *testing.T) {
 	wp := NewWatcherPanel()
 	wp.SetWatchers(sampleWatchers())
 	wp.Show()
-
-	// ctrl+n moves down.
-	wp, _ = wp.Update(tea.KeyMsg{Type: tea.KeyCtrlN})
-	if wp.cursor != 1 {
-		t.Errorf("ctrl+n: cursor = %d, want 1", wp.cursor)
+	wp.cursor = 1
+	for _, detail := range []bool{false, true} {
+		wp.detailMode = detail
+		wp.detailCursor = 1
+		for _, key := range []tea.KeyType{tea.KeyCtrlN, tea.KeyCtrlP} {
+			wp, _ = wp.Update(tea.KeyMsg{Type: key})
+			if wp.cursor != 1 || wp.detailCursor != 1 {
+				t.Fatalf("%v moved selection: list=%d detail=%d", key, wp.cursor, wp.detailCursor)
+			}
+		}
 	}
-
-	wp, _ = wp.Update(tea.KeyMsg{Type: tea.KeyCtrlN})
+	wp.detailMode = false
+	wp, _ = wp.Update(tea.KeyMsg{Type: tea.KeyDown})
 	if wp.cursor != 2 {
-		t.Errorf("ctrl+n x2: cursor = %d, want 2", wp.cursor)
+		t.Fatalf("down: cursor = %d, want 2", wp.cursor)
 	}
-
-	// Clamps at last item.
-	wp, _ = wp.Update(tea.KeyMsg{Type: tea.KeyCtrlN})
-	if wp.cursor != 2 {
-		t.Errorf("ctrl+n past end: cursor = %d, want 2 (clamped)", wp.cursor)
-	}
-
-	// ctrl+p moves up.
-	wp, _ = wp.Update(tea.KeyMsg{Type: tea.KeyCtrlP})
+	wp, _ = wp.Update(tea.KeyMsg{Type: tea.KeyUp})
 	if wp.cursor != 1 {
-		t.Errorf("ctrl+p: cursor = %d, want 1", wp.cursor)
-	}
-
-	// Clamps at first item.
-	wp.cursor = 0
-	wp, _ = wp.Update(tea.KeyMsg{Type: tea.KeyCtrlP})
-	if wp.cursor != 0 {
-		t.Errorf("ctrl+p at top: cursor = %d, want 0 (clamped)", wp.cursor)
+		t.Fatalf("up: cursor = %d, want 1", wp.cursor)
 	}
 }
 
