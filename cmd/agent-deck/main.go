@@ -45,7 +45,7 @@ import (
 )
 
 // matrix/hardened: identifies our hardened build.
-var Version = "1.16.26+matrix.58" // matrix/hardened: unified abnormal session view; overridden via -ldflags.
+var Version = "1.16.26+matrix.59" // matrix/hardened: pinned view avoids discarded full-list work; overridden via -ldflags.
 
 // Table column widths for list command output
 const (
