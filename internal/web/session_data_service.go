@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/asheshgoplani/agent-deck/internal/logging"
@@ -197,13 +198,28 @@ type SessionDataService struct {
 	// source failures must never restart local fleet probing.
 	runtimeSourceMu sync.RWMutex
 	runtimeSource   session.RuntimeObservationSource
+	// matrix/hardened: only constructor-owned production readers keep a catalogue.
+	runtimeSourceGeneration uint64
+	catalogueEnabled        bool
+	catalogueMu             sync.Mutex
+	catalogue               *menuCatalogue
+	catalogueStats          MenuCatalogueStats
+	catalogueClosed         atomic.Bool
+	catalogueUnsupported    atomic.Bool
+	catalogueCtx            context.Context
+	catalogueCancel         context.CancelFunc
 }
 
 // SetRuntimeObservationSource supplies the shared runtime monitor before serving.
 // A nil source retains the standalone storage service's legacy sampling behavior.
 func (s *SessionDataService) SetRuntimeObservationSource(source session.RuntimeObservationSource) {
+	// matrix/hardened: the default factory cannot switch to writer mode while
+	// a catalogue open is in progress; lock order is catalogue then source.
+	s.catalogueMu.Lock()
+	defer s.catalogueMu.Unlock()
 	s.runtimeSourceMu.Lock()
 	s.runtimeSource = source
+	s.runtimeSourceGeneration++
 	s.runtimeSourceMu.Unlock()
 }
 
@@ -234,11 +250,13 @@ func (s *SessionDataService) runtimeObservationSource() session.RuntimeObservati
 // afterwards (see resolveAndOpenStorage), so Profile()/BuildMenuSnapshot
 // still report the true effective name rather than the raw input.
 func NewSessionDataService(profile string) *SessionDataService {
+	ctx, cancel := context.WithCancel(context.Background())
 	s := &SessionDataService{
 		profile:          profile,
 		now:              time.Now,
 		refreshLiveState: true,
 		loadHookStatuses: defaultLoadHookStatuses,
+		catalogueEnabled: true, catalogueCtx: ctx, catalogueCancel: cancel,
 	}
 	// matrix/hardened: configure only the default opener; alternate factories
 	// remain injectable while consumers avoid migrations and hook pruning.
@@ -312,6 +330,35 @@ func (s *SessionDataService) LoadMenuSnapshot() (*MenuSnapshot, error) {
 	}
 	if s.now == nil {
 		s.now = time.Now
+	}
+	// matrix/hardened: standalone/injected legacy readers retain their old path.
+	if s.catalogueClosed.Load() {
+		return nil, fmt.Errorf("session catalogue is closed")
+	}
+	if s.runtimeMenuCatalogueEnabled() {
+		menu, err := s.loadCatalogueMenu()
+		if !errors.Is(err, errCatalogueFactoryUnsupported) {
+			return menu, err
+		}
+		// matrix/hardened: injected factories keep the old fenced loading path.
+		for attempt := 0; attempt < memoryMenuConsistentLoadAttempts; attempt++ {
+			before, e := s.MenuDataRevision()
+			if e != nil {
+				return nil, e
+			}
+			menu, e = s.LoadMenuSnapshot()
+			if e != nil {
+				return nil, e
+			}
+			after, e := s.MenuDataRevision()
+			if e != nil {
+				return nil, e
+			}
+			if before == after {
+				return menu, nil
+			}
+		}
+		return nil, fmt.Errorf("injected menu data changed during consecutive loads")
 	}
 
 	storage, profile, err := s.resolveAndOpenStorage()

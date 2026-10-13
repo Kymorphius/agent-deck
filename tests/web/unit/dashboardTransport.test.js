@@ -35,7 +35,7 @@ class FakeWebSocket {
   emit(type, event) { for (const listener of this.listeners.get(type) || []) listener(event) }
   open() { this.readyState = FakeWebSocket.OPEN; this.emit('open') }
   fail() { this.readyState = FakeWebSocket.CLOSED; this.emit('error'); this.emit('close') }
-  frame(type, data) { this.emit('message', { data: JSON.stringify({ type, data }) }) }
+  frame(type, data, envelope = {}) { this.emit('message', { data: JSON.stringify({ type, data, ...envelope }) }) }
 }
 const response = (status = 200, data = { items: [] }, contentType = 'application/json; charset=utf-8') => ({
   status, ok: status === 200, headers: new Headers({ 'Content-Type': contentType }),
@@ -81,6 +81,23 @@ afterEach(() => {
 const sources = () => FakeWebSocket.instances
 const start = () => { app.startSSE(); return sources()[0] }
 const wake = () => window.dispatchEvent(new Event('online'))
+// matrix/hardened: realistic, fully-expanded menu rows establish only a
+// versioned socket baseline; versions remain opaque strings beyond JS integers.
+const menuVersion = '18446744073709551617:menu'
+const menuSnapshot = () => ({
+  profile: 'default', generatedAt: '2026-10-12T10:00:00Z', totalGroups: 1, totalSessions: 1,
+  items: [
+    { index: 0, type: 'group', group: { path: 'project', name: 'Project', expanded: true } },
+    { index: 1, type: 'session', session: { id: 's1', title: 'Worker', status: 'running', backgroundWork: { task: 'building' }, model: 'old-model' } },
+  ],
+})
+const menuDelta = (changes, metadata = {}) => ({
+  profile: 'default', generatedAt: '2026-10-12T10:00:01Z', totalGroups: 1, totalSessions: 1,
+  changes, ...metadata,
+})
+const changedSession = () => ({ index: 1, type: 'session', session: { id: 's1', title: 'Worker', status: 'waiting' } })
+const fullMenu = (source, snapshot = menuSnapshot(), version = menuVersion) => source.frame('menu', snapshot, { version })
+const deltaMenu = (source, data = menuDelta([{ index: 1, item: changedSession() }]), baseVersion = menuVersion, version = menuVersion + ':next') => source.frame('menu-delta', data, { baseVersion, version })
 
 describe('dashboard WebSocket transport', () => {
   it('uses one same-origin authenticated connection for both entry points and never sends input', () => {
@@ -93,6 +110,7 @@ describe('dashboard WebSocket transport', () => {
     expect(url.protocol).toBe(location.protocol === 'https:' ? 'wss:' : 'ws:')
     expect(url.host).toBe(location.host)
     expect(url.pathname).toBe('/ws/dashboard')
+    expect(url.searchParams.get('menu_protocol')).toBe('delta-v1')
     expect(url.searchParams.get('token')).toBe(mocked.authTokenSignal.value)
     source.open()
     source.frame('heartbeat', {})
@@ -100,11 +118,13 @@ describe('dashboard WebSocket transport', () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
   it('supports cookie authentication without adding a token query', () => {
-    expect(new URL(start().url).search).toBe('')
+    const params = new URL(start().url).searchParams
+    expect(params.has('token')).toBe(false)
+    expect(params.get('menu_protocol')).toBe('delta-v1')
   })
   it('uses wss for an HTTPS page and preserves its host and port', () => {
     vi.stubGlobal('window', { location: new URL('https://deck.example:9443/s/session') })
-    expect(start().url).toBe('wss://deck.example:9443/ws/dashboard')
+    expect(start().url).toBe('wss://deck.example:9443/ws/dashboard?menu_protocol=delta-v1')
   })
   it('strips the initial token from navigation while retaining it for the handshake', async () => {
     history.replaceState(null, '', '/?token=a%2B%2F%26%E4%B8%AD&view=fleet#detail')
@@ -132,6 +152,157 @@ describe('dashboard WebSocket transport', () => {
     source.frame('menu', { items: [] })
     expect(mocked.sessionsSignal.value).toEqual([])
     expect(mocked.connectionSignal.value).toBe('connected')
+  })
+  // matrix/hardened: reduce a complete delta before any signal write so a bad
+  // later row cannot leave a partially-updated menu or refresh archived rows.
+  it('applies versioned full and whole-row delta while preserving unchanged rows and CC behavior', () => {
+    const source = start()
+    source.open()
+    mocked.selectedGroupSignal.value = 'project'
+    fullMenu(source)
+    const initial = mocked.sessionsSignal.value
+    const cc = { recentlyCompleted: [{ id: 's1', at: 'now', title: 'Worker' }] }
+    source.frame('command-center', cc)
+    deltaMenu(source)
+    expect(mocked.sessionsSignal.value).not.toBe(initial)
+    expect(mocked.sessionsSignal.value[0]).toBe(initial[0])
+    expect(mocked.sessionsSignal.value[1]).toEqual(changedSession())
+    expect(mocked.sessionsSignal.value[1].session).not.toHaveProperty('backgroundWork')
+    expect(mocked.sessionsSignal.value[1].session).not.toHaveProperty('model')
+    expect(initial[1].session.backgroundWork.task).toBe('building')
+    expect(mocked.loadArchivedSessions).toHaveBeenCalledTimes(2)
+    expect(mocked.commandCenterSignal.value).toEqual(cc)
+    source.frame('command-center', cc)
+    expect(mocked.addToast).toHaveBeenCalledTimes(1)
+    expect(mocked.connectionSignal.value).toBe('connected')
+    expect(source.send).not.toHaveBeenCalled()
+  })
+  it.each([
+    ['base gap', data => data, 'other-version'],
+    ['profile mismatch', data => ({ ...data, profile: 'other' })],
+    ['count mismatch', data => ({ ...data, totalSessions: 2 })],
+    ['out-of-range index', data => ({ ...data, changes: [{ index: 2, item: { ...changedSession(), index: 2 } }] })],
+    ['identity mismatch', data => ({ ...data, changes: [{ index: 1, item: { ...changedSession(), session: { id: 'replacement' } } }] })],
+    ['duplicate index after valid row', data => ({ ...data, changes: [data.changes[0], data.changes[0]] })],
+  ])('rejects %s atomically and recovers through the authenticated probe', async (_name, change, baseVersion = menuVersion) => {
+    const source = start()
+    source.open()
+    mocked.selectedGroupSignal.value = 'project'
+    fullMenu(source)
+    const initial = mocked.sessionsSignal.value
+    deltaMenu(source, change(menuDelta([{ index: 1, item: changedSession() }])), baseVersion)
+    expect(mocked.sessionsSignal.value).toBe(initial)
+    expect(mocked.loadArchivedSessions).toHaveBeenCalledTimes(1)
+    expect(mocked.connectionSignal.value).toBe('disconnected')
+    expect(source.close).toHaveBeenCalledTimes(1)
+    expect(source.send).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/menu')
+    expect(sources()).toHaveLength(2)
+    const replacement = sources()[1]
+    replacement.open()
+    fullMenu(replacement, menuSnapshot(), 'new-connection-version')
+    deltaMenu(replacement, menuDelta([{ index: 1, item: changedSession() }]), 'new-connection-version', 'recovered-version')
+    expect(mocked.sessionsSignal.value[1]).toEqual(changedSession())
+    expect(mocked.connectionSignal.value).toBe('connected')
+  })
+  it('keeps legacy full menus visible but cannot use them as a delta baseline', () => {
+    const source = start()
+    source.open()
+    fullMenu(source)
+    source.frame('menu', { items: ['legacy menu'] })
+    const initial = mocked.sessionsSignal.value
+    deltaMenu(source)
+    expect(mocked.sessionsSignal.value).toBe(initial)
+    expect(initial).toEqual(['legacy menu'])
+    expect(source.close).toHaveBeenCalledTimes(1)
+    expect(mocked.connectionSignal.value).toBe('disconnected')
+  })
+  it('does not use initial REST data or a previous connection as a wire baseline', async () => {
+    fetchMock.mockResolvedValue(response(200, menuSnapshot()))
+    await app.loadMenu()
+    const source = sources()[0]
+    source.open()
+    const rest = mocked.sessionsSignal.value
+    deltaMenu(source)
+    expect(mocked.sessionsSignal.value).toBe(rest)
+    expect(source.close).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(1000)
+    const replacement = sources()[1]
+    replacement.open()
+    deltaMenu(replacement)
+    expect(replacement.close).toHaveBeenCalledTimes(1)
+    expect(mocked.sessionsSignal.value).toBe(rest)
+  })
+  it('source error clears only the wire baseline and a fresh full enables deltas again', () => {
+    const source = start()
+    source.open()
+    fullMenu(source)
+    const initial = mocked.sessionsSignal.value
+    source.frame('error', { error: { code: 'MENU_UNAVAILABLE' } })
+    expect(mocked.sessionsSignal.value).toBe(initial)
+    expect(source.close).not.toHaveBeenCalled()
+    fullMenu(source)
+    deltaMenu(source)
+    expect(mocked.sessionsSignal.value[1]).toEqual(changedSession())
+    expect(mocked.connectionSignal.value).toBe('connected')
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+  it('requires a fresh full before any delta after a source error', () => {
+    const source = start()
+    source.open()
+    fullMenu(source)
+    const initial = mocked.sessionsSignal.value
+    source.frame('error', { error: { code: 'MENU_UNAVAILABLE' } })
+    deltaMenu(source)
+    expect(mocked.sessionsSignal.value).toBe(initial)
+    expect(source.close).toHaveBeenCalledTimes(1)
+    expect(mocked.connectionSignal.value).toBe('disconnected')
+  })
+  it.each([
+    ['invalid row identity', snapshot => { snapshot.items[1].session.id = '' }],
+    ['invalid row index', snapshot => { snapshot.items[1].index = 2 }],
+    ['invalid totals', snapshot => { snapshot.totalSessions = 2 }],
+    ['duplicate row identity', snapshot => {
+      snapshot.items[0] = { index: 0, type: 'session', session: { id: 's1', title: 'Duplicate' } }
+      snapshot.totalGroups = 0
+      snapshot.totalSessions = 2
+    }],
+    ['invalid version', () => {}, 18446744073709551616],
+  ])('displays a full fallback with %s while clearing its delta baseline', (_name, invalidate, version = menuVersion) => {
+    const source = start()
+    source.open()
+    fullMenu(source)
+    const fallback = menuSnapshot()
+    invalidate(fallback)
+    fullMenu(source, fallback, version)
+    expect(mocked.sessionsSignal.value).toEqual(fallback.items)
+    expect(mocked.connectionSignal.value).toBe('connected')
+    expect(source.close).not.toHaveBeenCalled()
+    const initial = mocked.sessionsSignal.value
+    deltaMenu(source)
+    expect(mocked.sessionsSignal.value).toBe(initial)
+    expect(source.close).toHaveBeenCalledTimes(1)
+    expect(mocked.connectionSignal.value).toBe('disconnected')
+  })
+  it('ignores versioned full and delta frames from a retired socket', async () => {
+    const source = start()
+    source.open()
+    fullMenu(source)
+    source.fail()
+    await vi.advanceTimersByTimeAsync(1000)
+    const replacement = sources()[1]
+    replacement.open()
+    fullMenu(replacement, menuSnapshot(), 'replacement-version')
+    const initial = mocked.sessionsSignal.value
+    fullMenu(source, { ...menuSnapshot(), items: [] }, 'stale-full')
+    deltaMenu(source)
+    expect(mocked.sessionsSignal.value).toBe(initial)
+    expect(replacement.close).not.toHaveBeenCalled()
+    deltaMenu(replacement, menuDelta([{ index: 1, item: changedSession() }]), 'replacement-version', 'latest-version')
+    expect(mocked.sessionsSignal.value[1]).toEqual(changedSession())
+    expect(sources()).toHaveLength(2)
   })
   it('ignores malformed frames and keeps the socket through source errors until a successful snapshot', () => {
     const source = start()

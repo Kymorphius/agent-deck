@@ -101,6 +101,11 @@ func (m *MemoryMenuData) LoadMenuSnapshot() (snapshot *MenuSnapshot, err error) 
 	// mask subsequent shared observations. The outer publisher coalesces
 	// requests; complete runtime state remains owned by its configured source.
 	if m.RuntimeObservationConfigured() {
+		// matrix/hardened: this owner fences registry/runtime itself and returns
+		// a private DTO, avoiding the outer three-open revision/load/revision cycle.
+		if owned, ok := m.fallback.(*SessionDataService); ok && owned.runtimeMenuCatalogueEnabled() {
+			return owned.LoadMenuSnapshot()
+		}
 		return m.loadFallbackSnapshotLocked()
 	}
 

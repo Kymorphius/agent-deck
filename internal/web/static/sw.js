@@ -1,5 +1,5 @@
-// matrix/hardened: refresh cached main.js for the shared dashboard transport.
-const CACHE_VERSION = "agentdeck-shell-v23"
+// matrix/hardened: refresh the entry and cache its incremental menu dependency.
+const CACHE_VERSION = "agentdeck-shell-v24"
 const SHELL_CACHE = CACHE_VERSION
 const APP_SHELL_URLS = [
   "/",
@@ -7,6 +7,7 @@ const APP_SHELL_URLS = [
   "/static/index.html",
   "/static/styles.css",
   "/static/app/main.js",
+  "/static/app/menuDelta.js",
   "/static/icons/logo.svg",
 ]
 

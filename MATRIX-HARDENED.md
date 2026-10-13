@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.51`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.52`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -66,7 +66,7 @@
 - `internal/session/claude_hooks.go`：`isAgentDeckHookCommand` 的判断规则：先去掉开头的 `VAR=值`，再要求第二个词是 `hook-handler`、程序名的文件名部分是 `agent-deck`。`RemoveClaudeHooks` 会扫描全部事件，并做 UTC 时间戳备份（约 387–414 行）。
 - `cmd/agent-deck/main.go`（约 4845、5070 行）：`agent-deck uninstall` 会移除这些钩子。`uninstall.sh` 第 253 行附近的 jq 过滤用的是同一套规则（正则），写回时用 `cat >` 保持软链接和权限。
 
-**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.51`。
+**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.52`。
 
 **测试**：以 `_hardened_test.go` 结尾的文件、`update_check_disable_test.go`、`update_timer_wiring_test.go` 等是新增或调整过的测试；`testdata/goldens/*` 里的快照已经按加固后的输出更新。
 
@@ -480,3 +480,14 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 - **matrix/hardened:** 严格命令与参数格式仅接受捕获及有限元数据读取；未知选项、递归或客户端相对格式、控制字符、无效 UTF-8、shell job 格式均沿用原生路径。响应逐命令校验身份，并用随机完成确认拒绝迟到、重复、截断及伪造边界。每次尝试至多 350ms，失败关闭自有连接，5 秒退避仅由后续查询触发；有界原始输出至多 8 MiB。
 - **matrix/hardened:** 原生回退保留退出错误、超时和会话消失语义；完整错误帧可保留健康连接。Fresh 保持独立原生查询，批次继续遵守原随机标记、500ms 截图缓存、代次隔离和原观察动作。私有 status 仅输出有界计数及自有客户端 PID，不能把存活客户端 CPU 误计为已等待子进程 CPU。
 - 验证使用隔离入口和真实私有 tmux，涵盖跨 socket 同名、当前窗口、ANSI/空行、错误回退、Fresh、尺寸与 PID、连接替换、需求过期/关闭、迟到响应、并发 Close 及容量边界。生产按相同多窗口负载分别测量 collector、存活查询客户端、原生回退客户端和管理界面；本地 CPU 结果不代表整机瓦数。
+
+## 42. Web 目录复用与菜单增量传输
+
+`1.16.26+matrix.52` 将 monitor 配置下的 Web 会话目录与运行观察分离。静态目录由服务拥有的长寿命只读 reader 保留；每次仍读取新的共享运行观察，目录未变化时复用 registry-only 基础菜单。
+
+- **matrix/hardened:** pinned SQLite observer 的 data_version 与连接 epoch、operator touch、配置文件签名和数据库 SameFile 身份共同失效。WAL 提交不依赖主文件 mtime；两个数据库 reader 打开前后及生成结果后均复核。最多三次一致性尝试，错误保持可见，不把旧 overlay 冒充成功。旧 standalone 与注入 factory 保留原加载路径。
+- **matrix/hardened:** 目录只保存 registry 基础数据和运行身份索引，每次生成私有嵌套 DTO。缺失、失败、过旧、身份不符的运行行恢复 registry 基础状态，不能留下上一轮 running、后台任务或 fork 能力。观察开始时间及停止/修改水位保持原判断；原生绑定字段仍由 registry 决定。
+- **matrix/hardened:** reader 在 Web 退出与 Handler-only Shutdown 时关闭，永久关闭门拒绝迟到 source 重新打开或发布。source 请求在 reader 锁外；资源取消与有界 SQL 查询保持关闭责任。已有鉴权诊断仅增加固定目录 loads/opens/reloads/hits/errors 等计数，不包含路径、会话或内容。
+- **matrix/hardened:** 新浏览器握手 opt-in `menu_protocol=delta-v1`，首次连接全量同步；同一 profile、行数、唯一身份及顺序下，仅发送变化的完整菜单行。新增/删除/移动/排序、版本缺口、源错误恢复和增量不比全量小时发送全量。旧客户端沿用原完整协议，鉴权/origin/server-push 输入边界不变。
+- **matrix/hardened:** 每个共享 publication 只构建一次版本化完整数据及最多一份前一内容版本的增量；没有每客户端历史或 diff。客户端先完整验证增量再一次性替换数组，保留未变化行对象；字段删除通过整行替换传播。非法或缺口增量触发既有重连恢复，旧 socket 事件失效；Command Center 完成事件与慢客户端背压保持原行为。Service Worker shell 缓存版本同步更新。
+- 验证使用隔离 SQLite/race 和浏览器 reducer/transport 回归，覆盖外部 WAL 写入、目录与原生绑定变更、停止/归档/缺失观察、数据库打开与替换竞态、配置变化、并发关闭、私有 DTO，以及新旧协议、整行字段删除、队列跳代、错误恢复和完成事件。生产另核对目录复用指标、多窗口、WebSocket、加载构建及 AI pane 身份，再做相同负载 CPU 对照。

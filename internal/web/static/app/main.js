@@ -14,6 +14,8 @@ import {
 } from './state.js'
 import { addToast } from './Toast.js'
 import { initPush } from './push.js'
+// matrix/hardened: keep menu wire validation separate from transport lifecycle.
+import { readMenuBaseline, applyMenuDelta } from './menuDelta.js'
 
 // ---------- Auth token extraction ----------
 
@@ -175,6 +177,8 @@ export function startSSE() {
 
   const url = new URL('/ws/dashboard', window.location.href)
   url.protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+  // matrix/hardened: older servers ignore this opt-in and keep sending full menus.
+  url.searchParams.set('menu_protocol', 'delta-v1')
   const token = authTokenSignal.value
   if (token) url.searchParams.set('token', token)
 
@@ -182,9 +186,13 @@ export function startSSE() {
   _dashboardSource = source
   _dashboardNeedsRecovery = false
   _dashboardTerminalFailure = false
+  // matrix/hardened: only this socket's versioned full frame can establish its
+  // delta baseline. Initial REST data and retired sockets never seed a chain.
+  let menuBaseline = null
   const current = () => _dashboardEnabled && _dashboardSource === source
   const failed = () => {
     if (!current()) return
+    menuBaseline = null
     _dashboardNeedsRecovery = true
     connectionSignal.value = 'disconnected'
     scheduleDashboardRecovery()
@@ -198,7 +206,23 @@ export function startSSE() {
     try {
       const message = JSON.parse(event.data)
       if (message.type === 'menu') {
+        // matrix/hardened: full snapshots keep their existing display contract.
+        // Invalid identities/indexes/totals downgrade to a visible full without
+        // a delta baseline, matching the server's conservative full fallback.
+        // Legacy frames without a version likewise cannot authorize deltas.
+        menuBaseline = readMenuBaseline(message)
         if (applyMenuSnapshot(message.data)) markDashboardHealthy()
+      } else if (message.type === 'menu-delta') {
+        const next = applyMenuDelta(menuBaseline, message)
+        if (!next) {
+          // Keep the last good UI atomically, then use the existing authenticated
+          // probe/reconnect flow to obtain a new full frame. No client WS input.
+          failed()
+          source.close()
+          return
+        }
+        menuBaseline = next
+        if (applyMenuSnapshot(next.snapshot)) markDashboardHealthy()
       } else if (message.type === 'command-center') {
         if (applyCommandCenterSnapshot(message.data)) markDashboardHealthy()
       } else if (message.type === 'resync') {
@@ -207,6 +231,9 @@ export function startSSE() {
         failed()
         source.close()
       } else if (message.type === 'error') {
+        // matrix/hardened: the backend also resets its baseline after source
+        // failure, so recovery must start with a full frame on this socket.
+        menuBaseline = null
         connectionSignal.value = 'disconnected'
       }
     } catch (_) {
