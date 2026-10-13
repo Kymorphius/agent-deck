@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.52`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.53`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -66,7 +66,7 @@
 - `internal/session/claude_hooks.go`：`isAgentDeckHookCommand` 的判断规则：先去掉开头的 `VAR=值`，再要求第二个词是 `hook-handler`、程序名的文件名部分是 `agent-deck`。`RemoveClaudeHooks` 会扫描全部事件，并做 UTC 时间戳备份（约 387–414 行）。
 - `cmd/agent-deck/main.go`（约 4845、5070 行）：`agent-deck uninstall` 会移除这些钩子。`uninstall.sh` 第 253 行附近的 jq 过滤用的是同一套规则（正则），写回时用 `cat >` 保持软链接和权限。
 
-**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.52`。
+**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.53`。
 
 **测试**：以 `_hardened_test.go` 结尾的文件、`update_check_disable_test.go`、`update_timer_wiring_test.go` 等是新增或调整过的测试；`testdata/goldens/*` 里的快照已经按加固后的输出更新。
 
@@ -491,3 +491,10 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 - **matrix/hardened:** 新浏览器握手 opt-in `menu_protocol=delta-v1`，首次连接全量同步；同一 profile、行数、唯一身份及顺序下，仅发送变化的完整菜单行。新增/删除/移动/排序、版本缺口、源错误恢复和增量不比全量小时发送全量。旧客户端沿用原完整协议，鉴权/origin/server-push 输入边界不变。
 - **matrix/hardened:** 每个共享 publication 只构建一次版本化完整数据及最多一份前一内容版本的增量；没有每客户端历史或 diff。客户端先完整验证增量再一次性替换数组，保留未变化行对象；字段删除通过整行替换传播。非法或缺口增量触发既有重连恢复，旧 socket 事件失效；Command Center 完成事件与慢客户端背压保持原行为。Service Worker shell 缓存版本同步更新。
 - 验证使用隔离 SQLite/race 和浏览器 reducer/transport 回归，覆盖外部 WAL 写入、目录与原生绑定变更、停止/归档/缺失观察、数据库打开与替换竞态、配置变化、并发关闭、私有 DTO，以及新旧协议、整行字段删除、队列跳代、错误恢复和完成事件。生产另核对目录复用指标、多窗口、WebSocket、加载构建及 AI pane 身份，再做相同负载 CPU 对照。
+
+## 43. 区分目录变化与其他数据库提交
+
+`1.16.26+matrix.53` 在 database version 变化时，先读取一致事务中的 instances/groups 原始目录内容，与上一份有界基础内容比较。心跳、费用或注释等其他表写入不会再无条件重新 hydrate 所有 Instance 与重建菜单。
+
+- **matrix/hardened:** data_version 仍用于发现提交，连接 epoch、打开与最终文件身份、配置签名及最终版本检查保留。目录内容相同才复用基础菜单，原生绑定、状态、目录结构和配置真正改变仍重新构建。operator touch 每次重新读取并用于拒绝早开始的运行观察，即使目录相同也不能忽略停止/确认的水位。
+- **matrix/hardened:** 私有诊断增加原始 registryReads，区分数据库读取、目录内容复用与实际重建；不承诺数据库零读取。回归包含无关 metadata 连续提交下目录复用和 touch-only 提交仍拒绝旧观察，生产另核对命中/重建分布与 CPU。
