@@ -1478,6 +1478,15 @@ func (h *Home) actionKey(action string) string {
 	return actionHotkey(h.hotkeys, action)
 }
 
+// matrix/hardened: show the configured open key; Enter remains an alias when
+// the configurable binding is disabled.
+func (h *Home) sessionOpenKeyLabel() string {
+	if key := h.actionKey(hotkeyOpenSession); key != "" {
+		return key
+	}
+	return "Enter"
+}
+
 // deletedSessionEntry holds a deleted session for undo restore
 type deletedSessionEntry struct {
 	instance    *session.Instance
@@ -12076,7 +12085,8 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return h, h.attachSelectedLegacy()
 
-	case "enter":
+	// matrix/hardened: o opens the selected row; Enter remains compatible.
+	case "enter", defaultHotkeyBindings[hotkeyOpenSession]:
 		if h.cursor < len(h.flatItems) {
 			item := h.flatItems[h.cursor]
 			if !h.embeddedLayout && (item.Type == session.ItemTypeSession || item.Type == session.ItemTypeWindow || item.Type == session.ItemTypeRemoteSession) {
@@ -21098,7 +21108,7 @@ func (h *Home) renderHelpBarMinimal() string {
 		if item.Type == session.ItemTypeGroup {
 			contextKeys = renderKeys("⏎", newKey, quickKey, groupKey)
 		} else {
-			contextKeys = renderKeys("⏎", newKey, quickKey, restartKey)
+			contextKeys = renderKeys(h.sessionOpenKeyLabel(), newKey, quickKey, restartKey) // matrix/hardened: primary open key.
 			if item.Session != nil && item.Session.CanRestartFresh() {
 				freshRendered := renderKeys(restartFreshKey)
 				if freshRendered != "" {
@@ -21196,7 +21206,7 @@ func (h *Home) renderHelpBarCompact() string {
 				contextHints = append(contextHints, h.helpKeyShort(newQuickKey, "New"))
 			}
 		} else {
-			contextHints = append(contextHints, h.helpKeyShort("⏎", "Attach"))
+			contextHints = append(contextHints, h.helpKeyShort(h.sessionOpenKeyLabel(), "Attach")) // matrix/hardened: primary open key.
 			if newQuickKey != "" {
 				contextHints = append(contextHints, h.helpKeyShort(newQuickKey, "New"))
 			}
@@ -21398,7 +21408,7 @@ func (h *Home) renderHelpBarFull() string {
 			}
 		} else {
 			contextTitle = "Session"
-			primaryHints = append(primaryHints, h.helpKey("Enter", "Attach"))
+			primaryHints = append(primaryHints, h.helpKey(h.sessionOpenKeyLabel(), "Attach"))
 			if newQuickKey != "" {
 				primaryHints = append(primaryHints, h.helpKey(newQuickKey, "New/Quick"))
 			}
@@ -21821,7 +21831,7 @@ func (h *Home) curatedContextHints(item session.Item) []footerHint {
 		} else {
 			// Live/attachable session: attach first, then restart, then the
 			// most relevant follow-up (fork while forkable, else new).
-			add("⏎", "attach")
+			add(h.sessionOpenKeyLabel(), "attach")
 			add(h.actionKey(hotkeyRestart), "restart")
 			if s.CanFork() {
 				add(h.actionKey(hotkeyQuickFork), "fork")
@@ -21833,14 +21843,14 @@ func (h *Home) curatedContextHints(item session.Item) []footerHint {
 	case session.ItemTypeWindow:
 		// A tmux window row attaches just like its session, and 'd' kills
 		// the selected window (with confirmation).
-		add("⏎", "attach")
+		add(h.sessionOpenKeyLabel(), "attach")
 		add(h.actionKey(hotkeyDelete), "delete")
 
 	case session.ItemTypeRemoteSession:
 		// A remote session row attaches over SSH just like a local session;
 		// without this case the curated footer dropped the attach hint for
 		// remote rows (PR #1289 review nit 1).
-		add("⏎", "attach")
+		add(h.sessionOpenKeyLabel(), "attach")
 	}
 
 	return hints
@@ -23006,7 +23016,7 @@ func (h *Home) renderRemotePreview(item session.Item, width, height int) string 
 			Icon:     "⬡",
 			Title:    "Remote: " + item.RemoteName,
 			Subtitle: fmt.Sprintf("Host: %s — %d sessions", host, count),
-			Hints:    []string{"Press Enter on a session to attach via SSH"},
+			Hints:    []string{"Press " + h.sessionOpenKeyLabel() + " on a session to attach via SSH"},
 		}
 		state.Body = remotePreviewFieldLines(versionState, Version, sessions, statsResult, hasStats, fields, time.Now(), emptyStateBodyLayout(state, width, height))
 		if poll.LastPollError != "" {
@@ -23097,7 +23107,7 @@ func (h *Home) renderRemotePreview(item session.Item, width, height int) string 
 		b.WriteString("\n\n")
 	}
 
-	b.WriteString(dimStyle.Render("Press Enter to attach via SSH"))
+	b.WriteString(dimStyle.Render("Press " + h.sessionOpenKeyLabel() + " to attach via SSH"))
 
 	return b.String()
 }
@@ -24624,7 +24634,7 @@ func (h *Home) renderPreviewPane(width, height int) string {
 			b.WriteString("\n")
 		}
 		b.WriteString("  ")
-		b.WriteString(keyStyle.Render("Enter"))
+		b.WriteString(keyStyle.Render(h.sessionOpenKeyLabel()))
 		b.WriteString(dimStyle.Render(" - attach (will auto-start)"))
 		b.WriteString("\n")
 		if selected.IsMultiRepo() {
@@ -24696,7 +24706,7 @@ func (h *Home) renderPreviewPane(width, height int) string {
 			b.WriteString("\n")
 		}
 		b.WriteString("  ")
-		b.WriteString(keyStyle.Render("Enter"))
+		b.WriteString(keyStyle.Render(h.sessionOpenKeyLabel()))
 		b.WriteString(dimStyle.Render(" - attach (will auto-start)"))
 		b.WriteString("\n")
 		if selected.IsMultiRepo() {

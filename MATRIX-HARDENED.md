@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.62`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.65`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -66,7 +66,7 @@
 - `internal/session/claude_hooks.go`：`isAgentDeckHookCommand` 的判断规则：先去掉开头的 `VAR=值`，再要求第二个词是 `hook-handler`、程序名的文件名部分是 `agent-deck`。`RemoveClaudeHooks` 会扫描全部事件，并做 UTC 时间戳备份（约 387–414 行）。
 - `cmd/agent-deck/main.go`（约 4845、5070 行）：`agent-deck uninstall` 会移除这些钩子。`uninstall.sh` 第 253 行附近的 jq 过滤用的是同一套规则（正则），写回时用 `cat >` 保持软链接和权限。
 
-**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.62`。
+**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.65`。
 
 **测试**：以 `_hardened_test.go` 结尾的文件、`update_check_disable_test.go`、`update_timer_wiring_test.go` 等是新增或调整过的测试；`testdata/goldens/*` 里的快照已经按加固后的输出更新。
 
@@ -577,6 +577,14 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 - **matrix/hardened: 开销及运行范围**：复用现有状态观察节奏，不加定时器。无容量候选时只是内存判断；有候选时每 5 秒最多检查一次，只有首次安排或实际领取时落盘。详情缓存到已有子状态详情，TUI/Web 渲染不读侧文件。需要观察进程持续运行；TUI/Web 无人访问而观察进程不再采样时，延后到下次采样，不承诺无人值守常驻调度。
 - **改动地图**：`internal/session/matrix_codex_capacity_retry.go`（计划、耐久去重、发送保护，新文件）、`matrix_turn_interrupt.go`（原生容量错误及刷新接入）、`instance.go`（缓存重试详情）、`userconfig.go` 和 `config_keys.go`（开关）。
 - **验证**：`matrix_codex_capacity_retry_test.go` 覆盖真实记录结构、继续/成功清除、子代理、30/60/120 退避、每小时上限、跨进程与并发领取、发送不确定、旧回合重放、草稿/审批/工作状态、只读消费者、损坏状态及配置往返。使用隔离 runner，含 race 检查；不会为了测试向真实会话发消息。另用真实 tmux 与无网络的 Python 模拟终端验证单次消息送达及草稿保留。没有人为制造真实模型容量失败或承诺重试一定成功。
+
+## 52. 用 o 打开会话
+
+`1.16.26+matrix.65` 将 `o` 作为列表打开会话的主快捷键，原发送提示入口移到 `Alt+O`。
+
+- **matrix/hardened:** `[hotkeys].open_session` 默认 `o`，可重绑或置空；Enter 保留兼容入口。使用同一打开流程，覆盖本地、远程、窗口行及内嵌终端，停止的本地会话沿用自动恢复。分组行沿用展开与折叠。
+- **matrix/hardened:** 底栏、帮助及本地/远程预览显示当前打开键；禁用可配置键后提示 Enter。对话框中的文本输入保持原有输入方式。
+- 验证使用第 4 节隔离入口，覆盖实际主界面按键路由、重绑与禁用、Enter 兼容、提示入口、帮助及界面快照。已打开的 TUI 在会话列表按 `Ctrl+T` 重载后生效。
 
 ## 53. Ctrl+P 置顶视图与移除 Ctrl+N/P 导航
 

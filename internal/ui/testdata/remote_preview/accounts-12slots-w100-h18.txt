@@ -13,6 +13,6 @@
       bob-team-b      5h 62%  7d 44%  10 min ago                      
       +10 more                                                        
                                                                       
-             • Press Enter on a session to attach via SSH             
+               • Press o on a session to attach via SSH               
                                                                       
                                                                       

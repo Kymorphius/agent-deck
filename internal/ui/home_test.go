@@ -2439,6 +2439,7 @@ func TestCuratedFooterAlwaysEndsWithSettingsThenHelp(t *testing.T) {
 	}
 }
 
+// matrix/hardened: advertise the primary o session-open key.
 func TestCuratedFooterLiveSessionShowsAttach(t *testing.T) {
 	home := curatedHome()
 	home.flatItems = []session.Item{
@@ -2447,8 +2448,8 @@ func TestCuratedFooterLiveSessionShowsAttach(t *testing.T) {
 	home.cursor = 0
 
 	result := tmux.StripANSI(home.renderHelpBar())
-	if !strings.Contains(result, "⏎ attach") {
-		t.Errorf("live session should advertise Enter attach\nGot: %q", result)
+	if !strings.Contains(result, "o attach") {
+		t.Errorf("live session should advertise o attach\nGot: %q", result)
 	}
 	// Live session shows up to 3 context hints (attach first, then restart, …).
 	if !strings.Contains(result, "restart") {
@@ -2607,6 +2608,7 @@ func TestCuratedFooterJumpMode(t *testing.T) {
 // TestCuratedFooterRemoteSessionShowsAttach covers PR #1289 review nit 1: a
 // remote-session row must still advertise the attach hint in the curated
 // footer (it attaches over SSH just like a local session).
+// matrix/hardened: remote rows use the same primary o session-open key.
 func TestCuratedFooterRemoteSessionShowsAttach(t *testing.T) {
 	home := curatedHome()
 	home.flatItems = []session.Item{
@@ -2615,14 +2617,14 @@ func TestCuratedFooterRemoteSessionShowsAttach(t *testing.T) {
 	home.cursor = 0
 
 	result := tmux.StripANSI(home.renderHelpBar())
-	if !strings.Contains(result, "⏎ attach") {
-		t.Errorf("curated footer for a remote session should advertise Enter attach\nGot: %q", result)
+	if !strings.Contains(result, "o attach") {
+		t.Errorf("curated footer for a remote session should advertise o attach\nGot: %q", result)
 	}
 }
 
 // TestCuratedFooterQueuedSessionNotAttachable covers PR #1289 review nit 2b: a
 // queued session has no tmux yet, so the curated footer must not advertise
-// "⏎ attach" or "restart" for it — only delete and new make sense.
+// "o attach" or "restart" for it — only delete and new make sense.
 func TestCuratedFooterQueuedSessionNotAttachable(t *testing.T) {
 	home := curatedHome()
 	home.flatItems = []session.Item{

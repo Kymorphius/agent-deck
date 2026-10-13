@@ -12,6 +12,6 @@
       alice-team-a    5h 90%  7d 40%  6 min ago                       
       alice-personal  5h 31%  7d 13%  stale, 2 h ago                  
                                                                       
-             • Press Enter on a session to attach via SSH             
+               • Press o on a session to attach via SSH               
                                                                       
                                                                       

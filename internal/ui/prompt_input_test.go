@@ -1,6 +1,7 @@
 // Issue #1410: prompt the highlighted session directly from the main TUI list
 // without attaching. These tests pin (a) the PromptInputDialog input→submit
-// routing and (b) the `o` hotkey gating at the handleMainKey boundary. No real
+// routing and (b) the `Alt+O` hotkey gating at the handleMainKey boundary.
+// matrix/hardened: lowercase o opens the session; inline prompting uses Alt+O. No real
 // tmux — submission emits a promptSubmitMsg the Home handler routes through the
 // existing prompt-state-aware send path.
 package ui
@@ -109,8 +110,8 @@ func TestPromptInputDialog_ReopenRebinds(t *testing.T) {
 }
 
 // armHomeWithRunningClaudeSession builds a Home whose cursor sits on a running
-// claude session row (non-nil tmux session) so the `o` hotkey can open the
-// prompt input.
+// claude session row (non-nil tmux session) so the prompt hotkey can open the
+// prompt input. matrix/hardened: the helper remains independent of its binding.
 func armHomeWithRunningClaudeSession(t *testing.T, tool string) (*Home, *session.Instance) {
 	t.Helper()
 	home := NewHome()
@@ -141,7 +142,7 @@ func TestPromptHotkey_OpensInputForClaudeSession(t *testing.T) {
 	home, inst := armHomeWithRunningClaudeSession(t, "claude")
 
 	key := defaultHotkeyBindings[hotkeyPromptSession]
-	home.handleMainKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)})
+	home.handleMainKey(altKeyMsg('o')) // matrix/hardened: send an actual Alt+O key event.
 
 	if !home.promptInputDialog.IsVisible() {
 		t.Fatalf("prompt input should be visible after pressing %q on a claude session", key)
@@ -156,8 +157,7 @@ func TestPromptHotkey_OpensInputForClaudeSession(t *testing.T) {
 func TestPromptHotkey_NonClaudeSessionNoOp(t *testing.T) {
 	home, _ := armHomeWithRunningClaudeSession(t, "shell")
 
-	key := defaultHotkeyBindings[hotkeyPromptSession]
-	home.handleMainKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)})
+	home.handleMainKey(altKeyMsg('o')) // matrix/hardened: send an actual Alt+O key event.
 
 	if home.promptInputDialog.IsVisible() {
 		t.Error("prompt input must not open for a non-claude session")

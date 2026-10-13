@@ -1,3 +1,4 @@
+// matrix/hardened: remote preview hints advertise the primary o open key.
 package ui
 
 // Scaling tests for the remote preview panel's stats block: no field may
@@ -131,7 +132,7 @@ func TestRemotePreview_AccountsScaleGolden(t *testing.T) {
 			if lines := strings.Count(raw, "\n") + 1; lines != f.height {
 				t.Errorf("frame has %d lines, pane height is %d", lines, f.height)
 			}
-			if !strings.Contains(got, "Press Enter") {
+			if !strings.Contains(got, "Press o") {
 				t.Errorf("hint line was pushed off the pane:\n%s", got)
 			}
 			if !strings.Contains(got, "Sessions  ") || !strings.Contains(got, "Harnesses  ") {
@@ -490,7 +491,7 @@ func TestRemotePreview_EveryFieldFits(t *testing.T) {
 				}
 				assertFrameFits(t, got, w)
 				if w >= 45 && h >= 18 {
-					if !strings.Contains(got, "Press Enter") {
+					if !strings.Contains(got, "Press o") {
 						t.Errorf("hint pushed off:\n%s", got)
 					}
 					// No blank line between the first body line and the hint.
@@ -499,7 +500,7 @@ func TestRemotePreview_EveryFieldFits(t *testing.T) {
 						if strings.Contains(l, "agent-deck v") && first < 0 {
 							first = i
 						}
-						if strings.Contains(l, "Press Enter") {
+						if strings.Contains(l, "Press o") {
 							hint = i
 						}
 					}

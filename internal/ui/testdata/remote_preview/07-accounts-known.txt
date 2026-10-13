@@ -10,6 +10,6 @@
       personal  5h 8%  7d 24%  5 min ago            
       work      —      —       usage unknown        
                                                     
-    • Press Enter on a session to attach via SSH    
+      • Press o on a session to attach via SSH      
                                                     
                                                     

@@ -19,7 +19,7 @@ func TestJcukenAliasReachesTheSameAction(t *testing.T) {
 		action    string
 	}{
 		{"т", "n", hotkeyNewSession},
-		{"щ", "o", hotkeyPromptSession},
+		{"щ", "o", hotkeyOpenSession}, // matrix/hardened: the Russian-layout twin now opens sessions.
 		{"ф", "a", hotkeyQuickApprove},
 		{"а", "f", hotkeyQuickFork},
 		{"в", "d", hotkeyDelete},
@@ -53,7 +53,8 @@ func TestJcukenAliasCoversShiftedBindings(t *testing.T) {
 func TestLatinBindingsStillResolve(t *testing.T) {
 	lookup, _ := buildHotkeyLookup(resolveHotkeys(nil))
 
-	for _, key := range []string{"n", "o", "a", "f", "d", "m", "s", "u", "q", "F", "shift+u"} {
+	// matrix/hardened: keep both session opening and the moved prompt chord reachable.
+	for _, key := range []string{"n", "o", "alt+o", "a", "f", "d", "m", "s", "u", "q", "F", "shift+u"} {
 		if _, ok := lookup[key]; !ok {
 			t.Errorf("latin binding %q no longer resolves", key)
 		}

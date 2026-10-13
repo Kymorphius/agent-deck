@@ -11,6 +11,6 @@
     28% · 35.6G/44.7G · 665.9G/862.4G                                 
     Last poll 1.2s · 5m ago                                           
                                                                       
-             • Press Enter on a session to attach via SSH             
+               • Press o on a session to attach via SSH               
                                                                       
                                                                       

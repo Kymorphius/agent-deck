@@ -10,6 +10,6 @@
     Harnesses  claude:2 · codex:2 · pi:1                              
     stats unknown (remote runs an older agent-deck)                   
                                                                       
-             • Press Enter on a session to attach via SSH             
+               • Press o on a session to attach via SSH               
                                                                       
                                                                       

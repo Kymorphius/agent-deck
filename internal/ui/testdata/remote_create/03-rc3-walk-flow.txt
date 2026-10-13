@@ -23,6 +23,6 @@ Tip: run the command manually in this directory to see the full error,
 or check logs/session-id-lifecycle.jsonl for the spawn trace.
 
 
-Press Enter to attach via SSH
+Press o to attach via SSH
 --- footer ---
 ⚠ on lab: remote session "parity-1789689143" was created but did not start: failed to start session: tmux session "agentdeck_parity-1789689143_a1b2" is gone: spawn_died_fast (exited after 262ms)

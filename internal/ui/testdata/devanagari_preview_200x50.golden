@@ -28,7 +28,7 @@ SESSIONS                                                               │ PREVI
 24     ├─ ○ Sharjeel-r5-bug57 claude                                   │   - Mere workers: do chalte hue workers ke process khud dekhe. Dono isi semantic login par chal rahe hain.                     
 25     ├─ ○ Sharjeel-r6-bug58 claude                                   │ tag-A                                                                                                                          
 26     ├─ ○ Sharjeel-r3-bug59 claude                                   │                                                                                                                                
-27     ├─ ○ Sharjeel-r4-bug60 claude                                   │ Press Enter to attach via SSH                                                                                                  
+27     ├─ ○ Sharjeel-r4-bug60 claude                                   │ Press o to attach via SSH                                                                                                      
 28     ├─ ○ Sharjeel-r5-bug61 claude                                   │                                                                                                                                
 29     ├─ ○ Sharjeel-r6-bug62 claude                                   │                                                                                                                                
 30     ├─ ○ Sharjeel-r3-bug63 claude                                   │                                                                                                                                
@@ -47,4 +47,4 @@ SESSIONS                                                               │ PREVI
                                                                        │                                                                                                                                
                                                                        │                                                                                                                                
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-Session:  Enter  Attach  n/N  New/Quick  g  Group  R  Restart  c  Copy  V  Copy pane  x  Send │  r  Rename  M  Move  d  Delete  D  Close  ↑↓ Nav │ +/- Move │ / Search │ G Global │ S Settings │ q Quit 
+Session:  o  Attach  n/N  New/Quick  g  Group  R  Restart  c  Copy  V  Copy pane  x  Send │  r  Rename  M  Move  d  Delete  D  Close     ↑↓ Nav │ +/- Move │ / Search │ G Global │ S Settings │ q Quit  

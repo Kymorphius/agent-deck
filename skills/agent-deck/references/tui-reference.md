@@ -34,7 +34,7 @@ panes are untouched: they receive the raw bytes exactly as typed.
 | `l` / `→` / `Tab` | Toggle expand/collapse group |
 | `1-9` | Jump to Nth root group |
 | `Space` | Jump mode |
-| `Enter` | Attach to session OR toggle group |
+| `o` / `Enter` | Attach to session OR toggle group (`open_session` is **rebindable**) |
 | `Shift+Enter` | Open session in new iTerm window (macOS) |
 | `` ` `` | Alternate-session toggle: swap with the previous session, vim `Ctrl-^` style (**rebindable** as `alt_session`) |
 | `Alt+←` / `Alt+→` | Walk back / forward through recently used sessions, MRU-ordered via `last_accessed` (**rebindable** as `mru_back` / `mru_forward`) |
@@ -48,11 +48,12 @@ panes are untouched: they receive the raw bytes exactly as typed.
 | `Alt+g` / `Alt+G` | First / last session in group |
 | `Alt+/` | Filter search within group |
 
+<!-- matrix/hardened: o opens sessions; Alt+O opens the prompt dialog. -->
 ### Session Actions
 
 | Key | Action |
 |-----|--------|
-| `Enter` | Attach to session OR toggle group |
+| `o` / `Enter` | Attach to session OR toggle group (`open_session` is **rebindable**) |
 | `n` / `N` | New session / quick create (**rebindable**) |
 | `r` | Rename session or group (**rebindable**) |
 | `R` | Restart session, reloads MCPs (**rebindable**) |
@@ -73,7 +74,7 @@ panes are untouched: they receive the raw bytes exactly as typed.
 | `<` / `>` | Shrink / grow preview pane by 5% (or drag the divider with the mouse) |
 | `u` | Mark unread, idle -> waiting (**rebindable**) |
 | `a` | Quick approve — sends `1` to Claude (**rebindable**) |
-| `o` | Prompt session — send a one-line prompt without attaching (**rebindable**) |
+| `Alt+O` | Prompt session — send a one-line prompt without attaching (**rebindable**) |
 | `y` | Toggle YOLO mode (**rebindable**) |
 | `+` / `K` / `Shift+↑` | Move item up (auto-promotes a sub-session to top-level at the parent's first child) |
 | `-` / `J` / `Shift+↓` | Move item down (auto-promotes a sub-session to top-level at the parent's last child) |
