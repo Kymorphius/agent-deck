@@ -291,6 +291,34 @@ and, once confirmed, runs the remote's own `session switch`; transcripts and
 credentials never leave the remote. See
 [docs/REMOTE-COMMANDS.md](docs/REMOTE-COMMANDS.md#switching-a-remote-sessions-account-or-harness).
 
+### Continue a Claude conversation with Codex
+
+<!-- matrix/hardened: expose the existing cross-harness continuation and pending-target behavior. -->
+If Claude has reached its usage limit, select its session, press **Shift+P**,
+change **Harness** to **Codex**, and press **Enter**. Review the context transfer
+disclosure and press **y** to confirm. The new Codex session runs in the same
+project directory with a bounded tail of readable conversation text. Long
+conversations may be truncated; attachments and native tool state are excluded.
+
+Only after the new target reports native readiness does Agent Deck archive the
+Claude source and show the Codex target in the active list. The source transcript
+and project files remain available. While verification is pending, the source
+stays active and the new target is kept in the archived list for recovery; the
+two rows have the same title. Press **^** (**Shift+6**) to view archived sessions.
+Codex verification supports both Agent Deck notify events and the exact native
+thread owned by the target process, so an existing custom notify callback is
+preserved.
+
+The CLI uses the same workflow:
+
+```sh
+agent-deck session switch-preview <session-id> --to-harness codex
+agent-deck session switch <session-id> --to-harness codex --confirm-context-loss
+```
+
+Repeating the switch for an unchanged source reconciles the existing target;
+it does not launch another conversation while its previous launch is pending.
+
 ### Session naming
 
 Titles and groups answer different questions — "what is this, at a glance?" versus "why do these sessions belong together?" — and each has its own controls.

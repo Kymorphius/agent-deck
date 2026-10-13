@@ -312,7 +312,9 @@ func crossHarnessPresentationStatus(result *session.CrossHarnessSwitchResult) st
 	if result.Pending {
 		return "pending"
 	}
-	return switchPresentationStatus(result.TargetCreated, result.TargetReady)
+	// matrix/hardened: recovery loads the existing durable target instead of
+	// creating it again; positive readiness must still be reported as success.
+	return switchPresentationStatus(result.TargetCreated || result.Target != nil, result.TargetReady)
 }
 
 func readinessPresentation(ready bool) string {

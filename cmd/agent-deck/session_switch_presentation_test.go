@@ -38,6 +38,16 @@ func TestCrossHarnessSwitchPresentationStatus(t *testing.T) {
 	}
 }
 
+// matrix/hardened: reconciling a prior pending operation reuses its target,
+// so target_created=false is compatible with a fully successful handoff.
+func TestCrossHarnessSwitchPresentationRecoveredTarget(t *testing.T) {
+	source := &session.Instance{ID: "source", SupersededBy: "target"}
+	recovered := &session.CrossHarnessSwitchResult{Target: &session.Instance{ID: "target"}, TargetReady: true}
+	if got := crossHarnessSuccessPayload(source, recovered); got["status"] != "success" || got["success"] != true || got["pending"] != false || got["target_created"] != false || got["source_archived"] != true {
+		t.Fatalf("recovered ready handoff must report consistent success: %v", got)
+	}
+}
+
 func TestReadinessPresentation(t *testing.T) {
 	if got := readinessPresentation(false); got != "pending" {
 		t.Fatalf("not-ready presentation = %q, want pending", got)
