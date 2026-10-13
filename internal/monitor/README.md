@@ -92,3 +92,13 @@ Regression coverage uses real Unix clients and the repository's isolated test
 entry point. The external pane probe is replaced only where deterministic
 hangs, demand expiry or generation changes are required; a two-profile test
 uses real SQLite stores with identical management IDs to verify write ownership.
+
+`matrix/hardened:` the production monitor alone opts into a dedicated read-only
+tmux query channel. Stable registry order selects existing socket anchors;
+registration is lazy and demand expiry/shutdown reaps only owned clients.
+Control clients use `-E` and `ignore-size,no-output,read-only`; they add physical
+attachment state and can trigger configured client lifecycle hooks, so native
+acceptance checks those hooks, pane PIDs and geometry. Unknown query forms or
+ambiguous/error responses fall back to native commands. Fresh stays native.
+Status adds bounded transport counters and owned client PIDs; live client CPU
+must be measured separately from already waited native child CPU.

@@ -15,6 +15,7 @@ import (
 
 	"github.com/asheshgoplani/agent-deck/internal/core/daemon"
 	"github.com/asheshgoplani/agent-deck/internal/monitor"
+	"github.com/asheshgoplani/agent-deck/internal/tmux"
 )
 
 // matrix/hardened: this read-only user collector is separate from the
@@ -57,10 +58,16 @@ func handleMonitor(args []string) {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
-		defer owner.Close()
-		defer initDaemonLogging()()
-		server := monitor.New(monitor.Options{Version: Version})
-		if err := server.Serve(ctx, owner.Listener()); err != nil {
+		// matrix/hardened: finish resource cleanup before the error path os.Exit.
+		err = func() error {
+			defer owner.Close()
+			defer initDaemonLogging()()
+			queries := tmux.EnableQueryTransport(ctx)
+			server := monitor.New(monitor.Options{Version: Version, QueryTransport: queries})
+			defer server.Close()
+			return server.Serve(ctx, owner.Listener())
+		}()
+		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}

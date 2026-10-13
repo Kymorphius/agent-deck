@@ -111,6 +111,8 @@ type observedInstance struct {
 	sharedAck      bool
 	sharedAckKnown bool
 	expectedAckAt  int64
+	// matrix/hardened: immutable routing copied before any probe can mutate inst.
+	queryTarget *tmux.Session
 }
 type profileState struct {
 	mu           sync.Mutex
@@ -242,6 +244,14 @@ func (s *Server) reconcile(p *profileState) error {
 			next[id] = &observedInstance{instance: inst, identity: identity, expectedStatus: string(inst.GetStatusThreadSafe()), row: session.RuntimeSessionSnapshot{ID: id, Profile: p.name, Epoch: p.epoch, Identity: identity, Status: inst.GetStatusThreadSafe(), Error: "runtime observation pending"}}
 			if old != nil && old.inflight {
 				p.retired = append(p.retired, old)
+			}
+		}
+		// matrix/hardened: registry rows are fresh and not probed concurrently.
+		// Copy only immutable routing, never a tmux Session mutex/cache.
+		next[id].queryTarget = nil
+		if !inst.IsArchived() {
+			if target := inst.GetTmuxSession(); target != nil {
+				next[id].queryTarget = &tmux.Session{Name: target.Name, SocketName: target.SocketName}
 			}
 		}
 		if !next[id].inflight {
@@ -517,6 +527,18 @@ func (s *Server) collect(p *profileState) {
 	}
 	var hooks *session.StatusFileWatcher
 	if s.opts.Probe == nil {
+		// matrix/hardened: stable registry order prevents anchor churn between
+		// passes. Detached routing remains safe while older probes finish.
+		if s.opts.QueryTransport != nil {
+			targets := make([]*tmux.Session, 0, len(p.order))
+			for _, id := range p.order {
+				record := p.records[id]
+				if record.queryTarget != nil && record.instance.GetStatusThreadSafe() != session.StatusStopped {
+					targets = append(targets, record.queryTarget)
+				}
+			}
+			s.opts.QueryTransport.RegisterTargets(p.name, targets)
+		}
 		hooks = s.hooksWatcher()
 		tmux.RefreshExistingSessions()
 		tmux.RefreshPaneInfoCache()

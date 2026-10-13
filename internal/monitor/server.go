@@ -31,6 +31,8 @@ type Options struct {
 	HistoryLimit int
 	PassBudget   time.Duration
 	MaxWorkers   int
+	// matrix/hardened: ownership transfers to Server; nil keeps native queries.
+	QueryTransport *tmux.QueryTransportManager
 	// Test seams also allow embedding without owning the application's registry.
 	LoadProfile     func(string) (ProfileRegistry, error)
 	Probe           func(*session.Instance, *session.StatusUpdatePass, time.Time) session.RuntimeSessionSnapshot
@@ -179,6 +181,9 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 func (s *Server) Close() {
 	s.closeOnce.Do(func() {
 		s.cancel()
+		// matrix/hardened: close owned clients even before Serve, on HTTP stop,
+		// or after listener errors; never rely on CLI defers surviving os.Exit.
+		s.opts.QueryTransport.Close()
 		s.hookMu.Lock()
 		hookDone := s.hookDone
 		if s.hooks != nil {
@@ -348,6 +353,7 @@ func (s *Server) Status() Status {
 	// matrix/hardened: status reuses the private monitor route and adds no probes.
 	st.TmuxCommands = tmux.SubprocessMetrics()
 	st.BatchScheduling = CaptureBatchSchedulingSnapshot()
+	st.QueryTransport = s.opts.QueryTransport.Diagnostics()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	st.Profiles = len(s.profiles)
@@ -394,8 +400,14 @@ func (s *Server) run() {
 			p.mu.Unlock()
 			if due {
 				s.collect(p)
-			} else if !active && p.sse != nil {
-				p.sse.Sync(nil)
+			} else if !active {
+				// matrix/hardened: idle profiles own no persistent query client.
+				if s.opts.QueryTransport != nil {
+					s.opts.QueryTransport.ReleaseTargets(p.name)
+				}
+				if p.sse != nil {
+					p.sse.Sync(nil)
+				}
 			}
 		}
 		// No consumer keeps a hooks filesystem watcher or OpenCode stream alive.

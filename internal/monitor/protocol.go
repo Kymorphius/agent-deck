@@ -55,6 +55,8 @@ type Status struct {
 	TmuxCommands tmux.SubprocessMetricsSnapshot `json:"tmuxCommands"`
 	// matrix/hardened: fixed batch admission/dispatch counters contain no targets.
 	BatchScheduling CaptureBatchScheduleStats `json:"batchScheduling"`
+	// matrix/hardened: bounded counters/PIDs expose owned query clients only.
+	QueryTransport tmux.QueryTransportStats `json:"queryTransport"`
 }
 
 type publication struct {

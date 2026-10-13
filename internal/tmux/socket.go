@@ -317,6 +317,10 @@ var tmuxPollTimeout = 3 * time.Second
 // returns its stdout. It is the timeout-guarded replacement for the bare
 // tmuxExec(socket, args...).Output() pattern at status/poll call sites.
 func runBoundedOutput(socketName string, args ...string) ([]byte, error) {
+	// matrix/hardened: only the strict read grammar can use the opt-in channel.
+	if output, ok := matrixQueryOutput(context.Background(), socketName, args...); ok {
+		return output, nil
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), tmuxPollTimeout)
 	defer cancel()
 	return commandOutput(tmuxExecContext(ctx, socketName, args...))
