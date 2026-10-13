@@ -102,6 +102,10 @@ func TestWriteCostEvent_WarnsOnMkdirError(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
+	// matrix/hardened: enable collection only for this automatic producer test.
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg-config"))
+	enableAutomaticCostsForTest(t)
+
 	// Stage a valid Claude transcript so writeCostEvent gets past the
 	// transcript-path validation and reaches the MkdirAll(costDir) call.
 	claudeDir := filepath.Join(home, ".claude", "projects", "abc")

@@ -1,5 +1,5 @@
 // matrix/hardened: refresh the entry and cache its incremental menu dependency.
-const CACHE_VERSION = "agentdeck-shell-v24"
+const CACHE_VERSION = "agentdeck-shell-v25"
 const SHELL_CACHE = CACHE_VERSION
 const APP_SHELL_URLS = [
   "/",

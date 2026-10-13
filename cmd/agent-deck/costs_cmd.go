@@ -115,6 +115,32 @@ func handleCostsSync(profile string) {
 	}
 }
 
+// matrix/hardened: explicit Web synchronization opens only a live registry
+// reader. The supplied cost store is the sole write target; no agents launch.
+func syncCostsForProfile(ctx context.Context, profile string, store *costs.Store, pricer *costs.Pricer) (*costs.SyncResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	storage, err := session.NewLiveReadOnlyStorageWithProfile(profile)
+	if err != nil {
+		return nil, err
+	}
+	defer storage.Close()
+	instances, err := storage.Load()
+	if err != nil {
+		return nil, err
+	}
+	sources, resolutionErrors := costSyncSessions(instances)
+	result := costs.SyncFromTranscriptsContext(ctx, store, pricer, sources)
+	for _, err := range resolutionErrors {
+		result.Errors = append(result.Errors, err.Error())
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
 func handleCostsSummary(profile string, args []string) {
 	// #1101: --json output so a remote agent-deck can be queried over SSH and
 	// its cost totals merged into the local TUI's status-line cost segment.

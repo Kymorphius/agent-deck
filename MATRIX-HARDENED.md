@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.53`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.54`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -66,7 +66,7 @@
 - `internal/session/claude_hooks.go`：`isAgentDeckHookCommand` 的判断规则：先去掉开头的 `VAR=值`，再要求第二个词是 `hook-handler`、程序名的文件名部分是 `agent-deck`。`RemoveClaudeHooks` 会扫描全部事件，并做 UTC 时间戳备份（约 387–414 行）。
 - `cmd/agent-deck/main.go`（约 4845、5070 行）：`agent-deck uninstall` 会移除这些钩子。`uninstall.sh` 第 253 行附近的 jq 过滤用的是同一套规则（正则），写回时用 `cat >` 保持软链接和权限。
 
-**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.53`。
+**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.54`。
 
 **测试**：以 `_hardened_test.go` 结尾的文件、`update_check_disable_test.go`、`update_timer_wiring_test.go` 等是新增或调整过的测试；`testdata/goldens/*` 里的快照已经按加固后的输出更新。
 
@@ -498,3 +498,19 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 
 - **matrix/hardened:** data_version 仍用于发现提交，连接 epoch、打开与最终文件身份、配置签名及最终版本检查保留。目录内容相同才复用基础菜单，原生绑定、状态、目录结构和配置真正改变仍重新构建。operator touch 每次重新读取并用于拒绝早开始的运行观察，即使目录相同也不能忽略停止/确认的水位。
 - **matrix/hardened:** 私有诊断增加原始 registryReads，区分数据库读取、目录内容复用与实际重建；不承诺数据库零读取。回归包含无关 metadata 连续提交下目录复用和 touch-only 提交仍拒绝旧观察，生产另核对命中/重建分布与 CPU。
+
+## 44. 同轮共享 Codex 费用来源目录枚举
+
+`1.16.26+matrix.54` 为每一轮费用来源解析创建独立 resolver；同一 Codex home 只枚举一次 rollout 日期目录，再按每个原始会话 ID 精确匹配文件名。它也适用于手动历史同步，原来的费用 tail、增量 offset、导入和计价不变。
+
+- **matrix/hardened:** resolver 不跨轮缓存；下一轮重新扫描以发现新建、删除、移动和重复来源。账号 home、SSH/local eligibility、字面 ID 验证以及最终 regular-file/symlink/唯一性检查保留，不按标题、最新文件或任意候选猜测来源。每轮目录枚举形成一份短暂快照，匹配文件在使用前仍检查当前文件状态。
+- **matrix/hardened:** 验证包含每 home 一次枚举、与原 resolver 的正常及失败结果一致、后缀身份碰撞、空 wildcard、原始 ID、不同账号和轮间文件变化；生产继续区分目录复用、Web 单进程 CPU 与其他后台工作，不能仅凭命中数宣称整机功耗下降。
+
+## 45. 费用默认手动采集，自动模式显式可选
+
+**matrix/hardened:** `[costs] auto_collect = false` 为省略配置时的默认值。历史费用展示和预算查询始终可用；Web Costs 的“同步费用”以及 `agent-deck costs sync` 才主动读取用量。CLI `agent-deck config set costs.auto_collect true` 可启用自动模式，改动后重载管理窗口与 Web 服务。
+
+- 自动模式统一控制 Codex 费用 owner、Claude 费用事件生产与消费、Recall 索引的费用 handoff 和价格/保留期维护。关闭时不启动费用扫描或 owner 重试，也不为费用读取 hook transcript、创建 spool 或删除历史记录；Recall 原始对话与 usage 索引仍保留。
+- 手动 Claude 来源按持久会话的实际账号和 EffectiveWorkingDir 解析精确原生 ID；不借用其它账号同名记录，拒绝非本地及软链接来源。
+- 手动 Web 同步要求鉴权及现有写入/origin 边界，一次只处理一个请求，只返回计数。请求取消停止后续来源读取；已经导入的事件保留，重复同步通过既有 native usage 身份去重。查看页面、汇总 GET、主题变化不会启动同步。
+- 验证默认与 opt-in、hook/Recall 无隐式费用写入、取消、Web 写入边界、重复请求及前端显式按钮。生产必须重载所有旧管理进程，避免旧版等待者接管费用锁继续扫描，并保留原 AI pane PID 与原费用记录。

@@ -82,6 +82,15 @@ export function CostDashboard() {
   const [summary, setSummary] = useState(null)
   const [error, setError] = useState(null)
   const [loading, setLoading] = useState(true)
+  // matrix/hardened: viewing or repainting costs never imports transcripts.
+  // Only the explicit button starts a mutation, fenced against late responses.
+  const [syncing, setSyncing] = useState(false)
+  const [syncResult, setSyncResult] = useState(null)
+  const [syncError, setSyncError] = useState(null)
+  const [chartRevision, setChartRevision] = useState(0)
+  const mountedRef = useRef(false)
+  const requestGenerationRef = useRef(0)
+  const syncInFlightRef = useRef(false)
 
   const dailyCanvasRef = useRef(null)
   const modelCanvasRef = useRef(null)
@@ -90,16 +99,58 @@ export function CostDashboard() {
 
   // Load summary cards
   useEffect(() => {
+    mountedRef.current = true
+    const generation = ++requestGenerationRef.current
+    const current = () => mountedRef.current && requestGenerationRef.current === generation
     apiFetch('GET', '/api/costs/summary')
       .then(data => {
+        if (!current()) return
         setSummary(data)
         setLoading(false)
       })
       .catch(err => {
+        if (!current()) return
         setError(err.message || 'Failed to load cost data')
         setLoading(false)
       })
+    return () => {
+      mountedRef.current = false
+      requestGenerationRef.current += 1
+    }
   }, [])
+
+  // matrix/hardened: single-flight also uses a ref so two clicks before a render
+  // cannot start two POSTs. Failed sync/refresh leaves the visible data intact.
+  async function syncCosts() {
+    if (!mountedRef.current || syncInFlightRef.current) return
+    syncInFlightRef.current = true
+    const generation = ++requestGenerationRef.current
+    const current = () => mountedRef.current && requestGenerationRef.current === generation
+    let synchronized = false
+    setSyncing(true)
+    setSyncResult(null)
+    setSyncError(null)
+    try {
+      const result = await apiFetch('POST', '/api/costs/sync')
+      if (!current()) return
+      synchronized = true
+      setSyncResult(result)
+      // A summary reload failure must not suppress independent chart refreshes.
+      setChartRevision(revision => revision + 1)
+      const data = await apiFetch('GET', '/api/costs/summary')
+      if (!current()) return
+      setSummary(data)
+    } catch (err) {
+      if (!current()) return
+      const detail = err.message || '请求失败'
+      setSyncError(synchronized ? `费用已同步，但刷新失败：${detail}` : `同步费用失败：${detail}`)
+    } finally {
+      if (current()) {
+        syncInFlightRef.current = false
+        setSyncing(false)
+      }
+    }
+  }
 
   // Build charts after loading (or when canvases become available)
   useEffect(() => {
@@ -107,8 +158,11 @@ export function CostDashboard() {
     if (!dailyCanvasRef.current || !modelCanvasRef.current) return
 
     let cancelled = false
+    // matrix/hardened: a late theme/data response must not replace newer charts.
+    let buildGeneration = 0
 
     async function buildCharts() {
+      const generation = ++buildGeneration
       try {
         const [Chart, dailyData, modelsData] = await Promise.all([
           loadChartJs(),
@@ -116,7 +170,7 @@ export function CostDashboard() {
           apiFetch('GET', '/api/costs/models'),
         ])
 
-        if (cancelled) return
+        if (cancelled || generation !== buildGeneration) return
 
         // Destroy old chart instances before creating new ones
         if (dailyChartRef.current) {
@@ -210,7 +264,7 @@ export function CostDashboard() {
       cancelled = true
       observer.disconnect()
     }
-  }, [loading, error])
+  }, [loading, error, chartRevision])
 
   // Cleanup chart instances on unmount
   useEffect(() => {
@@ -246,8 +300,29 @@ export function CostDashboard() {
     `
   }
 
+  // matrix/hardened: show collection mode and an explicit action without
+  // introducing polling or imports from the summary/chart effects.
   return html`
     <div style="display: flex; flex-direction: column; gap: 12px; flex: 1; min-height: 0; overflow: auto;">
+      <div class="chart-card">
+        <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;">
+          <div>
+            <div class="title">${summary.auto_collect === true ? '自动采集已开启' : '手动采集'}</div>
+            <div style="font-family: var(--mono); font-size: 12px; color: var(--muted);">点击同步可更新费用数据。</div>
+          </div>
+          <button type="button" class="btn primary" disabled=${syncing} onClick=${syncCosts}>
+            ${syncing ? '同步中…' : '同步费用'}
+          </button>
+        </div>
+        ${syncResult && html`
+          <div role="status" aria-live="polite" style="margin-top: 8px; font-family: var(--mono); font-size: 12px; color: var(--muted);">
+            同步完成：已扫描 ${syncResult.sessions_scanned ?? 0} 个会话；导入 ${syncResult.events_imported ?? 0}；跳过 ${syncResult.events_skipped ?? 0}；错误 ${syncResult.error_count ?? 0}
+          </div>
+        `}
+        ${syncError && html`
+          <div role="alert" style="margin-top: 8px; font-family: var(--mono); font-size: 12px; color: var(--danger, #f7768e);">${syncError}</div>
+        `}
+      </div>
       <div class="stat-grid">
         <div class="stat">
           <div class="lab">TODAY</div>

@@ -17,11 +17,21 @@ import (
 func costSyncSessions(instances []*session.Instance) ([]costs.SyncSession, []error) {
 	var out []costs.SyncSession
 	var errs []error
+	// matrix/hardened: enumerate each resolved home once for this cost pass;
+	// the next invocation takes a new directory snapshot, including duplicates.
+	rollouts := session.NewCodexCostRolloutResolver()
 	for _, inst := range instances {
 		if inst.Tool == "claude" && inst.ClaudeSessionID != "" {
-			out = append(out, costs.SyncSession{InstanceID: inst.ID, ClaudeSessionID: inst.ClaudeSessionID, ProjectPath: inst.ProjectPath, Tool: inst.Tool})
+			// matrix/hardened: manual sync follows the bound Claude account and
+			// effective launch directory rather than a default-home guess.
+			path, err := inst.ClaudeCostTranscriptPath()
+			if err != nil {
+				errs = append(errs, fmt.Errorf("Claude cost source %s: %w", inst.ID, err))
+				continue
+			}
+			out = append(out, costs.SyncSession{InstanceID: inst.ID, ClaudeSessionID: inst.ClaudeSessionID, ClaudePath: path, ProjectPath: inst.ProjectPath, Tool: inst.Tool})
 		} else if session.IsCodexCompatible(inst.Tool) && inst.CodexSessionID != "" && inst.ResolvedCodexHome() != "" {
-			path, err := inst.CodexCostRolloutPath()
+			path, err := rollouts.Resolve(inst)
 			if err != nil {
 				errs = append(errs, fmt.Errorf("Codex cost source %s: %w", inst.ID, err))
 				continue

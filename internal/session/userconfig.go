@@ -5937,6 +5937,8 @@ func GetPluginDef(name string) *PluginDef {
 
 // CostsSettings configures cost tracking, budgets, and pricing overrides.
 type CostsSettings struct {
+	// matrix/hardened: transcript collection is manual unless explicitly enabled.
+	AutoCollect   *bool  `toml:"auto_collect,omitempty"`
 	Currency      string `toml:"currency,omitempty"`
 	Timezone      string `toml:"timezone,omitempty"`
 	RetentionDays int    `toml:"retention_days,omitzero"`
@@ -5950,6 +5952,11 @@ type CostsSettings struct {
 	CostLineHideWhenZero *bool           `toml:"cost_line_hide_when_zero,omitempty"`
 	Budgets              BudgetSettings  `toml:"budgets,omitempty"`
 	Pricing              PricingSettings `toml:"pricing,omitempty"`
+}
+
+// GetAutoCollect leaves stored costs readable while defaulting collection off.
+func (c CostsSettings) GetAutoCollect() bool {
+	return c.AutoCollect != nil && *c.AutoCollect
 }
 
 // ProfileCosts holds per-profile overrides for cost-related settings.

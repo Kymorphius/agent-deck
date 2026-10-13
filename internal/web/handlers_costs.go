@@ -48,7 +48,9 @@ func (s *Server) handleCostsSummary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// matrix/hardened: viewing stored totals never starts transcript collection.
 	writeJSON(w, http.StatusOK, map[string]any{
+		"auto_collect":  s.costAutoCollect.Load(),
 		"today_usd":     microToUSD(today.TotalCostMicrodollars),
 		"week_usd":      microToUSD(week.TotalCostMicrodollars),
 		"month_usd":     microToUSD(month.TotalCostMicrodollars),
