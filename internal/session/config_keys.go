@@ -100,6 +100,10 @@ var configKeys = []ConfigKey{
 	{Key: "logs.remove_orphans", Section: "Logs", Label: "Remove orphan logs", Help: "Delete logs of sessions that no longer exist", Type: "bool",
 		get: func(c *UserConfig) any { return c.Logs.GetRemoveOrphans() },
 		set: func(c *UserConfig, v any) { c.Logs.RemoveOrphans = boolRef(v.(bool)) }},
+	// matrix/hardened: expose the same local-search preference through CLI configuration.
+	{Key: "ui.clear_search_on_open", Section: "Local search", Label: "Clear search on open (/)", Help: "Clear the previous query when opening / or Alt+/; off keeps the last query", Type: "bool",
+		get: func(c *UserConfig) any { return c.UI.GetClearSearchOnOpen() },
+		set: func(c *UserConfig, v any) { c.UI.ClearSearchOnOpen = boolRef(v.(bool)) }},
 	{Key: "global_search.enabled", Section: "Global search", Label: "Enabled", Help: "Search message content across Claude sessions", Type: "bool", RestartRequired: true,
 		get: func(c *UserConfig) any { return c.GlobalSearch.GetEnabled() },
 		set: func(c *UserConfig, v any) { c.GlobalSearch.Enabled = boolRef(v.(bool)) }},

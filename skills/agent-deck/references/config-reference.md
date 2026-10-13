@@ -834,6 +834,7 @@ TUI behavior settings, including new-session tool picker visibility (TUI + web).
 
 ```toml
 [ui]
+clear_search_on_open = true                   # matrix/hardened: clear / and Alt+/ on each open; false keeps the last query
 footer = "full"                               # Footer hint bar: "full", "curated", "compact", "minimal"
 embedded_terminal = true                      # Opt in to the persistent sidebar + interactive tmux pane
 sidebar_density = "compact"                   # Embedded sidebar lines per session: "full", "compact", "minimal", "auto"
@@ -847,6 +848,7 @@ active_includes_idle = true                   # Opt IN: active-on-top view keeps
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `footer` | string | `"full"` | Style of the bottom hint bar: `"full"` (default, the historic verbose bar), `"curated"`, `"compact"`, or `"minimal"`. (v1.9.49) |
+| `clear_search_on_open` | bool | `true` | matrix/hardened: clear the previous local-search query whenever `/` or `Alt+/` opens. Set `false` to keep it. Toggle with **Space** in **Settings (`S`) → LOCAL SEARCH → Clear search on open (/)**; applies on the next open without restarting. |
 | `embedded_terminal` | bool | `false` | Opt in to a persistent compact session sidebar with an interactive tmux terminal in the dashboard. **Enter** focuses the embedded terminal, **Alt+Enter** keeps the full-screen attach path, **Ctrl+Alt+B** toggles the sidebar while focused, and **Ctrl+Q** returns to the dashboard without stopping the session. Also toggleable in TUI Settings under **INTERFACE**; changes apply at the next launch. From a focused embedded local pane, an explicitly configured session-switcher chord opens the picker; **Enter** confirms the highlight, with no idle auto-commit. |
 | `sidebar_density` | string | `"compact"` | Lines each session occupies in the embedded-layout sidebar: `"compact"` (identity line plus one metadata line), `"full"` (two metadata lines), `"minimal"` (one line, with the tool marker inline), or `"auto"` (the widest of the three that still fits every visible session on screen, recomputed as groups open and close). Ignored by the classic layout. Also selectable in TUI Settings under **INTERFACE**. |
 | `hidden_tools` | []string | `[]` | Tool names to hide from the new-session picker. `shell` is always shown and cannot be hidden. Unknown names log a warning and are ignored. Edit via TUI **Settings (`S`) → Visible tools…** or by hand in `config.toml`. |

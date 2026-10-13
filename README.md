@@ -354,6 +354,9 @@ Running many sessions? Socket pooling shares MCP processes across all sessions v
 
 Press `/` to fuzzy-search across all sessions. Filter by status with `!` (running), `@` (waiting), `#` (idle), `&` (error). Press `$` for the Cost Dashboard and `G` for global search across all Claude conversations.
 
+<!-- matrix/hardened: make local-search query retention an explicit preference. -->
+Local search (`/` and `Alt+/`) clears the previous query each time it opens by default. To keep the last query, open **Settings (`S`) → LOCAL SEARCH → Clear search on open (/)** and turn it off with **Space**, or set `[ui].clear_search_on_open = false`. The change takes effect on the next search without restarting.
+
 ### Keyboard navigation (v1.7.60)
 
 Two tiers of keybindings move the cursor around the session list. The global tier is unchanged from earlier versions; the `Alt+` tier (added in v1.7.60) restricts movement to the current group only. Press `?` in the TUI to see the full table in-app.
