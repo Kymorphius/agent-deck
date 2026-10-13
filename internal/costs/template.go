@@ -2,6 +2,49 @@ package costs
 
 import "strings"
 
+// CostLineVariables returns the known cost-line windows used by template, once
+// each in first-use order. Unknown or unclosed placeholders remain literals.
+// matrix/hardened: use RenderCostLine's first-closing-brace walker so header
+// readers never query windows hidden inside an unknown/nested placeholder.
+func CostLineVariables(template string) []string {
+	var variables []string
+	var seen uint8
+	for i := 0; i < len(template); {
+		if template[i] != '{' {
+			i++
+			continue
+		}
+		end := strings.IndexByte(template[i+1:], '}')
+		if end < 0 {
+			break
+		}
+		name := template[i+1 : i+1+end]
+		var bit uint8
+		switch name {
+		case "cost_today":
+			bit = 1 << 0
+		case "cost_yesterday":
+			bit = 1 << 1
+		case "cost_this_week":
+			bit = 1 << 2
+		case "cost_last_week":
+			bit = 1 << 3
+		case "cost_this_month":
+			bit = 1 << 4
+		case "cost_last_month":
+			bit = 1 << 5
+		case "cost_projected":
+			bit = 1 << 6
+		}
+		if bit != 0 && seen&bit == 0 {
+			variables = append(variables, name)
+			seen |= bit
+		}
+		i += end + 2
+	}
+	return variables
+}
+
 // RenderCostLine substitutes {name} placeholders in template with values
 // drawn from vars and formatted as USD via FormatUSD. Recognized
 // placeholders whose value is non-zero count toward "non-empty"; unknown
