@@ -177,15 +177,12 @@ const (
 // (shows all sessions except error/stopped). Change this constant to rebind.
 const FilterKeyActive = "%"
 
-// FilterKeyError is the keyboard shortcut for the error-only status filter.
-// Keep it distinct from CostDashboardKey: advertised keys must have exactly
-// one meaning in the overview context, regardless of whether cost tracking is
-// available.
-const FilterKeyError = "&"
+// matrix/hardened: Shift+1..4 follow running/waiting/idle/abnormal.
+// The former & binding remains an alias; costs have a separate modified key.
+const FilterKeyError = "$"
 
-// CostDashboardKey opens the cost dashboard. It is deliberately not reused as
-// a conditional fallback for another action.
-const CostDashboardKey = "$"
+// matrix/hardened: keep the cost dashboard available outside status filters.
+const CostDashboardKey = "alt+$"
 
 // FilterKeyArchived toggles the archived-sessions list view.
 const FilterKeyArchived = "^"
@@ -10500,7 +10497,7 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if h.showCostDashboard {
 			keyStr := msg.String()
-			if keyStr == "q" || keyStr == "$" || keyStr == "esc" {
+			if keyStr == "q" || keyStr == CostDashboardKey || keyStr == "esc" {
 				h.showCostDashboard = false
 				return h, nil
 			}
@@ -13504,7 +13501,7 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Filter to idle sessions only
 		return h, h.changeStatusFilter(session.StatusIdle)
 
-	case CostDashboardKey, "shift+4":
+	case CostDashboardKey:
 		// Cost dashboard (when cost tracking is active).
 		if h.costStore == nil {
 			h.setError(fmt.Errorf("Cost Dashboard unavailable: state database is missing; restart agent-deck with a writable config directory to enable it"))
@@ -13514,8 +13511,8 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		h.costDashboard = newCostDashboard(h.costStore, h.width, h.height)
 		return h, nil
 
-	case FilterKeyError, "shift+7":
-		// Filter to error sessions only.
+	case FilterKeyError, "shift+4", "&", "shift+7":
+		// matrix/hardened: unified abnormal view; retain & as a legacy alias.
 		return h, h.changeStatusFilter(session.StatusError)
 
 	case FilterKeyActive, "shift+5":

@@ -27,7 +27,7 @@ func TestMatrixCostDashboardStableOrderAndScroll(t *testing.T) {
 		t.Fatalf("viewport height = %d", lipgloss.Height(d.View()))
 	}
 	d.scroll("end")
-	if !strings.Contains(d.View(), "model-39") || !strings.Contains(d.View(), "q/$ return") {
+	if !strings.Contains(d.View(), "model-39") || !strings.Contains(d.View(), "q/Esc/Alt+$ return") {
 		t.Fatal("last model / footer unreachable")
 	}
 	d.scroll("home")

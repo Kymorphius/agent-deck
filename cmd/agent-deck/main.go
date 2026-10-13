@@ -45,7 +45,7 @@ import (
 )
 
 // matrix/hardened: identifies our hardened build.
-var Version = "1.16.26+matrix.65" // matrix/hardened: o opens sessions; overridden via -ldflags.
+var Version = "1.16.26+matrix.66" // matrix/hardened: dollar opens abnormal view; overridden via -ldflags.
 
 // Table column widths for list command output
 const (

@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.65`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.66`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -231,13 +231,13 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 - **Codex**：窗格显示 `■ Conversation interrupted - use /feedback if something went wrong`，rollout 里记的是 `event_msg` 的 `turn_aborted`（`reason: "interrupted"`）。当前 Codex 也会在 `task_complete.error` 记录模型容量错误（见第 51 节）；它不属于普通主动中断。判断：最新一个回合事件（`task_started`/`turn_started`、`task_complete`/`turn_complete`、`turn_aborted`、`user_message`）是 `turn_aborted`。插话（steer）打断后会马上开下一轮，回"继续"会写 `user_message` 和 `task_started`，两种都会清掉标记。rollout 不记是谁打断的（按 Esc、共享对话的另一个客户端、app server），所以详情只写 Codex 给的原因。子代理线程跳过：父代理打断它们是正常调度。rollout 用 `CodexRolloutPathForInstance` 找（按会话的 `CodexSessionID` 和 Codex 主目录）。2026-10-11 核对本机 2634 个 rollout：22 个主线程停在被打断上，201 个子代理线程按设计跳过。
 - **子状态** `turn-interrupted`（`matrix.18` 时叫 `api-interrupted`，只管 Claude），粗状态（running/waiting/idle…）不变。`substate_detail` 是原因：Claude 是错误种类加信息，例如 `server_error: Connection lost mid-response.`、`rate_limit: You've hit your session limit · resets 11:30pm (Asia/Shanghai)`；错误种类就是记录里的 `error` 字段（Claude Code 2.1.295 的枚举：authentication_failed、oauth_org_not_allowed、account_on_hold、verification_required、billing_error、rate_limit、overloaded、invalid_request、model_not_found、server_error、unknown、max_output_tokens、cloud_credential_error）。Codex 是 `turn_aborted: interrupted`。
 - **优先级**：只在窗格没有更具体结论时套用（窗格是 none、`idle-at-empty-prompt` 或 `hook-lag`）。窗格显示正在运行、打开的菜单、后台任务、401 或模型不可用横幅、Codex 的用量或登录横幅时，保留窗格的结论。实时的 `Substate()` 里上游的 `usage-limit`（5 小时内的 429）仍然优先。
-- **统一异常入口（2026-10-13，matrix.58）**：TUI 的 `&` 从只筛 error 扩展为 **Abnormal**：包含 error、waiting/idle 下的中断，以及登录、模型、额度诊断。顶部固定显示 `✕ Abnormal N`，零时也保留；每个会话只计入一个主展示分类，异常行不再同时增加 waiting/idle 计数。`~` 视图里的 `↯ N` 是异常中的中断子集，不能与主计数相加；普通视图只显示统一主入口。`~` 保留只看中断，error + turn-interrupted 也包含在内，粗状态变化不再使它掉出两个入口。running 的旧诊断不算异常；停止、归档保留生命周期语义。远程筛选/计数使用同一判定，离线缓存不增加当前计数。Open 默认隐藏异常，沿用 `active_filter_excludes` 的 error 配置。
+- **统一异常入口（2026-10-13，matrix.58）**：TUI 的 `$`（兼容 `&`）从只筛 error 扩展为 **Abnormal**：包含 error、waiting/idle 下的中断，以及登录、模型、额度诊断。顶部固定显示 `✕ Abnormal N`，零时也保留；每个会话只计入一个主展示分类，异常行不再同时增加 waiting/idle 计数。`~` 视图里的 `↯ N` 是异常中的中断子集，不能与主计数相加；普通视图只显示统一主入口。`~` 保留只看中断，error + turn-interrupted 也包含在内，粗状态变化不再使它掉出两个入口。running 的旧诊断不算异常；停止、归档保留生命周期语义。远程筛选/计数使用同一判定，离线缓存不增加当前计数。Open 默认隐藏异常，沿用 `active_filter_excludes` 的 error 配置。
   - 明确的 auth/model/usage 原因优先显示，保留原来的诊断；只在实际 substate 为 turn-interrupted 时显示 `↯`。这是展示与筛选统一，未修改原始 Status、JSON 协议或 runtime 记录结构；中断结果和错误原因仍未拆成两个独立持久字段。
   - 改动地图：`internal/ui/matrix_turn_interrupt_filter.go`（共享展示分类、本地/远程筛选与中断子集计数）、`connection_status.go`（诊断图标）、`home.go`（主计数、固定入口、空列表和远程过滤）、`help.go`；测试 `matrix_abnormal_filter_test.go`（重叠去重、error 转换、恢复运行、归档、Open 排除、远程与空入口）；更新 `state_visibility_test.go` 和筛选栏的 25 个界面快照。
   - 验证：统一异常、中断、图标、计数、窄屏可见性、置顶视图、Active 和相关快照测试通过。UI 整包在 `TestBackgroundStatusPassOwnershipLinear` 超时，未修改的 matrix.57 同样复现；MCP 布局和 Claude 创建限流测试也在该基线失败。整包通过不作为本次验收声明。
 - **在哪里看**：
   - TUI 列表里 waiting/idle/error 的中断行显示红色 `↯`。running 行不显示：判断结果每几秒才刷新一次，新回合可能已经开始。
-  - 顶部筛选栏固定有 `✕ Abnormal N` 入口，按 `&` 看全部异常，按 `~` 只列出被中断的会话（此时显示 `↯ N` 子集计数），再按一次 `~` 或按 `0` 回到全部。没有时显示 "No interrupted turns"。帮助页（SEARCH & FILTER）和筛选栏的按键提示（`!@#&~ filter`）里都有 `~`。归档的会话不算。
+  - 顶部筛选栏固定有 `✕ Abnormal N` 入口，按 `$` 看全部异常，按 `~` 只列出被中断的会话（此时显示 `↯ N` 子集计数），再按一次 `~` 或按 `0` 回到全部。没有时显示 "No interrupted turns"。帮助页（SEARCH & FILTER）和筛选栏的按键提示（`!@#$~ filter`）里都有 `~`。归档的会话不算。
   - `agent-deck status -v` 显示 `[turn interrupted: <原因>]`；`list --json`、`session show --json`、web 接口带 `substate`/`substateDetail`；web 指挥中心面板显示 `turn interrupted`；内嵌侧栏显示子状态名。
 - **开销**：`updateStatus` 释放锁之后（defer）刷新，每个会话最多 5 秒读一次，从文件末尾往回读，碰到第一条起决定作用的记录就停（最多回读 8 MiB，超过 1 MiB 的行不读，直接当作"无法判断"）。TUI 渲染路径（`CachedSubstate`）、筛选和计数只读内存里的结果。只对本地 Claude 和 Codex 会话做；SSH 会话和其它工具跳过。和上游的状态筛选一样，筛选开着时列表不会因为后台状态变化自动重排，计数每 0.5 秒更新。
 - **已知局限**：Claude 中断后执行本地斜杠命令（`/cost`、`/model`）也会写一条用户记录，会把标记清掉，尽管任务并没有继续。Codex 的"被打断"包括你自己按 Esc。没有改通知：父会话收到的"子会话完成"事件里带着 `substate`，但投递逻辑没有因此改变。`tools/visualcheck` 的快照没有重新生成（我们分支一直没维护它）。
@@ -334,7 +334,7 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 `1.16.26+matrix.30` 修复 Shift+1 偶尔无法切到运行中列表的问题。
 
 - **matrix/hardened:** CSI u 编码可能报告数字键与 Shift 修饰，原来仅转换字母，导致 Shift+1 被当作普通 `1` 的移动计数。现在补上 US/ABC 数字与标点的 Shift 映射；含 Ctrl 时不套用此映射。xterm modifyOtherKeys 使用已经生成的字符码点，保持其数字和标点原样，避免破坏其它键盘布局的输入。
-- **matrix/hardened:** 中文输入法输出的全角 `！＠＃％＾＆～` 在列表快捷键入口映射到对应筛选键；`＄` / `￥` 打开费用页，`＊` 对应时间筛选。此映射只应用于列表命令。
+- **matrix/hardened:** 中文输入法输出的全角 `！＠＃％＾＆～` 在列表快捷键入口映射到对应筛选键；`＄` / `￥` 查看异常（matrix.66 起），费用页改为 `Alt+$`，`＊` 对应时间筛选。此映射只应用于列表命令。
 - 验证：`matrix_shifted_keyboard_test.go` 覆盖两个协议的解析及 reader、数字与标点、未 Shift 数字、Alt、Shift+Enter 和控制键；`matrix_status_filter_keyboard_test.go` 经 `Home.Update` 验证运行中列表、再次按键取消筛选、待处理的移动计数与分组前缀、Ctrl+Shift 不触发 Shift 筛选，以及全角快捷键和原始文本保持。
 
 ## 28. 创建分组可选目标设备
@@ -594,3 +594,11 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 - **matrix/hardened:** 技能、Agents、Watcher、Dead letters、分支、目录、分组、新建和路径弹窗消费这两个旧导航键，防止子输入组件继续移动选择或焦点。原方向键、`j/k`、Tab 流程保持；路径编辑建议用上下方向键。Notes 和未启用的 Feedback 文本编辑器也移除组件默认的 `Ctrl+N/P` 行移动。
 - **matrix/hardened:** 已连接的本地/远程终端以及 insert mode 继续接收原始控制按键。按键映射沿用 `config.toml` 的 `[hotkeys]`；`?` 展示当前映射。
 - 验证使用第 4 节隔离入口，覆盖置顶切换与选择保持、重绑和禁用、旧入口不再触发、主列表无移动、弹窗输入及选择不变、方向键和文本编辑保持可用；安装后以原生窗口和原会话 pane 身份验收。
+
+## 54. 用 $ 查看异常
+
+`1.16.26+matrix.66` 的列表快捷键 `! @ # $` 依次查看运行、等待、空闲、异常。`$` / Shift+4 固定切换 Abnormal，再按一次或按 `0` 返回全部；保留 `&` / Shift+7 兼容入口。异常分类沿用第 15 节，包括 error、中断和登录、模型、额度诊断。
+
+- **matrix/hardened:** 费用面板移到 `Alt+$`（Alt+Shift+4）；用 `q`、Esc 或 `Alt+$` 返回。帮助页与费用面板底栏同步显示新绑定，普通 `$` 不再打开费用页。中文输入法的 `＄` / `￥` 同样筛选异常。
+- 改动地图：`internal/ui/home.go`（绑定与关闭）、`cost_dashboard.go`（返回提示）；帮助和顶栏使用共享常量，自动跟随新绑定；相关筛选栏快照同步更新。
+- 验证：`matrix_status_filter_keyboard_test.go` 经 Home.Update 覆盖原始字符、两种终端协议、全角符号、导航前缀及再次取消；`hotkeys_test.go` 验证费用入口独立、缺少费用存储的提示，以及实际费用面板开关。
