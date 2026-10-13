@@ -8502,17 +8502,97 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// readiness result with no execution error. Pending is not a substitute
 		// for readiness, and an error after a durable target write is recovery-only.
 		if msg.target != nil && msg.targetReady && msg.err == nil {
-			h.instancesMu.Lock()
-			if _, exists := h.instanceByID[msg.target.ID]; !exists {
-				h.instances = append(h.instances, msg.target)
-				h.instanceByID[msg.target.ID] = msg.target
-				if h.groupTree != nil {
-					h.groupTree.AddSession(msg.target)
+			// matrix/hardened: the watcher may already own a separate, archived
+			// pending-target pointer. Refresh both handoff rows from one current
+			// persisted snapshot; never overwrite newer edits with the receipt's
+			// launch-time target, or write a stale whole-registry snapshot back.
+			target, source := msg.target, current
+			if h.storage != nil {
+				persisted, err := h.storage.Load()
+				if err == nil {
+					target, source = nil, nil
+					for _, inst := range persisted {
+						if inst.ID == msg.target.ID {
+							target = inst
+						}
+						if inst.ID == msg.sessionID {
+							source = inst
+						}
+					}
+					if target == nil || source == nil {
+						err = fmt.Errorf("persisted source or target no longer exists")
+					} else if source.SupersededBy != target.ID || target.Supersedes != source.ID || target.Tool != msg.target.Tool || target.Account != msg.target.Account || target.ProjectPath != msg.target.ProjectPath || target.ClaudeSessionID != msg.target.ClaudeSessionID || target.CodexSessionID != msg.target.CodexSessionID {
+						err = fmt.Errorf("persisted handoff identity changed after verification")
+					}
+				}
+				// matrix/hardened: hydrated rows remain monitor consumers and
+				// cannot revive an observation older than this registry read.
+				if err == nil && h.runtimeSource != nil {
+					var fence time.Time
+					fence, err = h.storage.GetUpdatedAt()
+					if err == nil {
+						for _, inst := range []*session.Instance{source, target} {
+							inst.ExpectRuntimeSnapshot()
+							inst.SetRuntimeMutationFence(fence)
+						}
+					}
+				}
+				if err != nil {
+					msg.err = fmt.Errorf("refresh verified harness transfer: %w", err)
+					msg.summary += "; verified transfer could not be reconciled with current storage"
+					if h.storageWatcher != nil {
+						h.storageWatcher.TriggerReload()
+					}
 				}
 			}
-			h.instancesMu.Unlock()
-			h.rebuildFlatItems()
-			h.invalidatePreviewCache(msg.target.ID)
+			if msg.err == nil {
+				h.instancesMu.Lock()
+				for _, refreshed := range []*session.Instance{source, target} {
+					found := false
+					for i, inst := range h.instances {
+						if inst.ID == refreshed.ID {
+							h.instances[i], found = refreshed, true
+							break
+						}
+					}
+					if !found {
+						h.instances = append(h.instances, refreshed)
+					}
+					h.instanceByID[refreshed.ID] = refreshed
+				}
+				instances := append([]*session.Instance(nil), h.instances...)
+				h.instancesMu.Unlock()
+				// matrix/hardened: reject any older asynchronous registry load
+				// that could restore the pending target after this reconciliation.
+				h.sessionLoadSequence++
+				h.reloadMu.Lock()
+				h.isReloading = false
+				h.reloadMu.Unlock()
+				if h.storageWatcher != nil {
+					h.storageWatcher.TriggerReload()
+				}
+				if h.groupTree == nil {
+					h.groupTree = session.NewGroupTree(instances)
+				} else {
+					h.groupTree.SyncWithInstances(instances)
+				}
+				h.groupTree.ExpandGroupWithParents(target.GroupPath)
+				h.search.SetItems(instances)
+				h.refreshSessionRenderSnapshot(instances)
+				h.cachedStatusCounts.valid.Store(false)
+				h.rebuildFlatItems()
+				// matrix/hardened: reveal the active continuation through the
+				// existing selection path, including archive/status/group filters.
+				// A later user rearchive remains authoritative and is not undone.
+				if !target.IsArchived() && !h.SelectSessionByID(target.ID) {
+					h.timeFilter = session.TimeFilterAll
+					h.rebuildFlatItems()
+					h.SelectSessionByID(target.ID)
+				}
+				h.invalidatePreviewCache(source.ID)
+				h.invalidatePreviewCache(target.ID)
+				msg.target = target
+			}
 		}
 		if msg.committed && msg.nativeResult != nil {
 			// Persist the precise post-lifecycle native mutation. A full TUI

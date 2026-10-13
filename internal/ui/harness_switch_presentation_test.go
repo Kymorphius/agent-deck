@@ -161,6 +161,7 @@ func TestAccountSwitchErrorWithVerifiedTargetDoesNotAttach(t *testing.T) {
 
 func TestAccountSwitchVerifiedCrossHarnessTargetAttaches(t *testing.T) {
 	h := NewHome()
+	h.storage = nil // matrix/hardened: this synthetic readiness receipt has no persisted handoff.
 	source := session.NewInstanceWithTool("source", t.TempDir(), "claude")
 	target := session.NewInstanceWithTool("target", source.ProjectPath, "codex")
 	h.instancesMu.Lock()

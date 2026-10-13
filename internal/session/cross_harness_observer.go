@@ -15,10 +15,11 @@ import (
 // transcript metadata and checks that the target process is still alive. Tests
 // can inject filesystem and process evidence without starting a harness.
 type CrossHarnessTargetEvidenceReader struct {
-	ReadHookStatus      func(instanceID string) (*HookStatus, time.Time, error)
-	ReadNativeArtifact  func(target *Instance, expected FreshTargetIdentity) (CrossHarnessNativeArtifact, error)
-	SnapshotPiDirectory func(target *Instance) map[string]string
-	ProcessAlive        func(target *Instance) (bool, error)
+	ReadHookStatus         func(instanceID string) (*HookStatus, time.Time, error)
+	ReadNativeArtifact     func(target *Instance, expected FreshTargetIdentity) (CrossHarnessNativeArtifact, error)
+	ReadCodexFreshArtifact func(context.Context, *Instance, FreshTargetIdentity, time.Time, time.Time) (CrossHarnessNativeArtifact, error)
+	SnapshotPiDirectory    func(target *Instance) map[string]string
+	ProcessAlive           func(target *Instance) (bool, error)
 }
 
 // CrossHarnessNativeArtifact is evidence from a target-owned native session
@@ -53,16 +54,19 @@ type crossHarnessObservationBaseline struct {
 }
 
 // NewNativeCrossHarnessTargetObserver returns the production observer. Claude
-// and Codex readiness comes from their native hook/notify event scoped to the
-// target instance. Pi has no equivalent hook contract here, so a durable
-// pre-launch directory snapshot plus one new validated native document is used.
+// readiness comes from native hooks scoped to the target instance. Codex first
+// uses notify, then its live process's exact, freshly bound native rollout when
+// a user's custom notify cannot emit Agent Deck events. Pi has no equivalent
+// hook contract here, so a durable pre-launch directory snapshot plus one new
+// validated native document is used.
 func NewNativeCrossHarnessTargetObserver() *NativeCrossHarnessTargetObserver {
 	return &NativeCrossHarnessTargetObserver{
 		Reader: CrossHarnessTargetEvidenceReader{
-			ReadHookStatus:      readCrossHarnessHookStatus,
-			ReadNativeArtifact:  readCrossHarnessNativeArtifact,
-			SnapshotPiDirectory: snapshotPiSessionDirectory,
-			ProcessAlive:        crossHarnessProcessAlive,
+			ReadHookStatus:         readCrossHarnessHookStatus,
+			ReadNativeArtifact:     readCrossHarnessNativeArtifact,
+			ReadCodexFreshArtifact: readFreshCodexHandoffArtifact,
+			SnapshotPiDirectory:    snapshotPiSessionDirectory,
+			ProcessAlive:           crossHarnessProcessAlive,
 		},
 		PollInterval: 100 * time.Millisecond,
 		Now:          time.Now,
@@ -166,6 +170,9 @@ func (o *NativeCrossHarnessTargetObserver) ObserveTarget(ctx context.Context, ta
 
 	baseline := o.observationBaseline(target)
 	for {
+		if err := ctx.Err(); err != nil {
+			return CrossHarnessTargetEvidence{}, err
+		}
 		var evidence CrossHarnessTargetEvidence
 		var ready bool
 		if canonicalSwitchHarness(expected.Tool) == "pi" && baseline.PiDirectorySnapshot != nil {
@@ -181,7 +188,7 @@ func (o *NativeCrossHarnessTargetObserver) ObserveTarget(ctx context.Context, ta
 				}
 			}
 		} else {
-			evidence, ready = observeCrossHarnessEvidence(now(), target, expected, baseline.StartedAt, reader)
+			evidence, ready = observeCrossHarnessEvidenceWithContext(ctx, now(), target, expected, baseline.StartedAt, reader)
 		}
 		if ready && canonicalSwitchHarness(expected.Tool) == "pi" && baseline.PiDirectorySnapshot == nil {
 			// Compatibility for injected legacy observers. Production always
@@ -191,6 +198,9 @@ func (o *NativeCrossHarnessTargetObserver) ObserveTarget(ctx context.Context, ta
 			}
 		}
 		if ready {
+			if err := ctx.Err(); err != nil {
+				return CrossHarnessTargetEvidence{}, err
+			}
 			return evidence, nil
 		}
 		select {
@@ -202,6 +212,13 @@ func (o *NativeCrossHarnessTargetObserver) ObserveTarget(ctx context.Context, ta
 }
 
 func observeCrossHarnessEvidence(now time.Time, target *Instance, expected FreshTargetIdentity, startedAt time.Time, reader CrossHarnessTargetEvidenceReader) (CrossHarnessTargetEvidence, bool) {
+	return observeCrossHarnessEvidenceWithContext(context.Background(), now, target, expected, startedAt, reader)
+}
+
+func observeCrossHarnessEvidenceWithContext(ctx context.Context, now time.Time, target *Instance, expected FreshTargetIdentity, startedAt time.Time, reader CrossHarnessTargetEvidenceReader) (CrossHarnessTargetEvidence, bool) {
+	if ctx.Err() != nil {
+		return CrossHarnessTargetEvidence{}, false
+	}
 	if target.ID == "" || expected.InstanceID == "" || target.ID != expected.InstanceID {
 		return CrossHarnessTargetEvidence{}, false
 	}
@@ -211,13 +228,38 @@ func observeCrossHarnessEvidence(now time.Time, target *Instance, expected Fresh
 	}
 
 	switch canonicalSwitchHarness(expected.Tool) {
+	case "codex":
+		status, modifiedAt, err := reader.ReadHookStatus(target.ID)
+		if err == nil && status != nil && freshCrossHarnessHook(status, modifiedAt, startedAt, now) && (status.Cwd == "" || filepath.Clean(status.Cwd) == filepath.Clean(target.EffectiveWorkingDir())) && codexReadinessEvent(status.Event) {
+			sessionID := strings.TrimSpace(status.SessionID)
+			if sessionID == "" {
+				sessionID = strings.TrimSpace(status.CodexStartedSessionID)
+			}
+			if sessionID == "" {
+				sessionID = strings.TrimSpace(status.CodexCompletedSessionID)
+			}
+			if sessionID != "" && ctx.Err() == nil {
+				return CrossHarnessTargetEvidence{InstanceID: target.ID, Tool: "codex", SessionID: sessionID, Ready: true, Evidence: "codex-native-notify"}, true
+			}
+		}
+		// matrix/hardened: custom notify belongs to the user. Read native
+		// lifecycle evidence instead of changing notify or launching again.
+		readArtifact := reader.ReadCodexFreshArtifact
+		if readArtifact == nil {
+			readArtifact = readFreshCodexHandoffArtifact
+		}
+		artifact, err := readArtifact(ctx, target, expected, startedAt, now)
+		if err != nil || ctx.Err() != nil || !freshCrossHarnessArtifact(artifact, startedAt, now) || artifact.SessionID == "" || (expected.SessionID != "" && artifact.SessionID != expected.SessionID) || (expected.NativeSessionPath != "" && filepath.Clean(artifact.Path) != filepath.Clean(expected.NativeSessionPath)) {
+			return CrossHarnessTargetEvidence{}, false
+		}
+		return CrossHarnessTargetEvidence{InstanceID: target.ID, Tool: "codex", SessionID: artifact.SessionID, ArtifactPath: artifact.Path, Ready: true, Evidence: "codex-native-session"}, true
 	case "pi":
 		artifact, err := reader.ReadNativeArtifact(target, expected)
 		if err != nil || !freshCrossHarnessArtifact(artifact, startedAt, now) || (expected.NativeSessionPath != "" && filepath.Clean(artifact.Path) != filepath.Clean(expected.NativeSessionPath)) || (expected.SessionID != "" && artifact.SessionID != expected.SessionID) || !artifact.Ready {
 			return CrossHarnessTargetEvidence{}, false
 		}
 		return CrossHarnessTargetEvidence{InstanceID: target.ID, Tool: "pi", SessionID: artifact.SessionID, ArtifactPath: artifact.Path, Ready: true, Evidence: "pi-native-session"}, true
-	case "claude", "codex":
+	case "claude":
 		status, modifiedAt, err := reader.ReadHookStatus(target.ID)
 		if err != nil || status == nil || !freshCrossHarnessHook(status, modifiedAt, startedAt, now) {
 			return CrossHarnessTargetEvidence{}, false
@@ -226,29 +268,17 @@ func observeCrossHarnessEvidence(now time.Time, target *Instance, expected Fresh
 			return CrossHarnessTargetEvidence{}, false
 		}
 		sessionID := strings.TrimSpace(status.SessionID)
-		if sessionID == "" && canonicalSwitchHarness(expected.Tool) == "codex" {
-			if status.CodexStartedSessionID != "" {
-				sessionID = strings.TrimSpace(status.CodexStartedSessionID)
-			} else {
-				sessionID = strings.TrimSpace(status.CodexCompletedSessionID)
-			}
-		}
 		if sessionID == "" {
 			return CrossHarnessTargetEvidence{}, false
 		}
-		if canonicalSwitchHarness(expected.Tool) == "claude" {
-			if sessionID != expected.SessionID || !claudeReadinessEvent(status.Event) {
-				return CrossHarnessTargetEvidence{}, false
-			}
-			artifact, artifactErr := reader.ReadNativeArtifact(target, expected)
-			if artifactErr != nil || !freshCrossHarnessArtifact(artifact, startedAt, now) || artifact.SessionID != expected.SessionID {
-				return CrossHarnessTargetEvidence{}, false
-			}
-		}
-		if canonicalSwitchHarness(expected.Tool) == "codex" && !codexReadinessEvent(status.Event) {
+		if sessionID != expected.SessionID || !claudeReadinessEvent(status.Event) {
 			return CrossHarnessTargetEvidence{}, false
 		}
-		return CrossHarnessTargetEvidence{InstanceID: target.ID, Tool: canonicalSwitchHarness(expected.Tool), SessionID: sessionID, Ready: true, Evidence: map[bool]string{true: "claude-native-hook", false: "codex-native-notify"}[canonicalSwitchHarness(expected.Tool) == "claude"]}, true
+		artifact, artifactErr := reader.ReadNativeArtifact(target, expected)
+		if artifactErr != nil || !freshCrossHarnessArtifact(artifact, startedAt, now) || artifact.SessionID != expected.SessionID {
+			return CrossHarnessTargetEvidence{}, false
+		}
+		return CrossHarnessTargetEvidence{InstanceID: target.ID, Tool: "claude", SessionID: sessionID, Ready: true, Evidence: "claude-native-hook"}, true
 	default:
 		return CrossHarnessTargetEvidence{}, false
 	}
@@ -455,10 +485,9 @@ func readCrossHarnessNativeArtifact(target *Instance, expected FreshTargetIdenti
 		}
 		return CrossHarnessNativeArtifact{Path: path, SessionID: expected.SessionID, ModifiedAt: info.ModTime(), Ready: true}, nil
 	default:
-		// Codex's native fresh-thread ID is not available until notify emits it;
-		// accepting a guessed rollout path would reintroduce newest-artifact
-		// discovery. The notify event is therefore the supported Codex subset.
-		return CrossHarnessNativeArtifact{}, fmt.Errorf("Codex has no exact fresh artifact path before native notify")
+		// Codex's fresh artifact needs the launch baseline and exact live
+		// process ownership; readFreshCodexHandoffArtifact enforces those gates.
+		return CrossHarnessNativeArtifact{}, fmt.Errorf("Codex fresh artifact requires launch-scoped live process evidence")
 	}
 }
 

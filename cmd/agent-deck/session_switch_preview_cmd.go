@@ -33,7 +33,8 @@ func handleSessionSwitchPreview(profile string, args []string) {
 		fmt.Println()
 		fmt.Println("Show a read-only preview of what switching a session's account or harness")
 		fmt.Println("would do: capability level, context fidelity, and any preflight refusals.")
-		fmt.Println("Nothing is mutated. Native execution is separate; cross-harness output is plan-only until lifecycle/readiness integration lands.")
+		// matrix/hardened: the preview is read-only; the separate switch command executes its plan.
+		fmt.Println("Nothing is mutated. Run `session switch` separately to execute the previewed path.")
 		fmt.Println()
 		fmt.Println("Capability levels:")
 		fmt.Println("  native-resume    Same-harness Claude→Claude: exact copy + claude --resume")
@@ -43,7 +44,7 @@ func handleSessionSwitchPreview(profile string, args []string) {
 		fmt.Println("Execution labels:")
 		fmt.Println("  supported        Native same-harness executor exists")
 		fmt.Println("  handoff-only     Use Claude→Codex handoff; this is not native resume")
-		fmt.Println("  planned          Launch plan only; target lifecycle/readiness executor is not implemented")
+		fmt.Println("  planned          Fresh-target plan; `session switch --confirm-context-loss` starts and verifies it")
 		fmt.Println("  unsupported      No executor exists")
 		fmt.Println()
 		fmt.Println("Account status labels:")
@@ -223,7 +224,8 @@ func printSwitchPreviewHuman(preview *session.SwitchPreview, maxChars int) {
 	if preview.LaunchPlan != nil {
 		fmt.Printf("Launch plan: fresh %s target %s (executable=%t, ready=%t)\n", preview.LaunchPlan.Target.Tool, preview.LaunchPlan.Target.InstanceID, preview.LaunchPlan.Executable, preview.LaunchPlan.Ready)
 		fmt.Printf("  native launch: %s %s\n", preview.LaunchPlan.NativeCommand, strings.Join(preview.LaunchPlan.NativeArgs, " "))
-		fmt.Println("  plan-only: target lifecycle, identity/readiness observation, and registry commit remain unimplemented")
+		// matrix/hardened: false plan flags describe this preview, not missing execution support.
+		fmt.Println("  preview only: `session switch --confirm-context-loss` launches and verifies the distinct target")
 	}
 
 	if len(preview.Warnings) > 0 {
@@ -245,7 +247,7 @@ func printSwitchPreviewHuman(preview *session.SwitchPreview, maxChars int) {
 		case session.ExecutionHandoffOnly:
 			fmt.Println("Preflight passed — legacy handoff label; this is not native resume.")
 		case session.ExecutionPlanned:
-			fmt.Println("Preflight passed — launch plan only; no executable switch is available.")
+			fmt.Println("Preflight passed — run `session switch --confirm-context-loss` to create and verify the fresh target.")
 		default:
 			fmt.Println("No refusal was found, but no mutating executor is available.")
 		}

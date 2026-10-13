@@ -165,3 +165,75 @@ func TestNativeCrossHarnessTargetObserver_TimeoutAndCancellationRemainUnready(t 
 		t.Fatalf("cancel result = %#v, err=%v", got, err)
 	}
 }
+
+func TestNativeCrossHarnessObserver_CodexNotifyRemainsFirstEvidencePath(t *testing.T) {
+	launched := time.Date(2026, 10, 13, 8, 57, 18, 0, time.UTC)
+	target := &Instance{ID: "switch-codex", Tool: "codex", LastStartedAt: launched}
+	reader := CrossHarnessTargetEvidenceReader{
+		ProcessAlive: func(*Instance) (bool, error) { return true, nil },
+		ReadHookStatus: func(string) (*HookStatus, time.Time, error) {
+			at := launched.Add(time.Second)
+			return &HookStatus{Status: "waiting", Event: "thread.started", CodexStartedSessionID: "native-notify-thread", UpdatedAt: at}, at, nil
+		},
+		ReadCodexFreshArtifact: func(context.Context, *Instance, FreshTargetIdentity, time.Time, time.Time) (CrossHarnessNativeArtifact, error) {
+			t.Fatal("native fallback ran despite fresh notify")
+			return CrossHarnessNativeArtifact{}, nil
+		},
+	}
+	got, ready := observeCrossHarnessEvidence(launched.Add(2*time.Second), target, FreshTargetIdentity{InstanceID: target.ID, Tool: "codex"}, launched, reader)
+	if !ready || got.Evidence != "codex-native-notify" || got.SessionID != "native-notify-thread" {
+		t.Fatalf("notify evidence=%#v, ready=%v", got, ready)
+	}
+}
+
+func TestNativeCrossHarnessObserver_CodexFallbackRetainsArtifactAndCancellationGates(t *testing.T) {
+	launched := time.Date(2026, 10, 13, 8, 57, 18, 0, time.UTC)
+	target := &Instance{ID: "switch-codex", Tool: "codex", LastStartedAt: launched}
+	const sid = "01a1347b-0082-7742-af0b-f24cf3d9cce7"
+	for _, tc := range []string{"fresh fallback", "not ready", "wrong path", "wrong native id", "empty native id", "stale", "dead process", "cancelled before read", "cancelled during read"} {
+		t.Run(tc, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			artifact := CrossHarnessNativeArtifact{Path: "/fixture/native.jsonl", SessionID: sid, ModifiedAt: launched.Add(time.Second), Ready: true}
+			switch tc {
+			case "not ready":
+				artifact.Ready = false
+			case "wrong path":
+				artifact.Path = "/fixture/foreign.jsonl"
+			case "wrong native id":
+				artifact.SessionID = "01a1347b-0082-7742-af0b-f24cf3d9cce8"
+			case "empty native id":
+				artifact.SessionID = ""
+			case "stale":
+				artifact.ModifiedAt = launched.Add(-time.Second)
+			case "cancelled before read":
+				cancel()
+			}
+			read := false
+			reader := CrossHarnessTargetEvidenceReader{
+				ProcessAlive: func(*Instance) (bool, error) { return tc != "dead process", nil },
+				ReadHookStatus: func(string) (*HookStatus, time.Time, error) {
+					return nil, time.Time{}, errors.New("custom notify emits no Agent Deck status")
+				},
+				ReadCodexFreshArtifact: func(context.Context, *Instance, FreshTargetIdentity, time.Time, time.Time) (CrossHarnessNativeArtifact, error) {
+					read = true
+					if tc == "cancelled during read" {
+						cancel()
+					}
+					return artifact, nil
+				},
+			}
+			expected := FreshTargetIdentity{InstanceID: target.ID, Tool: "codex", SessionID: sid, NativeSessionPath: "/fixture/native.jsonl"}
+			got, ready := observeCrossHarnessEvidenceWithContext(ctx, launched.Add(2*time.Second), target, expected, launched, reader)
+			if ready != (tc == "fresh fallback") || got.Ready != ready {
+				t.Fatalf("evidence=%#v, ready=%v", got, ready)
+			}
+			if ready && (got.Evidence != "codex-native-session" || got.ArtifactPath != artifact.Path) {
+				t.Fatalf("fallback lost native evidence kind or path: %#v", got)
+			}
+			if (tc == "dead process" || tc == "cancelled before read") && read {
+				t.Fatal("artifact read ran without live/noncancelled observation")
+			}
+		})
+	}
+}
