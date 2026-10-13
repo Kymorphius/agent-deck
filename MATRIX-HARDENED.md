@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.58`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.59`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -66,7 +66,7 @@
 - `internal/session/claude_hooks.go`：`isAgentDeckHookCommand` 的判断规则：先去掉开头的 `VAR=值`，再要求第二个词是 `hook-handler`、程序名的文件名部分是 `agent-deck`。`RemoveClaudeHooks` 会扫描全部事件，并做 UTC 时间戳备份（约 387–414 行）。
 - `cmd/agent-deck/main.go`（约 4845、5070 行）：`agent-deck uninstall` 会移除这些钩子。`uninstall.sh` 第 253 行附近的 jq 过滤用的是同一套规则（正则），写回时用 `cat >` 保持软链接和权限。
 
-**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.58`。
+**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.59`。
 
 **测试**：以 `_hardened_test.go` 结尾的文件、`update_check_disable_test.go`、`update_timer_wiring_test.go` 等是新增或调整过的测试；`testdata/goldens/*` 里的快照已经按加固后的输出更新。
 
@@ -544,3 +544,12 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 - **matrix/hardened:** 归档、状态、时间和分组范围继续组合；零匹配保留空视图并显示返回入口。未固定会话、创建中的占位条目及尚无固定位置元数据的远程行不进入此列表。
 - **matrix/hardened:** `[hotkeys].toggle_pinned_view` 默认 `alt+p`，可重绑或禁用；现有 `group_view_mode` 存储恢复所选视图。帮助页和筛选栏显示入口及当前模式。
 - 验证使用第 4 节的隔离入口，覆盖折叠分组、两种固定位置、独立子会话、筛选组合、空视图、取消最后一个固定位置、快捷键与持久化。安装后在新开或已重载的 TUI 使用此入口，原 AI pane 不需重启。
+
+## 49. 置顶视图减少无用重建
+
+`1.16.26+matrix.59` 去掉置顶视图先构建完整树再丢弃、为全部会话分配两份行数组、计算无用分组活跃状态的开销。直接读取分组成员，只为固定会话生成独立行；分组与会话顺序保持。内嵌平铺侧栏也直接构建所选呈现。
+
+- **matrix/hardened:** 保留既有两秒 UI 刷新，用于状态筛选和异步缓存的窗口行变化；不增加采集器、后台线程或计时器。普通 TUI 的 Web snapshot 发布器未注册时直接返回，组合 TUI+Web 模式仍保留原快照刷新。
+- **matrix/hardened:** `BenchmarkMatrixPinnedRebuild` 使用无 tmux handle、无 storage/watcher/Web menu 的合成本地会话，5% 固定，含嵌套分组和子会话；准备工作在计时之外。它衡量同步列表重建，不包含终端绘制、数据库、进程采集、网络或整机 CPU。
+- 三次短基准的中位数：分组全展开时，80/1,000/10,000 会话每次重建分配分别由 109,928/1,312,955/16,797,620 字节降至 4,864/46,080/384,768 字节。分组全折叠也减少分配；普通和活跃置顶视图的分配量保持。并发负载令耗时有明显波动，不将耗时百分比称为稳定加速比或整机功耗变化。
+- 验证使用第 4 节隔离入口：置顶、视图循环、状态/时间/归档组合及内嵌侧栏回归；性能用 `go test ./internal/ui -run '^$' -bench '^BenchmarkMatrixPinned' -benchmem -benchtime=150ms -count=3`，在改动前后各运行一次。安装后旧 TUI 仍须在会话列表 `Ctrl+T` 重载。

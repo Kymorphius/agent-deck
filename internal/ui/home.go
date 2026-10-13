@@ -3340,15 +3340,17 @@ func (h *Home) rebuildFlatItemsAt(now time.Time) {
 	h.jumpMode = false
 	h.jumpBuffer = ""
 
-	allItems := h.groupTree.Flatten()
-	if h.embeddedLayout && h.sidebarMode == sidebarFlat {
-		allItems = flatSidebarItemsFromTree(h.groupTree)
-	}
 	// matrix/hardened: pins remain visible even inside folded groups; their
 	// original group/parent expansion state is preserved when leaving this view.
+	// Build only the selected presentation; full tree rows are unused by pins.
 	pinnedOnly := h.groupViewMode == session.GroupViewPinnedOnly
+	var allItems []session.Item
 	if pinnedOnly {
 		allItems = matrixPinnedItemsFromTree(h.groupTree)
+	} else if h.embeddedLayout && h.sidebarMode == sidebarFlat {
+		allItems = flatSidebarItemsFromTree(h.groupTree)
+	} else {
+		allItems = h.groupTree.Flatten()
 	}
 
 	// Partition archived vs active before status filters. Group membership is
@@ -3526,7 +3528,7 @@ func (h *Home) rebuildFlatItemsAt(now time.Time) {
 	// Partition into top/bottom sections by view mode (active-on-top / populated-on-top).
 	// Runs after filtering/scoping but before window injection so windows follow
 	// their parent session into whichever section it lands in.
-	if h.groupViewMode != session.GroupViewNormal {
+	if h.groupViewMode != session.GroupViewNormal && !pinnedOnly { // matrix/hardened: pins have no group partition to classify.
 		// Activity is computed from the full tree (collapse-agnostic) so a
 		// collapsed-but-populated group's header is placed by its real contents,
 		// not by the (absent) session rows under a collapsed header. It honors the

@@ -14,12 +14,24 @@ func matrixSessionIsPinned(inst *session.Instance) bool {
 // matrix/hardened: use full membership rather than visible tree rows. A pinned
 // child stands on its own when its parent is absent, without an orphan connector.
 func matrixPinnedItemsFromTree(tree *session.GroupTree) []session.Item {
-	items := flatSidebarItemsFromTree(tree)
-	pinned := make([]session.Item, 0, len(items))
-	for _, item := range items {
-		if matrixSessionIsPinned(item.Session) {
-			item.IsSubSession = false
-			pinned = append(pinned, item)
+	if tree == nil {
+		return nil
+	}
+	// matrix/hardened: allocate rows only for pins, rather than two full-size
+	// arrays for all sessions. Keep the tree's group/session order unchanged.
+	var pinned []session.Item
+	for _, group := range tree.GroupList {
+		if group == nil {
+			continue
+		}
+		for _, inst := range group.Sessions {
+			if matrixSessionIsPinned(inst) {
+				pinned = append(pinned, session.Item{
+					Type:    session.ItemTypeSession,
+					Session: inst,
+					Path:    group.Path,
+				})
+			}
 		}
 	}
 	return pinned
