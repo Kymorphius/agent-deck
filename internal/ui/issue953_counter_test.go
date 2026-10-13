@@ -170,15 +170,15 @@ func TestIssue953_FilterBar_HasStoppedPill(t *testing.T) {
 	// Pills are "● N", "◐ N", "○ N", "■ N", "✕ N". The stopped pill must
 	// show its count next to the stopped icon (■ — matching the canonical
 	// symbol mapping in internal/session/notifications.go). Error count must
-	// remain at 0 (no pill, since the bar hides empty error pills).
+	// remain at 0. matrix/hardened: the unified abnormal entry stays visible.
 	if !strings.Contains(bar, "● 1") {
 		t.Errorf("filter bar missing running pill: %s", bar)
 	}
 	if !strings.Contains(bar, "■ 1") {
 		t.Errorf("filter bar missing stopped pill (■ 1): %s", bar)
 	}
-	// No error pill should appear when errored == 0.
-	if strings.Contains(bar, "✕ ") {
-		t.Errorf("filter bar shows error pill even though errored == 0: %s", bar)
+	// matrix/hardened: explicit stopped sessions do not inflate abnormal count.
+	if !strings.Contains(bar, "✕ Abnormal 0") {
+		t.Errorf("filter bar lost the zero abnormal entry or counted stopped as abnormal: %s", bar)
 	}
 }
