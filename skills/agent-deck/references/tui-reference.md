@@ -305,6 +305,8 @@ A harness or account change is saved on its own (not together with other edits) 
 
 ### Local Search (`/`)
 
+<!-- matrix/hardened: local search starts fresh by default, with an opt-out in Settings. -->
+- Opening `/` or `Alt+/` clears the previous query by default. In **Settings (`S`) → LOCAL SEARCH → Clear search on open (/)**, press **Space** to keep the last query instead (`[ui].clear_search_on_open = false`). Applies on the next open.
 - Fuzzy search session titles and groups
 - Max 10 results
 - `↑/↓` or `Ctrl+K/J` navigate

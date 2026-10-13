@@ -487,6 +487,10 @@ func (c *UserConfig) ClaimPollingEnabled() bool {
 // UISettings controls TUI layout proportions.
 // See issue #1092.
 type UISettings struct {
+	// matrix/hardened: clear local search each time / or Alt+/ opens it;
+	// nil defaults to true, while false preserves the previous query.
+	ClearSearchOnOpen *bool `toml:"clear_search_on_open,omitempty"`
+
 	// EmbeddedTerminal enables a compact persistent session sidebar whose Enter
 	// key focuses a full-fidelity embedded tmux client. It is opt-in so an
 	// omitted setting preserves the classic layout and Enter-to-attach behavior.
@@ -986,6 +990,12 @@ func (u UISettings) GetNewSessionEnterAdvances() bool {
 		return true // Default: ON (Enter advances; Ctrl+S submits).
 	}
 	return *u.NewSessionEnterAdvances
+}
+
+// matrix/hardened: GetClearSearchOnOpen defaults local-search reopening to
+// an empty query; users may explicitly opt out to retain their last query.
+func (u UISettings) GetClearSearchOnOpen() bool {
+	return u.ClearSearchOnOpen == nil || *u.ClearSearchOnOpen
 }
 
 // GetAttachOnCreate reports whether the TUI should attach to a newly created

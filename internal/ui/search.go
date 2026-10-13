@@ -101,6 +101,13 @@ func (s *Search) SetSize(width, height int) {
 
 // Show makes the search overlay visible
 func (s *Search) Show() {
+	// matrix/hardened: each local search starts empty unless the user opts
+	// to keep the previous query. Read on open so settings apply immediately.
+	config, _ := session.LoadUserConfig()
+	if config == nil || config.UI.GetClearSearchOnOpen() {
+		s.input.SetValue("")
+		s.updateResults()
+	}
 	s.visible = true
 	s.input.Focus()
 	s.switchToGlobal = false

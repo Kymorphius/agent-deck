@@ -121,6 +121,11 @@ func MergePanelConfigOntoDisk(panel *UserConfig) (*UserConfig, error) {
 
 	// ── UI subset (panel manages embedded terminal and show_only_installed_tools;
 	//    hidden_tools is edited via ToolVisibilityPanel) ──────────────────────────
+	// matrix/hardened: only the settings panel supplies this preference;
+	// setup wizard saves leave it nil and must preserve the disk value.
+	if panel.UI.ClearSearchOnOpen != nil {
+		merged.UI.ClearSearchOnOpen = panel.UI.ClearSearchOnOpen
+	}
 	if panel.UI.EmbeddedTerminal != nil {
 		merged.UI.EmbeddedTerminal = panel.UI.EmbeddedTerminal
 	}

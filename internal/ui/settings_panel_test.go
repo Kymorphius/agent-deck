@@ -1093,6 +1093,8 @@ func TestSettingsPanel_PreviewSettings_ViewContains(t *testing.T) {
 	panel := NewSettingsPanel()
 	panel.SetSize(80, 50)
 	panel.Show()
+	// matrix/hardened: focus the preview section below the new local-search row.
+	panel.cursor = int(SettingShowOutput)
 
 	view := panel.View()
 
@@ -1130,9 +1132,9 @@ func TestSettingsPanel_ViewShowsUnboundMCPHotkeyHint(t *testing.T) {
 	setSettingsPanelHotkeyConfigForTest(t, "[hotkeys]\nmcp_manager = \"\"\n")
 
 	panel := NewSettingsPanel()
-	// Tall enough for the whole panel: its wrapped rows no longer overflow
-	// an 80-row screen, they scroll inside it.
-	panel.SetSize(100, 100)
+	// matrix/hardened: allow the whole panel, including the local-search section,
+	// to fit so this assertion checks the trailing MCP hint without scrolling.
+	panel.SetSize(120, 200)
 	panel.Show()
 	panel.cursor = int(SettingMaintenanceEnabled)
 

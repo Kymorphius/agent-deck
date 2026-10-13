@@ -31,6 +31,7 @@ const (
 	SettingLogMaxSize
 	SettingLogMaxLines
 	SettingRemoveOrphans
+	SettingClearSearchOnOpen // matrix/hardened: local-search reopening preference
 	SettingGlobalSearchEnabled
 	SettingSearchTier
 	SettingRecentDays
@@ -59,7 +60,7 @@ const (
 )
 
 // Total number of navigable settings.
-const settingsCount = 39
+const settingsCount = 40 // matrix/hardened: include the local-search preference
 
 // SettingsPanel displays and edits user configuration
 type SettingsPanel struct {
@@ -90,6 +91,7 @@ type SettingsPanel struct {
 	logMaxSizeMB        int
 	logMaxLines         int
 	removeOrphans       bool
+	clearSearchOnOpen   bool // matrix/hardened: clear / and Alt+/ on each open
 	globalSearchEnabled bool
 	searchTier          int // 0=auto, 1=instant, 2=balanced
 	recentDays          int
@@ -185,6 +187,7 @@ func NewSettingsPanel() *SettingsPanel {
 		logMaxSizeMB:        10,
 		logMaxLines:         10000,
 		removeOrphans:       true,
+		clearSearchOnOpen:   true,  // matrix/hardened: fresh local-search query by default
 		checkForUpdates:     false, // matrix/hardened: no update polling by default
 		autoInstall:         false, // matrix/hardened: no unattended installs by default
 		autoRestart:         true,
@@ -324,6 +327,9 @@ func (s *SettingsPanel) LoadConfig(config *session.UserConfig) {
 		s.logMaxLines = 10000
 	}
 	s.removeOrphans = config.Logs.GetRemoveOrphans()
+
+	// matrix/hardened: local search is separate from G's conversation search.
+	s.clearSearchOnOpen = config.UI.GetClearSearchOnOpen()
 
 	// Global search settings
 	s.globalSearchEnabled = config.GlobalSearch.GetEnabled()
@@ -479,6 +485,10 @@ func (s *SettingsPanel) GetConfig() *session.UserConfig {
 	config.Logs.MaxLines = s.logMaxLines
 	removeOrphans := s.removeOrphans
 	config.Logs.RemoveOrphans = &removeOrphans
+
+	// matrix/hardened: keep explicit false so the user's retention choice persists.
+	clearSearchOnOpen := s.clearSearchOnOpen
+	config.UI.ClearSearchOnOpen = &clearSearchOnOpen
 
 	// Global search settings
 	globalSearchEnabled := s.globalSearchEnabled
@@ -794,6 +804,11 @@ func (s *SettingsPanel) toggleValue() bool {
 		s.removeOrphans = !s.removeOrphans
 		return true
 
+	// matrix/hardened: local-search changes apply on the next open, without a restart.
+	case SettingClearSearchOnOpen:
+		s.clearSearchOnOpen = !s.clearSearchOnOpen
+		return true
+
 	case SettingGlobalSearchEnabled:
 		s.globalSearchEnabled = !s.globalSearchEnabled
 		s.needsRestart = true
@@ -1100,6 +1115,15 @@ func (s *SettingsPanel) View() string {
 	}
 	content.WriteString("  " + labelStyle.Render(line) + "\n\n")
 
+	// matrix/hardened: distinguish / and Alt+/ from the G conversation-search controls.
+	content.WriteString(sectionStyle.Render("LOCAL SEARCH"))
+	content.WriteString("\n")
+	line = s.renderCheckbox("Clear search on open (/)", s.clearSearchOnOpen) + " - /, Alt+/; off keeps query"
+	if s.cursor == int(SettingClearSearchOnOpen) {
+		line = highlightStyle.Render(line)
+	}
+	content.WriteString("  " + labelStyle.Render(line) + "\n\n")
+
 	// GLOBAL SEARCH
 	content.WriteString(sectionStyle.Render("GLOBAL SEARCH"))
 	if s.needsRestart {
@@ -1375,31 +1399,32 @@ func (s *SettingsPanel) View() string {
 			30, // SettingLogMaxSize
 			30, // SettingLogMaxLines (shares line with LogMaxSize)
 			31, // SettingRemoveOrphans
-			34, // SettingGlobalSearchEnabled
-			35, // SettingSearchTier
-			36, // SettingRecentDays
-			39, // SettingShowOutput
-			40, // SettingShowAnalytics
-			41, // SettingShowNotes
-			42, // SettingNotesOutputSplit
-			45, // SettingMaintenanceEnabled
-			48, // SettingStatsEnabled
-			49, // SettingStatsRefresh
-			50, // SettingStatsFormat
-			52, // SettingStatsShowCPU (row with RAM, Disk)
-			52, // SettingStatsShowRAM
-			52, // SettingStatsShowDisk
-			53, // SettingStatsShowNetwork (row with GPU, Load)
-			53, // SettingStatsShowGPU
-			53, // SettingStatsShowLoad
-			56, // SettingSyncTitle (SESSIONS section, after stats)
-			59, // SettingShowSessionTimestamps (DISPLAY section, after SESSIONS)
-			60, // SettingShowPaneTitles (DISPLAY section, after timestamps)
-			63, // SettingShowOnlyInstalledTools (TOOL PICKER section)
-			64, // SettingVisibleTools
-			67, // SettingEmbeddedTerminal (INTERFACE section)
-			68, // SettingSidebarDensity
-			73, // SettingPrivacy (PRIVACY section)
+			34, // SettingClearSearchOnOpen (matrix/hardened: LOCAL SEARCH adds three lines)
+			37, // SettingGlobalSearchEnabled
+			38, // SettingSearchTier
+			39, // SettingRecentDays
+			42, // SettingShowOutput
+			43, // SettingShowAnalytics
+			44, // SettingShowNotes
+			45, // SettingNotesOutputSplit
+			48, // SettingMaintenanceEnabled
+			51, // SettingStatsEnabled
+			52, // SettingStatsRefresh
+			53, // SettingStatsFormat
+			55, // SettingStatsShowCPU (row with RAM, Disk)
+			55, // SettingStatsShowRAM
+			55, // SettingStatsShowDisk
+			56, // SettingStatsShowNetwork (row with GPU, Load)
+			56, // SettingStatsShowGPU
+			56, // SettingStatsShowLoad
+			59, // SettingSyncTitle (SESSIONS section, after stats)
+			62, // SettingShowSessionTimestamps (DISPLAY section, after SESSIONS)
+			63, // SettingShowPaneTitles (DISPLAY section, after timestamps)
+			66, // SettingShowOnlyInstalledTools (TOOL PICKER section)
+			67, // SettingVisibleTools
+			70, // SettingEmbeddedTerminal (INTERFACE section)
+			71, // SettingSidebarDensity
+			76, // SettingPrivacy (PRIVACY section)
 		}
 		cursorLine := rowOf[cursorToLine[s.cursor]]
 
