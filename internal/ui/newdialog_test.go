@@ -782,7 +782,7 @@ func TestNewDialog_TabDoesNotOverwriteCustomPath(t *testing.T) {
 }
 
 // TestNewDialog_TabAppliesSuggestionWhenNavigated tests that Tab DOES apply
-// the suggestion when the user explicitly navigated to one using Ctrl+N/P.
+// the suggestion when the user explicitly navigated with arrow keys.
 func TestNewDialog_TabAppliesSuggestionWhenNavigated(t *testing.T) {
 	d := NewNewDialog()
 	d.Show()
@@ -797,12 +797,15 @@ func TestNewDialog_TabAppliesSuggestionWhenNavigated(t *testing.T) {
 	d.focusIndex = 2
 	d.updateFocus()
 
-	// User types something, then navigates to suggestion with Ctrl+N.
+	// User edits the path, then navigates to the suggestion with Down.
 	// Cursor convention: 0 = "Type custom path…" (synthetic), 1 = first
 	// real suggestion, 2 = second. Two presses lands on the second.
 	d.pathInput.SetValue("/some/partial")
-	d, _ = d.Update(tea.KeyMsg{Type: tea.KeyCtrlN})
-	d, _ = d.Update(tea.KeyMsg{Type: tea.KeyCtrlN})
+	d.pathSoftSelected = false
+	d.pathInput.Focus()
+	d, _ = d.Update(tea.KeyMsg{Type: tea.KeyDown})
+	d, _ = d.Update(tea.KeyMsg{Type: tea.KeyDown})
+	d, _ = d.Update(tea.KeyMsg{Type: tea.KeyLeft})
 
 	// Now Tab should apply the selected suggestion
 	d, _ = d.Update(tea.KeyMsg{Type: tea.KeyTab})
@@ -812,7 +815,7 @@ func TestNewDialog_TabAppliesSuggestionWhenNavigated(t *testing.T) {
 	// Should be the second suggestion (cursor 0 → 1 → 2 = suggestions[1])
 	if path != "/Users/test/project-2" {
 		t.Errorf(
-			"Tab should apply suggestion after Ctrl+N navigation\nGot: %q\nWant: %q",
+			"Tab should apply suggestion after arrow navigation\nGot: %q\nWant: %q",
 			path,
 			"/Users/test/project-2",
 		)
@@ -834,12 +837,14 @@ func TestNewDialog_TypingResetsSuggestionNavigation(t *testing.T) {
 	d.focusIndex = 2
 	d.updateFocus()
 
-	// User navigates to a suggestion
-	d, _ = d.Update(tea.KeyMsg{Type: tea.KeyCtrlN})
+	// User edits the path, navigates with Down, then returns to input.
+	d, _ = d.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	d, _ = d.Update(tea.KeyMsg{Type: tea.KeyDown})
+	d, _ = d.Update(tea.KeyMsg{Type: tea.KeyLeft})
 
 	// Verify navigation flag is set
 	if !d.suggestionNavigated {
-		t.Error("suggestionNavigated should be true after Ctrl+N")
+		t.Error("suggestionNavigated should be true after Down")
 	}
 
 	// User then types something new - simulate by sending a key
@@ -1938,29 +1943,26 @@ func TestNewDialog_SoftSelect_TabPreservesValue(t *testing.T) {
 	}
 }
 
-func TestNewDialog_SoftSelect_CtrlNExits(t *testing.T) {
+func TestNewDialog_MatrixCtrlNPPreservesSoftSelect(t *testing.T) {
 	d := NewNewDialog()
 	d.SetSize(80, 40)
 	d.Show()
-
-	suggestions := []string{"/path/one", "/path/two"}
-	d.SetPathSuggestions(suggestions)
-
-	d.focusIndex = 2
+	d.SetPathSuggestions([]string{"/path/one", "/path/two"})
+	d.focusIndex = d.indexOf(focusPath)
 	d.updateFocus()
-
 	if !d.pathSoftSelected {
 		t.Fatal("pathSoftSelected should be true")
 	}
-
-	// Ctrl+N should exit soft-select and navigate suggestions
-	d, _ = d.Update(tea.KeyMsg{Type: tea.KeyCtrlN})
-
-	if d.pathSoftSelected {
-		t.Error("pathSoftSelected should be false after Ctrl+N")
+	originalPath := d.pathInput.Value()
+	for _, key := range []tea.KeyType{tea.KeyCtrlN, tea.KeyCtrlP} {
+		d, _ = d.Update(tea.KeyMsg{Type: key})
+		if !d.pathSoftSelected || d.suggestionNavigated || d.pathInput.Value() != originalPath {
+			t.Fatalf("%v changed soft-selected path or suggestion state", key)
+		}
 	}
-	if !d.suggestionNavigated {
-		t.Error("suggestionNavigated should be true after Ctrl+N")
+	d, _ = d.Update(tea.KeyMsg{Type: tea.KeyRight})
+	if d.pathSoftSelected || !d.suggestionsActive {
+		t.Fatal("Right should open the suggestions dropdown")
 	}
 }
 
@@ -2339,42 +2341,32 @@ func TestNewDialog_ShowInGroup_LoadsConfiguredClaudeExtraArgs(t *testing.T) {
 // pathInput, branchInput, etc. but never resets claudeOptions.startQueryInput.
 // This test opens the dialog, sets a query, closes, re-opens, and asserts
 // the field is empty.
-func TestNewDialog_CtrlN_CtrlP_FieldNavigation(t *testing.T) {
-	// ctrl+n / ctrl+p must move between form fields when not on a path field
-	// with active suggestions — same semantics as down / shift+tab+up.
+func TestNewDialog_MatrixCtrlNPCannotNavigateFields(t *testing.T) {
 	dialog := NewNewDialog()
 	dialog.Show()
 	dialog.worktreeEnabled = false
 	dialog.sandboxEnabled = false
 	dialog.inheritedSettings = nil
 	dialog.rebuildFocusTargets()
-
-	if dialog.focusIndex != 0 {
-		t.Fatalf("precondition: focusIndex = %d, want 0", dialog.focusIndex)
+	dialog.focusIndex = 1
+	dialog.updateFocus()
+	for _, key := range []tea.KeyType{tea.KeyCtrlN, tea.KeyCtrlP} {
+		dialog, _ = dialog.Update(tea.KeyMsg{Type: key})
+		if dialog.focusIndex != 1 {
+			t.Fatalf("%v moved focusIndex to %d", key, dialog.focusIndex)
+		}
 	}
-
-	dialog, _ = dialog.Update(tea.KeyMsg{Type: tea.KeyCtrlN})
-	if dialog.focusIndex != 1 {
-		t.Fatalf("ctrl+n: focusIndex = %d, want 1", dialog.focusIndex)
-	}
-
-	dialog, _ = dialog.Update(tea.KeyMsg{Type: tea.KeyCtrlN})
+	dialog, _ = dialog.Update(tea.KeyMsg{Type: tea.KeyTab})
 	if dialog.focusIndex != 2 {
-		t.Fatalf("ctrl+n x2: focusIndex = %d, want 2", dialog.focusIndex)
+		t.Fatalf("Tab: focusIndex = %d, want 2", dialog.focusIndex)
 	}
-
-	dialog, _ = dialog.Update(tea.KeyMsg{Type: tea.KeyCtrlP})
+	dialog, _ = dialog.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
 	if dialog.focusIndex != 1 {
-		t.Fatalf("ctrl+p: focusIndex = %d, want 1", dialog.focusIndex)
-	}
-
-	dialog, _ = dialog.Update(tea.KeyMsg{Type: tea.KeyCtrlP})
-	if dialog.focusIndex != 0 {
-		t.Fatalf("ctrl+p x2: focusIndex = %d, want 0", dialog.focusIndex)
+		t.Fatalf("Shift+Tab: focusIndex = %d, want 1", dialog.focusIndex)
 	}
 }
 
-func TestNewDialog_CtrlP_WrapsToLastField(t *testing.T) {
+func TestNewDialog_MatrixCtrlPCannotWrapToLastField(t *testing.T) {
 	dialog := NewNewDialog()
 	dialog.Show()
 	dialog.worktreeEnabled = false
@@ -2382,51 +2374,43 @@ func TestNewDialog_CtrlP_WrapsToLastField(t *testing.T) {
 	dialog.inheritedSettings = nil
 	dialog.rebuildFocusTargets()
 	maxIdx := len(dialog.focusTargets) - 1
-
-	// ctrl+p from first field should wrap to last.
 	dialog, _ = dialog.Update(tea.KeyMsg{Type: tea.KeyCtrlP})
+	if dialog.focusIndex != 0 {
+		t.Fatalf("Ctrl+P moved focusIndex to %d", dialog.focusIndex)
+	}
+	dialog, _ = dialog.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
 	if dialog.focusIndex != maxIdx {
-		t.Fatalf("ctrl+p at top: focusIndex = %d, want %d (last)", dialog.focusIndex, maxIdx)
+		t.Fatalf("Shift+Tab: focusIndex = %d, want %d (last)", dialog.focusIndex, maxIdx)
 	}
 }
 
-func TestNewDialog_SuggestionsDropdown_CtrlN_CtrlP(t *testing.T) {
-	// ctrl+n / ctrl+p must navigate the path-suggestions dropdown when it is
-	// active, consistent with j / k.
+func TestNewDialog_MatrixCtrlNPCannotNavigateSuggestions(t *testing.T) {
 	dialog := NewNewDialog()
 	dialog.Show()
 	dialog.SetPathSuggestions([]string{"/a", "/b", "/c"})
-
-	// Force path field focus and open the dropdown.
 	dialog.focusIndex = dialog.indexOf(focusPath)
 	dialog.updateFocus()
 	dialog.suggestionsActive = true
-	dialog.pathSuggestionCursor = 0
-
-	dialog, _ = dialog.Update(tea.KeyMsg{Type: tea.KeyCtrlN})
-	if dialog.pathSuggestionCursor != 1 {
-		t.Fatalf("ctrl+n: pathSuggestionCursor = %d, want 1", dialog.pathSuggestionCursor)
+	dialog.pathSuggestionCursor = 1
+	for _, key := range []tea.KeyType{tea.KeyCtrlN, tea.KeyCtrlP} {
+		dialog, _ = dialog.Update(tea.KeyMsg{Type: key})
+		if dialog.pathSuggestionCursor != 1 || !dialog.suggestionsActive {
+			t.Fatalf("%v changed open dropdown: cursor=%d active=%t", key, dialog.pathSuggestionCursor, dialog.suggestionsActive)
+		}
 	}
-
-	dialog, _ = dialog.Update(tea.KeyMsg{Type: tea.KeyCtrlN})
+	dialog, _ = dialog.Update(tea.KeyMsg{Type: tea.KeyDown})
 	if dialog.pathSuggestionCursor != 2 {
-		t.Fatalf("ctrl+n x2: pathSuggestionCursor = %d, want 2", dialog.pathSuggestionCursor)
+		t.Fatalf("Down: pathSuggestionCursor = %d, want 2", dialog.pathSuggestionCursor)
 	}
-
-	dialog, _ = dialog.Update(tea.KeyMsg{Type: tea.KeyCtrlP})
-	if dialog.pathSuggestionCursor != 1 {
-		t.Fatalf("ctrl+p: pathSuggestionCursor = %d, want 1", dialog.pathSuggestionCursor)
-	}
-
-	// Dropdown must remain open during navigation.
-	if !dialog.suggestionsActive {
-		t.Fatal("suggestionsActive should remain true during ctrl+n/ctrl+p navigation")
+	dialog, _ = dialog.Update(tea.KeyMsg{Type: tea.KeyUp})
+	if dialog.pathSuggestionCursor != 1 || !dialog.suggestionsActive {
+		t.Fatal("Up should restore cursor and keep dropdown open")
 	}
 }
 
 func TestNewDialog_RecentPicker_JK(t *testing.T) {
 	// j / k must navigate the recent-sessions picker, consistent with
-	// ctrl+n / ctrl+p and down / up.
+	// down / up.
 	dialog := NewNewDialog()
 	dialog.Show()
 	dialog.recentSessions = []*statedb.RecentSessionRow{

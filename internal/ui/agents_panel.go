@@ -185,17 +185,20 @@ func (ap *AgentsPanel) Update(msg tea.Msg) (*AgentsPanel, tea.Cmd) {
 	}
 
 	switch key.String() {
+	case "ctrl+n", "ctrl+p":
+		// matrix/hardened: reserve Ctrl+P for the main pinned view and disable both navigation aliases.
+		return ap, nil
 	case "esc", "q", "alt+a":
 		if ap.detailMode {
 			ap.detailMode = false
 		} else {
 			ap.Hide()
 		}
-	case "j", "down", "ctrl+n":
+	case "j", "down":
 		if !ap.detailMode {
 			ap.moveCursor(1)
 		}
-	case "k", "up", "ctrl+p":
+	case "k", "up":
 		if !ap.detailMode {
 			ap.moveCursor(-1)
 		}

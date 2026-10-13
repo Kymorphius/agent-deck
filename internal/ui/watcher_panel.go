@@ -120,6 +120,9 @@ func (wp *WatcherPanel) Update(msg tea.Msg) (*WatcherPanel, tea.Cmd) {
 	}
 
 	switch key.String() {
+	case "ctrl+n", "ctrl+p":
+		// matrix/hardened: reserve Ctrl+P for the main pinned view and disable both navigation aliases.
+		return wp, nil
 	case "esc", "w":
 		if wp.detailMode {
 			// Back to list view
@@ -129,7 +132,7 @@ func (wp *WatcherPanel) Update(msg tea.Msg) (*WatcherPanel, tea.Cmd) {
 			wp.Hide()
 		}
 
-	case "j", "down", "ctrl+n":
+	case "j", "down":
 		if wp.detailMode {
 			wp.detailCursor++
 		} else {
@@ -138,7 +141,7 @@ func (wp *WatcherPanel) Update(msg tea.Msg) (*WatcherPanel, tea.Cmd) {
 			}
 		}
 
-	case "k", "up", "ctrl+p":
+	case "k", "up":
 		if wp.detailMode {
 			if wp.detailCursor > 0 {
 				wp.detailCursor--

@@ -126,12 +126,15 @@ func (z *ZoxidePicker) SetSize(width, height int) {
 // Update processes a key event and refreshes results when the query changes.
 func (z *ZoxidePicker) Update(msg tea.KeyMsg) (*ZoxidePicker, tea.Cmd) {
 	switch msg.String() {
-	case "up", "ctrl+p":
+	case "ctrl+n", "ctrl+p":
+		// matrix/hardened: reserve Ctrl+P for the main pinned view and disable both navigation aliases.
+		return z, nil
+	case "up":
 		if z.cursor > 0 {
 			z.cursor--
 		}
 		return z, nil
-	case "down", "ctrl+n":
+	case "down":
 		if z.cursor < len(z.results)-1 {
 			z.cursor++
 		}

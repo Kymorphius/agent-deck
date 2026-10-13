@@ -1898,6 +1898,9 @@ type statusUpdateRequest struct {
 
 func newNotesEditor() textarea.Model {
 	editor := textarea.New()
+	// matrix/hardened: notes keep arrow navigation without Ctrl+N/P aliases.
+	editor.KeyMap.LineNext.SetKeys("down")
+	editor.KeyMap.LinePrevious.SetKeys("up")
 	editor.ShowLineNumbers = false
 	editor.Placeholder = "Write notes for this session..."
 	editor.Prompt = ""
@@ -11859,7 +11862,7 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		h.lastEscTime = time.Now()
 		return h, nil
 
-	case "up", "k", "ctrl+p":
+	case "up", "k": // matrix/hardened: Ctrl+P belongs to the pinned-view action.
 		h.previewScrollOffset = 0
 		// matrix/hardened: "3k" moves 3 rows.
 		before := h.cursor
@@ -11877,7 +11880,7 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return h, nil
 
-	case "down", "j", "ctrl+n":
+	case "down", "j": // matrix/hardened: Ctrl+N no longer moves the list cursor.
 		h.previewScrollOffset = 0
 		// matrix/hardened: "3j" moves 3 rows.
 		before := h.cursor
@@ -13111,7 +13114,7 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		h.saveUIState()
 		return h, h.fetchSelectedPreview()
 
-	case "alt+p": // matrix/hardened: direct toggle, also reached by macOS Option+P.
+	case defaultHotkeyBindings[hotkeyTogglePinnedView]: // matrix/hardened: direct toggle follows configurable Ctrl+P binding.
 		selectedBefore := h.captureSelectedItemIdentity()
 		if h.groupViewMode == session.GroupViewPinnedOnly {
 			h.groupViewMode = session.GroupViewNormal

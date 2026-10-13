@@ -186,6 +186,10 @@ func (d *EditPathsDialog) Update(msg tea.Msg) (*EditPathsDialog, tea.Cmd) {
 	}
 
 	key := keyMsg.String()
+	// matrix/hardened: disable Ctrl+N/P aliases without changing the input or selected suggestion.
+	if key == "ctrl+n" || key == "ctrl+p" {
+		return d, nil
+	}
 
 	if d.editing {
 		switch key {
@@ -224,14 +228,14 @@ func (d *EditPathsDialog) Update(msg tea.Msg) (*EditPathsDialog, tea.Cmd) {
 			d.filterPathSuggestions()
 			return d, nil
 
-		case "ctrl+n":
+		case "down":
 			if len(d.pathSuggestions) > 0 {
 				d.pathSuggestionCursor = (d.pathSuggestionCursor + 1) % len(d.pathSuggestions)
 				d.suggestionNavigated = true
 			}
 			return d, nil
 
-		case "ctrl+p":
+		case "up":
 			if len(d.pathSuggestions) > 0 {
 				d.pathSuggestionCursor = (d.pathSuggestionCursor - 1 + len(d.pathSuggestions)) % len(d.pathSuggestions)
 				d.suggestionNavigated = true

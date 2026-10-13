@@ -382,6 +382,9 @@ func (d *SkillDialog) Apply() error {
 // Update handles keyboard input while dialog is visible.
 func (d *SkillDialog) Update(msg tea.KeyMsg) (*SkillDialog, tea.Cmd) {
 	switch msg.String() {
+	case "ctrl+n", "ctrl+p":
+		// matrix/hardened: reserve Ctrl+P for the main pinned view and disable both navigation aliases.
+		return d, nil
 	case "left", "h":
 		d.column = SkillColumnAttached
 		d.resetTypeJump()
@@ -390,10 +393,10 @@ func (d *SkillDialog) Update(msg tea.KeyMsg) (*SkillDialog, tea.Cmd) {
 		d.column = SkillColumnAvailable
 		d.resetTypeJump()
 		d.normalizeSelectionAndScroll()
-	case "up", "k", "ctrl+p":
+	case "up", "k":
 		d.resetTypeJump()
 		d.moveBy(-1)
-	case "down", "j", "ctrl+n":
+	case "down", "j":
 		d.resetTypeJump()
 		d.moveBy(1)
 	case "pgup", "ctrl+b":

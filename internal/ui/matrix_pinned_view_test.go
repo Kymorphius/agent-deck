@@ -167,8 +167,7 @@ func TestMatrixPinnedViewHotkeyDispatchAndSelection(t *testing.T) {
 		name string
 		key  tea.KeyMsg
 	}{
-		{"alt+p", altKeyMsg('p')},
-		{"mac Option+P", plainKeyMsg('π')},
+		{"ctrl+p", tea.KeyMsg{Type: tea.KeyCtrlP}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			home := matrixPinnedHome(t)
@@ -202,11 +201,11 @@ func TestMatrixPinnedViewHotkeyFromOtherModes(t *testing.T) {
 		home := matrixPinnedHome(t)
 		matrixPinnedInstance(t, home, "a1").Pin = session.PinTop
 		home.groupViewMode = mode
-		home.handleMainKey(altKeyMsg('p'))
+		home.handleMainKey(tea.KeyMsg{Type: tea.KeyCtrlP})
 		if home.groupViewMode != session.GroupViewPinnedOnly {
 			t.Fatalf("toggle from %v produced %v, want pinned-only", mode, home.groupViewMode)
 		}
-		home.handleMainKey(altKeyMsg('p'))
+		home.handleMainKey(tea.KeyMsg{Type: tea.KeyCtrlP})
 		if home.groupViewMode != session.GroupViewNormal {
 			t.Fatalf("toggle from pinned-only produced %v, want normal", home.groupViewMode)
 		}
@@ -235,7 +234,7 @@ func TestMatrixPinnedViewUnpinLastSessionStaysEmpty(t *testing.T) {
 		}
 	}
 	// Empty pinned-only still receives the toggle and returns to the full list.
-	home.Update(altKeyMsg('p'))
+	home.Update(tea.KeyMsg{Type: tea.KeyCtrlP})
 	if home.groupViewMode != session.GroupViewNormal || sessionIndexByTitle(home, "a1") < 0 {
 		t.Fatal("could not leave empty pinned-only through its hotkey")
 	}
@@ -255,7 +254,7 @@ func TestMatrixPinnedViewPreferenceSurvivesRestart(t *testing.T) {
 	before.storage, before.profile = storage, "_matrix_pinned_view"
 	before.storageWatcher = nil
 	matrixPinnedInstance(t, before, "a1").Pin = session.PinTop
-	before.Update(altKeyMsg('p'))
+	before.Update(tea.KeyMsg{Type: tea.KeyCtrlP})
 	// The key action itself must save the mode; a later autosave is not required.
 	raw, err := storage.GetDB().GetMeta("ui_state")
 	if err != nil {
@@ -304,7 +303,7 @@ func TestMatrixPinnedViewRenderedRowsAndEmptyState(t *testing.T) {
 		}
 	}
 	state, filtered := home.filteredEmptyState()
-	if !filtered || state.Title != "No pinned sessions" || !strings.Contains(strings.Join(state.Hints, " "), "alt+p") {
+	if !filtered || state.Title != "No pinned sessions" || !strings.Contains(strings.Join(state.Hints, " "), "ctrl+p") {
 		t.Fatalf("empty pinned view lacks its identity and exit: %+v", state)
 	}
 }
@@ -313,20 +312,54 @@ func TestMatrixPinnedViewRenderedRowsAndEmptyState(t *testing.T) {
 // and disable semantics as the other list actions.
 func TestMatrixPinnedViewHotkeyRebindAndDisable(t *testing.T) {
 	home := matrixPinnedHome(t)
-	home.setHotkeys(resolveHotkeys(map[string]string{hotkeyTogglePinnedView: "ctrl+p"}))
-	home.Update(altKeyMsg('p'))
+	home.setHotkeys(resolveHotkeys(map[string]string{hotkeyTogglePinnedView: "alt+p"}))
+	home.Update(tea.KeyMsg{Type: tea.KeyCtrlP})
 	if home.groupViewMode != session.GroupViewNormal {
 		t.Fatal("default shortcut remained active after rebinding")
 	}
-	home.Update(tea.KeyMsg{Type: tea.KeyCtrlP})
+	home.Update(altKeyMsg('p'))
 	if home.groupViewMode != session.GroupViewPinnedOnly {
 		t.Fatal("rebound shortcut did not open pinned view")
 	}
 	home.groupViewMode = session.GroupViewNormal
 	home.setHotkeys(resolveHotkeys(map[string]string{hotkeyTogglePinnedView: ""}))
-	home.Update(altKeyMsg('p'))
+	home.Update(tea.KeyMsg{Type: tea.KeyCtrlP})
 	if home.groupViewMode != session.GroupViewNormal {
 		t.Fatal("disabled shortcut opened pinned view")
+	}
+}
+
+// matrix/hardened: Ctrl+P selects a view, Ctrl+N has no navigation role, and
+// disabling/rebinding the view must not revive the old movement aliases.
+func TestMatrixPinnedControlKeysDoNotNavigate(t *testing.T) {
+	for _, overrides := range []map[string]string{
+		{hotkeyTogglePinnedView: ""},
+		{hotkeyTogglePinnedView: "alt+p"},
+	} {
+		home := matrixPinnedHome(t)
+		home.setHotkeys(resolveHotkeys(overrides))
+		home.cursor = sessionIndexByTitle(home, "b1")
+		before := home.cursor
+		for _, key := range []tea.KeyType{tea.KeyCtrlN, tea.KeyCtrlP} {
+			home.navCount.n = 3
+			home.Update(tea.KeyMsg{Type: key})
+			if home.cursor != before || home.groupViewMode != session.GroupViewNormal {
+				t.Fatalf("%s moved cursor or changed view: cursor=%d mode=%v", (tea.KeyMsg{Type: key}).String(), home.cursor, home.groupViewMode)
+			}
+		}
+	}
+	home := matrixPinnedHome(t)
+	home.cursor = sessionIndexByTitle(home, "b1")
+	before := home.cursor
+	home.Update(tea.KeyMsg{Type: tea.KeyCtrlN})
+	if home.cursor != before || home.groupViewMode != session.GroupViewNormal {
+		t.Fatal("default Ctrl+N moved cursor or changed view")
+	}
+	for _, key := range []tea.KeyMsg{altKeyMsg('p'), plainKeyMsg('π')} {
+		home.Update(key)
+		if home.cursor != before || home.groupViewMode != session.GroupViewNormal {
+			t.Fatal("old Alt/Option+P shortcut remains active by default")
+		}
 	}
 }
 

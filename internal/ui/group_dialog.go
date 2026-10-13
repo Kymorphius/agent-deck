@@ -544,6 +544,10 @@ func (g *GroupDialog) SetSize(width, height int) {
 
 // Update handles input
 func (g *GroupDialog) Update(msg tea.KeyMsg) (*GroupDialog, tea.Cmd) {
+	// matrix/hardened: disable Ctrl+N/P navigation before forwarding to text inputs.
+	if msg.String() == "ctrl+n" || msg.String() == "ctrl+p" {
+		return g, nil
+	}
 	if g.mode == GroupDialogMove {
 		switch msg.String() {
 		case "up", "k":
@@ -621,16 +625,6 @@ func (g *GroupDialog) Update(msg tea.KeyMsg) (*GroupDialog, tea.Cmd) {
 			}
 			if g.CanToggle() {
 				g.ToggleRootSubgroup()
-				return g, nil
-			}
-		case "ctrl+n", "ctrl+p":
-			// Emacs-style navigation that never collides with the Root/Subgroup
-			// toggle or text cursor movement.
-			delta := 1
-			if msg.String() == "ctrl+p" {
-				delta = -1
-			}
-			if g.navigatePathSuggestions(delta) {
 				return g, nil
 			}
 		}

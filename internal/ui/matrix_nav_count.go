@@ -11,7 +11,7 @@ import (
 // matrix/hardened: vim-style count prefix for the session list ("3j", "12k").
 //
 // Digits are a count only, as in vim: "3j" moves three rows down, "12k"
-// twelve up (also with up/down/ctrl+n/ctrl+p). "0" extends a pending count
+// twelve up (also with up/down). Ctrl+N/P are not navigation. "0" extends a pending count
 // ("10j"); with no count pending it still clears the status filter. The old
 // plain-digit "jump to root group N" moved to "'" followed by the digit
 // ("'3"). Any other key drops a pending count or "'". ":" opens the line
@@ -75,7 +75,7 @@ func (h *Home) matrixJumpBack() {
 // matrixNavCountKey reports whether key reads or extends a pending count.
 func matrixNavCountKey(key string) bool {
 	switch key {
-	case "up", "k", "ctrl+p", "down", "j", "ctrl+n",
+	case "up", "k", "down", "j",
 		"0", "1", "2", "3", "4", "5", "6", "7", "8", "9":
 		return true
 	}
