@@ -17,7 +17,7 @@ func TestStateVisibilityFilterBarAt80Columns(t *testing.T) {
 		{session.StatusWaiting, "Waiting"},
 		{session.StatusIdle, "Idle"},
 		{session.StatusStopped, "Stopped"},
-		{session.StatusError, "Error"},
+		{session.StatusError, "Abnormal"},
 		{FilterModeActive, "Open"},
 		{FilterModeArchived, "Archived"},
 	} {
@@ -78,9 +78,9 @@ func TestStateVisibilityListCardAcrossWidths(t *testing.T) {
 			time   session.TimeFilterMode
 			want   []string
 		}{
-			{"status", session.StatusError, session.TimeFilterAll, []string{"Error", "0 show all"}},
+			{"status", session.StatusError, session.TimeFilterAll, []string{"No abnormal sessions", "0 show all"}},
 			{"time", "", session.TimeFilterToday, []string{"Today", "* time range"}},
-			{"both", session.StatusError, session.TimeFilterToday, []string{"Error", "Today", "0 show all", "* time range"}},
+			{"both", session.StatusError, session.TimeFilterToday, []string{"Abnormal", "Today", "0 show all", "* time range"}},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				h := NewHome()
