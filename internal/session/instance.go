@@ -12059,6 +12059,13 @@ func (i *Instance) SubstateDetail() string {
 	// matrix/hardened: why a turn-interrupted turn stopped.
 	if i.CachedSubstate() == SubstateTurnInterrupted {
 		if t, ok := i.matrixTurnInterruptCached(); ok {
+			// matrix/hardened: retry state is cached; renderers do not read sidecars.
+			i.mu.RLock()
+			retryDetail := i.matrixInterrupt.retryDetail
+			i.mu.RUnlock()
+			if retryDetail != "" && t.Kind == "server_overloaded" {
+				return t.Detail() + " [" + retryDetail + "]"
+			}
 			return t.Detail()
 		}
 	}

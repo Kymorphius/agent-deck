@@ -41,8 +41,9 @@ import (
 // The Codex verdict: the latest turn event (task_started/turn_started,
 // task_complete/turn_complete, turn_aborted, user_message) is turn_aborted.
 // A steer that interrupts a turn starts the next one at once, and "继续" writes
-// user_message and task_started, so both clear it. Codex writes no error events
-// to the rollout; an aborted turn is the only abnormal end it records. The
+// user_message and task_started, so both clear it. matrix/hardened: current
+// Codex also records native task_complete.error for server-overloaded capacity
+// failures; those have their own bounded, explicitly enabled continuation. The
 // rollout does not say who interrupted (Esc, another client of the shared
 // thread, the app server), so the detail names the reason Codex gives and no
 // more. Subagent threads are skipped: their parent interrupts them as routine.
@@ -86,6 +87,9 @@ const (
 type matrixTurnInterrupt struct {
 	Kind    string // Claude's "error" (server_error, rate_limit, ...) or "turn_aborted"
 	Message string // Claude: the rendered text minus "API Error: "; Codex: the abort reason
+	// matrix/hardened: native capacity failure identity; never inferred from prose.
+	TurnID string
+	At     time.Time
 }
 
 // Detail is the SubstateDetail text.
@@ -110,6 +114,9 @@ type matrixTurnInterruptMemo struct {
 	gen       uint64
 	found     bool
 	verdict   matrixTurnInterrupt
+	// matrix/hardened: retry work is throttled separately and detail stays in memory.
+	retryCheckedAt time.Time
+	retryDetail    string
 }
 
 // matrixTurnInterruptKey is the memo key for the conversation the instance is
@@ -281,10 +288,17 @@ func matrixScanLatestTurnInterrupt(path string) (matrixTurnInterrupt, bool, bool
 
 // matrixCodexEvent is the subset of a Codex rollout line the scan reads.
 type matrixCodexEvent struct {
-	Type    string `json:"type"`
-	Payload struct {
+	// matrix/hardened: actual failed completion, not a warning copied into chat.
+	Timestamp string `json:"timestamp"`
+	Type      string `json:"type"`
+	Payload   struct {
 		Type   string `json:"type"`
 		Reason string `json:"reason"`
+		TurnID string `json:"turn_id"`
+		Error  *struct {
+			Message string `json:"message"`
+			Code    string `json:"codex_error_info"`
+		} `json:"error"`
 	} `json:"payload"`
 }
 
@@ -316,7 +330,14 @@ func matrixScanLatestCodexTurnInterrupt(path string) (matrixTurnInterrupt, bool,
 				reason = "unknown"
 			}
 			return matrixTurnInterrupt{Kind: "turn_aborted", Message: reason}, true, true
-		case "task_started", "turn_started", "task_complete", "turn_complete", "user_message":
+		// matrix/hardened: custom/current Codex records overload in task_complete.error.
+		case "task_complete", "turn_complete":
+			if e := ev.Payload.Error; e != nil && e.Code == "server_overloaded" && matrixIsModelCapacityMessage(e.Message) {
+				at, _ := time.Parse(time.RFC3339Nano, ev.Timestamp)
+				return matrixTurnInterrupt{Kind: "server_overloaded", Message: e.Message, TurnID: ev.Payload.TurnID, At: at}, true, true
+			}
+			return matrixTurnInterrupt{}, false, true
+		case "task_started", "turn_started", "user_message":
 			return matrixTurnInterrupt{}, false, true
 		}
 		return matrixTurnInterrupt{}, false, false
@@ -328,6 +349,8 @@ func matrixScanLatestCodexTurnInterrupt(path string) (matrixTurnInterrupt, bool,
 // verdict. Called by updateStatus after it releases i.mu; takes i.mu itself.
 func (i *Instance) matrixRefreshTurnInterrupt() {
 	i.matrixRefreshTurnInterruptWithCache(matrixInterruptFiles)
+	// matrix/hardened: only an explicitly enabled, native capacity failure can send.
+	i.matrixMaybeRetryCodexCapacity()
 }
 
 // matrix/hardened: fresh Instances loaded for Web snapshots share stable

@@ -2569,6 +2569,9 @@ func (m ModelsSettings) ProbeEnabled() bool {
 
 // CodexSettings defines Codex CLI configuration
 type CodexSettings struct {
+	// matrix/hardened: opt-in bounded retries for native model-capacity failures.
+	CapacityRetry bool `toml:"capacity_retry,omitempty"`
+
 	// Command is the Codex CLI command or alias to use (e.g., "codex", "codex-v2")
 	// Default: "codex"
 	Command string `toml:"command,omitempty"`

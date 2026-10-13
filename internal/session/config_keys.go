@@ -55,6 +55,10 @@ var configKeys = []ConfigKey{
 	{Key: "gemini.yolo_mode", Section: "Gemini", Label: "YOLO mode", Help: "Auto-approve all actions", Type: "bool",
 		get: func(c *UserConfig) any { return c.Gemini.YoloMode },
 		set: func(c *UserConfig, v any) { c.Gemini.YoloMode = v.(bool) }},
+	// matrix/hardened: capacity-only retry, never automatic model switching.
+	{Key: "codex.capacity_retry", Section: "Codex", Label: "Retry model capacity", Help: "Retry capacity failures at most 3 times per hour", Type: "bool",
+		get: func(c *UserConfig) any { return c.Codex.CapacityRetry },
+		set: func(c *UserConfig, v any) { c.Codex.CapacityRetry = v.(bool) }},
 	{Key: "codex.yolo_mode", Section: "Codex", Label: "YOLO mode", Help: "Bypass approvals and sandbox", Type: "bool",
 		get: func(c *UserConfig) any { return c.Codex.YoloMode },
 		set: func(c *UserConfig, v any) { c.Codex.YoloMode = v.(bool) }},

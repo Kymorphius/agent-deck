@@ -45,7 +45,7 @@ import (
 )
 
 // matrix/hardened: identifies our hardened build.
-var Version = "1.16.26+matrix.60" // matrix/hardened: remote pin persistence and aggregate pinned view; overridden via -ldflags.
+var Version = "1.16.26+matrix.62" // matrix/hardened: bounded Codex capacity retry; overridden via -ldflags.
 
 // Table column widths for list command output
 const (

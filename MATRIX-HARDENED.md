@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.60`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.62`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -66,7 +66,7 @@
 - `internal/session/claude_hooks.go`：`isAgentDeckHookCommand` 的判断规则：先去掉开头的 `VAR=值`，再要求第二个词是 `hook-handler`、程序名的文件名部分是 `agent-deck`。`RemoveClaudeHooks` 会扫描全部事件，并做 UTC 时间戳备份（约 387–414 行）。
 - `cmd/agent-deck/main.go`（约 4845、5070 行）：`agent-deck uninstall` 会移除这些钩子。`uninstall.sh` 第 253 行附近的 jq 过滤用的是同一套规则（正则），写回时用 `cat >` 保持软链接和权限。
 
-**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.60`。
+**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.62`。
 
 **测试**：以 `_hardened_test.go` 结尾的文件、`update_check_disable_test.go`、`update_timer_wiring_test.go` 等是新增或调整过的测试；`testdata/goldens/*` 里的快照已经按加固后的输出更新。
 
@@ -228,7 +228,7 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 2026-10-09 新增，2026-10-10 扩展到 Codex 并加了查看入口（`matrix.22`）。回合没做完就停下的会话，原来看上去和正常做完一模一样：灯变 waiting，看不出活只干了一半、需要说"继续"。
 
 - **Claude**：回合因 API 错误中途结束时（`API Error: Connection lost mid-response`、`Connection dropped (ECONNRESET)`、`Can't reach the API server (ENOTFOUND)`、过载、账号被暂停等），Claude Code 不触发 `Stop`，只重画一个空输入框。窗格上那行横幅认不出来：它是普通的 `⏺` 回复行，没有 #1400 要求的 ` · ` 分隔符，措辞也和普通文字重合。改读对话记录，和上游判断用量超限（#1802，`usagelimit.go`）是同一个来源：主对话（不含子代理）里最新一条用户或助手记录，如果是 `isApiErrorMessage: true` 的助手消息，就是中断；之后只要出现任何用户记录（手打的"继续"、用量重置后自动续跑的提示），就算已经过去了。2026-10-09 用本机全部对话记录核对过：83 条 API 错误记录，每条后面紧跟的都是用户记录；每个错误点都能识别。
-- **Codex**：窗格显示 `■ Conversation interrupted - use /feedback if something went wrong`，rollout 里记的是 `event_msg` 的 `turn_aborted`（`reason: "interrupted"`）。Codex 不往 rollout 里写错误事件，被打断是它唯一会记下的异常结束。判断：最新一个回合事件（`task_started`/`turn_started`、`task_complete`/`turn_complete`、`turn_aborted`、`user_message`）是 `turn_aborted`。插话（steer）打断后会马上开下一轮，回"继续"会写 `user_message` 和 `task_started`，两种都会清掉标记。rollout 不记是谁打断的（按 Esc、共享对话的另一个客户端、app server），所以详情只写 Codex 给的原因。子代理线程跳过：父代理打断它们是正常调度。rollout 用 `CodexRolloutPathForInstance` 找（按会话的 `CodexSessionID` 和 Codex 主目录）。2026-10-11 核对本机 2634 个 rollout：22 个主线程停在被打断上，201 个子代理线程按设计跳过。
+- **Codex**：窗格显示 `■ Conversation interrupted - use /feedback if something went wrong`，rollout 里记的是 `event_msg` 的 `turn_aborted`（`reason: "interrupted"`）。当前 Codex 也会在 `task_complete.error` 记录模型容量错误（见第 51 节）；它不属于普通主动中断。判断：最新一个回合事件（`task_started`/`turn_started`、`task_complete`/`turn_complete`、`turn_aborted`、`user_message`）是 `turn_aborted`。插话（steer）打断后会马上开下一轮，回"继续"会写 `user_message` 和 `task_started`，两种都会清掉标记。rollout 不记是谁打断的（按 Esc、共享对话的另一个客户端、app server），所以详情只写 Codex 给的原因。子代理线程跳过：父代理打断它们是正常调度。rollout 用 `CodexRolloutPathForInstance` 找（按会话的 `CodexSessionID` 和 Codex 主目录）。2026-10-11 核对本机 2634 个 rollout：22 个主线程停在被打断上，201 个子代理线程按设计跳过。
 - **子状态** `turn-interrupted`（`matrix.18` 时叫 `api-interrupted`，只管 Claude），粗状态（running/waiting/idle…）不变。`substate_detail` 是原因：Claude 是错误种类加信息，例如 `server_error: Connection lost mid-response.`、`rate_limit: You've hit your session limit · resets 11:30pm (Asia/Shanghai)`；错误种类就是记录里的 `error` 字段（Claude Code 2.1.295 的枚举：authentication_failed、oauth_org_not_allowed、account_on_hold、verification_required、billing_error、rate_limit、overloaded、invalid_request、model_not_found、server_error、unknown、max_output_tokens、cloud_credential_error）。Codex 是 `turn_aborted: interrupted`。
 - **优先级**：只在窗格没有更具体结论时套用（窗格是 none、`idle-at-empty-prompt` 或 `hook-lag`）。窗格显示正在运行、打开的菜单、后台任务、401 或模型不可用横幅、Codex 的用量或登录横幅时，保留窗格的结论。实时的 `Substate()` 里上游的 `usage-limit`（5 小时内的 429）仍然优先。
 - **统一异常入口（2026-10-13，matrix.58）**：TUI 的 `&` 从只筛 error 扩展为 **Abnormal**：包含 error、waiting/idle 下的中断，以及登录、模型、额度诊断。顶部固定显示 `✕ Abnormal N`，零时也保留；每个会话只计入一个主展示分类，异常行不再同时增加 waiting/idle 计数。`~` 视图里的 `↯ N` 是异常中的中断子集，不能与主计数相加；普通视图只显示统一主入口。`~` 保留只看中断，error + turn-interrupted 也包含在内，粗状态变化不再使它掉出两个入口。running 的旧诊断不算异常；停止、归档保留生命周期语义。远程筛选/计数使用同一判定，离线缓存不增加当前计数。Open 默认隐藏异常，沿用 `active_filter_excludes` 的 error 配置。
@@ -564,3 +564,16 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 - **matrix/hardened:** 普通远程分组按固定位置优先于本机手动顺序排列，置顶视图的状态/归档/时间/完整分组路径继续组合，条目单独呈现但不改变持久父会话和折叠状态。标题按终端单元宽度处理，窄侧栏也保留合法 UTF-8。
 - 保持现有远程同步频率，只在明确固定操作时增加修改与回读，不增加采集线程或计时器；置顶过滤只为保留的远程条目分配空间。
 - 验证通过第 4 节隔离入口覆盖线格式、未知旧字段、完整固定循环、失败与不完整回读、主机身份、迟到列表、混合与折叠视图、筛选、排序及窄宽度。部署需更新远端二进制并重连旧的列表通道，以实际远端持久状态与原生窗口验收。
+
+
+## 51. Codex 模型容量错误的有限自动重试
+
+`1.16.26+matrix.62` 新增。当前 Codex 将 `Selected model is at capacity. Please try a different model.` 记录为原生 `task_complete.error`，错误类型 `server_overloaded`。只识别此结构和容量文字，不匹配对话里引用的句子；归入现有 `turn-interrupted` 异常并保留具体原因。
+
+- **matrix/hardened: 开关**：`codex.capacity_retry` 默认 false；显式执行 `agent-deck config set codex.capacity_retry true` 开启，设为 false 关闭。配置热重载；只在新鲜容量候选上读取配置，不增加正常会话的文件轮询。
+- **matrix/hardened: 行为**：保持当前模型，在观察到容量失败后分别等待 30、60、120 秒，发送简短的“继续”消息重新开启回合（发送器不改变模型，短消息适用于窄窗格）。每个原生线程每小时最多领取 3 次重试，计入整个连续失败链，重启不重置计数。单个原生失败 turn 只能领取一次；5 分钟以前、缺少时间或 turn ID 的错误仍可展示，但不自动继续。耗尽后显示手动继续提示。不切模型、账号，不重启进程，不处理普通 Esc 中断、额度或登录错误。
+- **matrix/hardened: 保护**：子代理线程、SSH 镜像、只读 runtime 消费者及没有观察进程代际栅栏的调用者、正在运行、启动、排队、停止及归档会话均不发送。发送前读取最新原生记录并核对当前会话绑定，确认输入框可见且为空，拒绝正在工作、草稿、菜单及审批提示。领取重试后再次核对；最后发送阶段以 Instance 读锁及既有 SQLite registry 代际事务约束本进程和跨进程的删除/停止/重绑定，并重复验证原生回合、开关和输入框。抓屏和发送固定到受管理主窗格 `:0.0` 及确定的 socket，切到辅助窗口不会重定向输入；SQLite busy 重试也不会重复发送。粘贴之后、按 Enter 之前再次确认输入框只有本次“继续”、开关仍开启且失败回合未变化；混入其它输入时保留草稿并不按 Enter。不会清空用户草稿、按 Ctrl+C 或审批。
+- **matrix/hardened: 去重与失败边界**：数据目录的 `capacity-retries/` 以规范化原生 rollout 路径散列命名，目录 0700、状态和锁文件 0600。使用进程内锁与跨进程 flock，先原子写入并同步领取记录，再发键盘输入。发送失败或结果不确定也消耗该次领取，绝不自动重发同一 turn。损坏/未知版本的状态拒绝重试。重试是一次新的“继续”回合，并非 Codex 内部的同一请求重放；键盘提交成功不等于模型已恢复。
+- **matrix/hardened: 开销及运行范围**：复用现有状态观察节奏，不加定时器。无容量候选时只是内存判断；有候选时每 5 秒最多检查一次，只有首次安排或实际领取时落盘。详情缓存到已有子状态详情，TUI/Web 渲染不读侧文件。需要观察进程持续运行；TUI/Web 无人访问而观察进程不再采样时，延后到下次采样，不承诺无人值守常驻调度。
+- **改动地图**：`internal/session/matrix_codex_capacity_retry.go`（计划、耐久去重、发送保护，新文件）、`matrix_turn_interrupt.go`（原生容量错误及刷新接入）、`instance.go`（缓存重试详情）、`userconfig.go` 和 `config_keys.go`（开关）。
+- **验证**：`matrix_codex_capacity_retry_test.go` 覆盖真实记录结构、继续/成功清除、子代理、30/60/120 退避、每小时上限、跨进程与并发领取、发送不确定、旧回合重放、草稿/审批/工作状态、只读消费者、损坏状态及配置往返。使用隔离 runner，含 race 检查；不会为了测试向真实会话发消息。另用真实 tmux 与无网络的 Python 模拟终端验证单次消息送达及草稿保留。没有人为制造真实模型容量失败或承诺重试一定成功。
