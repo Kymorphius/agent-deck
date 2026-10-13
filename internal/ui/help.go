@@ -225,6 +225,7 @@ func (h *HelpOverlay) View() string {
 	reorderDownKeys := "- / J / Shift+↓"
 	indentKeys := "Shift+→/←"
 	pinKeys := ","
+	pinnedViewKey := h.key(hotkeyTogglePinnedView, "Alt+P") // matrix/hardened
 	searchKey := h.key(hotkeySearch, "/")
 	settingsKey := h.key(hotkeySettings, "S")
 	helpKey := h.key(hotkeyHelp, "?")
@@ -439,7 +440,8 @@ func (h *HelpOverlay) View() string {
 				{"/waiting", "Filter waiting"},
 				{"/running", "Filter running"},
 				{"/idle", "Filter idle"},
-				{groupViewKey, "Cycle view: active-on-top / populated-on-top"},
+				{groupViewKey, "Cycle view: active-on-top / populated-on-top / pinned"}, // matrix/hardened
+				{pinnedViewKey, "Toggle pinned-only view"},                              // matrix/hardened
 				{timeFilterKey, "Cycle time filter: today / 3 / 7 / 30 days / all"},
 			},
 		},

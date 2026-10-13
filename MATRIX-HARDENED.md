@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.56`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.57`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -66,7 +66,7 @@
 - `internal/session/claude_hooks.go`：`isAgentDeckHookCommand` 的判断规则：先去掉开头的 `VAR=值`，再要求第二个词是 `hook-handler`、程序名的文件名部分是 `agent-deck`。`RemoveClaudeHooks` 会扫描全部事件，并做 UTC 时间戳备份（约 387–414 行）。
 - `cmd/agent-deck/main.go`（约 4845、5070 行）：`agent-deck uninstall` 会移除这些钩子。`uninstall.sh` 第 253 行附近的 jq 过滤用的是同一套规则（正则），写回时用 `cat >` 保持软链接和权限。
 
-**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.56`。
+**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.57`。
 
 **测试**：以 `_hardened_test.go` 结尾的文件、`update_check_disable_test.go`、`update_timer_wiring_test.go` 等是新增或调整过的测试；`testdata/goldens/*` 里的快照已经按加固后的输出更新。
 
@@ -531,3 +531,12 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 - **matrix/hardened:** 待验证目标仍暂存在归档列表，原 Claude 保持未归档；成功后在既有事务中归档原会话、激活新 Codex。两个条目保留同一标题，不能凭标题判断哪一个被归档。原生对话、项目文件与原进程保持原样。
 - **matrix/hardened:** TUI 成功结果从存储读取当前源和目标行，刷新已经被 watcher 加载的待验证目标，保留后续编辑与无关会话，选中可见目标。CLI preview 的说明同步为现有可执行流程，避免误报“尚未实现”；恢复已有目标的成功回执保持 `status=success`，`target_created=false` 只表示本次复用了已登记目标。
 - 验证使用第 4 节的隔离入口，覆盖精确 thread、账号/cwd/身份/时间/回合与不完整记录边界，以及已有目标先被 watcher 加载后的成功刷新、取消和失败保护。生产交接按原 operation 恢复，核对同一 Codex 原生 ID、源与目标归档状态和 pane PID，不能以创建 tmux 成功代替就绪证明。
+
+## 48. 独立查看置顶会话
+
+`1.16.26+matrix.57` 新增 TUI 的 `Alt+P`（macOS `Option+P`）入口，切换到 `Pinned only`，再次按键回到普通列表。`t` 的视图循环也加入此模式；`,` 继续在不固定、固定到顶部、固定到底部之间切换。
+
+- **matrix/hardened:** 置顶视图集中显示本地会话的两种固定位置，读取完整分组成员，折叠分组或父会话不会隐藏置顶条目。各条目独立显示，退出后保持原分组的折叠状态。
+- **matrix/hardened:** 归档、状态、时间和分组范围继续组合；零匹配保留空视图并显示返回入口。未固定会话、创建中的占位条目及尚无固定位置元数据的远程行不进入此列表。
+- **matrix/hardened:** `[hotkeys].toggle_pinned_view` 默认 `alt+p`，可重绑或禁用；现有 `group_view_mode` 存储恢复所选视图。帮助页和筛选栏显示入口及当前模式。
+- 验证使用第 4 节的隔离入口，覆盖折叠分组、两种固定位置、独立子会话、筛选组合、空视图、取消最后一个固定位置、快捷键与持久化。安装后在新开或已重载的 TUI 使用此入口，原 AI pane 不需重启。

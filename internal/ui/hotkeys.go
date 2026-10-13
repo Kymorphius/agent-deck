@@ -26,6 +26,7 @@ const (
 	hotkeySkillsManager    = "skills_manager"
 	hotkeyTogglePreview    = "toggle_preview"
 	hotkeyCycleGroupView   = "cycle_group_view"
+	hotkeyTogglePinnedView = "toggle_pinned_view" // matrix/hardened: direct access to pinned sessions.
 	hotkeyCycleTimeFilter  = "cycle_time_filter"
 	hotkeyMarkUnread       = "mark_unread"
 	hotkeyQuickApprove     = "quick_approve"
@@ -135,6 +136,7 @@ var hotkeyActionOrder = []string{
 	hotkeySkillsManager,
 	hotkeyTogglePreview,
 	hotkeyCycleGroupView,
+	hotkeyTogglePinnedView, // matrix/hardened
 	hotkeyCycleTimeFilter,
 	hotkeyMarkUnread,
 	hotkeyQuickApprove,
@@ -196,6 +198,7 @@ var defaultHotkeyBindings = map[string]string{
 	hotkeySkillsManager:    "s",
 	hotkeyTogglePreview:    "v",
 	hotkeyCycleGroupView:   "t",
+	hotkeyTogglePinnedView: "alt+p", // matrix/hardened
 	hotkeyCycleTimeFilter:  "*",
 	hotkeyMarkUnread:       "u",
 	hotkeyQuickApprove:     "a",
