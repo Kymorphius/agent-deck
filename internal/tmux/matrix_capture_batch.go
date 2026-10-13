@@ -208,7 +208,10 @@ func prefetchMatrixCaptureGroup(parent context.Context, group []*Session, entrop
 	// commandRun uses the same bounded exec lifecycle and subprocess accounting
 	// as individual captures; capped stdout cancels before unbounded buffering.
 	started := time.Now()
-	if err := commandRun(cmd); err != nil || ctx.Err() != nil {
+	// matrix/hardened: healthy monitor channels execute the same framed command list.
+	if raw, ok := matrixQueryOutput(ctx, tickets[0].socket, matrixCaptureBatchArgs(token, tickets)...); ok {
+		_, _ = output.Write(raw)
+	} else if err := commandRun(cmd); err != nil || ctx.Err() != nil {
 		return
 	}
 	frames, ok := parseMatrixCaptureBatch(output.Bytes(), token, len(tickets))

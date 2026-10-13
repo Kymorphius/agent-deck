@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.50`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.51`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -66,7 +66,7 @@
 - `internal/session/claude_hooks.go`：`isAgentDeckHookCommand` 的判断规则：先去掉开头的 `VAR=值`，再要求第二个词是 `hook-handler`、程序名的文件名部分是 `agent-deck`。`RemoveClaudeHooks` 会扫描全部事件，并做 UTC 时间戳备份（约 387–414 行）。
 - `cmd/agent-deck/main.go`（约 4845、5070 行）：`agent-deck uninstall` 会移除这些钩子。`uninstall.sh` 第 253 行附近的 jq 过滤用的是同一套规则（正则），写回时用 `cat >` 保持软链接和权限。
 
-**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.50`。
+**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.51`。
 
 **测试**：以 `_hardened_test.go` 结尾的文件、`update_check_disable_test.go`、`update_timer_wiring_test.go` 等是新增或调整过的测试；`testdata/goldens/*` 里的快照已经按加固后的输出更新。
 
@@ -470,3 +470,13 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 - **matrix/hardened:** 合并窗口按小组累计，不为每个新槽位重置。小组占满全部 worker、采集预算耗尽、取消、队列结束或超时时立即启动；保留原 worker 上限、逐 ID 在途与退休代次、观察时间及跨 socket 隔离。没有空闲后台定时器，也不改变采集周期或截图缓存有效期。
 - **matrix/hardened:** 私有 `monitor status` 提供固定大小的逻辑小组和实际 socket 分组大小、启动原因及等待计数，不记录目标和内容。分组计数不等于原生进程数，仍与既有 tmux 执行指标一起验证。
 - 验证包含 1/2/3/10 worker 的自锁保护、相邻完成合并、超时/取消/预算、快慢 socket、普通不需截图探针以及既有 monitor 代次与公平性回归；真实采样再核对分组分布、每轮启动数、CPU 和快会话延迟。
+
+## 41. 共享采集器的常驻只读 tmux 查询通道
+
+`1.16.26+matrix.51` 仅在用户级 monitor 所有者启用专用查询通道。各 TUI、Web 和普通 CLI 消费共享观察，保留各自原生回退；不复用终端观看连接。
+
+- **matrix/hardened:** 有需求的 profile 按稳定注册顺序提供已有会话作为 anchor，每个有效 socket 至多一个自有 Control Mode 客户端。首次适合的读查询才连接；需求过期、anchor 替换或 collector 关闭时只回收自有客户端。profile、socket 和等待队列分别限制为 16、32 和每 socket 32；没有周期重连定时器。
+- **matrix/hardened:** 连接使用 `attach-session -E -f ignore-size,no-output,read-only`，不创建会话、不发送终端输入、不运行观看策略、不调整尺寸、不更新会话环境。它仍是实际附着客户端，会改变 anchor 的 `session_attached` 和客户端列表，也可能触发用户配置的附着/脱离钩子；生产验收需核查这些钩子和窗格 PID/尺寸。
+- **matrix/hardened:** 严格命令与参数格式仅接受捕获及有限元数据读取；未知选项、递归或客户端相对格式、控制字符、无效 UTF-8、shell job 格式均沿用原生路径。响应逐命令校验身份，并用随机完成确认拒绝迟到、重复、截断及伪造边界。每次尝试至多 350ms，失败关闭自有连接，5 秒退避仅由后续查询触发；有界原始输出至多 8 MiB。
+- **matrix/hardened:** 原生回退保留退出错误、超时和会话消失语义；完整错误帧可保留健康连接。Fresh 保持独立原生查询，批次继续遵守原随机标记、500ms 截图缓存、代次隔离和原观察动作。私有 status 仅输出有界计数及自有客户端 PID，不能把存活客户端 CPU 误计为已等待子进程 CPU。
+- 验证使用隔离入口和真实私有 tmux，涵盖跨 socket 同名、当前窗口、ANSI/空行、错误回退、Fresh、尺寸与 PID、连接替换、需求过期/关闭、迟到响应、并发 Close 及容量边界。生产按相同多窗口负载分别测量 collector、存活查询客户端、原生回退客户端和管理界面；本地 CPU 结果不代表整机瓦数。

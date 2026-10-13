@@ -4189,6 +4189,13 @@ func (s *Session) CapturePane() (string, error) {
 			s.recordPipeDegraded()
 		}
 
+		// matrix/hardened: shared monitor read channel; Fresh never uses this path.
+		if output, ok := matrixQueryOutput(context.Background(), s.SocketName, "capture-pane", "-t", s.Name, "-p", "-e"); ok {
+			content = string(output)
+			ticket.publish(content, time.Now())
+			return content, nil
+		}
+
 		// Subprocess fallback: 3s timeout
 		finish := logging.TraceOp(perfLog, "capture_pane_subprocess", 200*time.Millisecond,
 			slog.String("session", s.Name))
