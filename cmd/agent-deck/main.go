@@ -45,7 +45,7 @@ import (
 )
 
 // matrix/hardened: identifies our hardened build.
-var Version = "1.16.26+matrix.59" // matrix/hardened: pinned view avoids discarded full-list work; overridden via -ldflags.
+var Version = "1.16.26+matrix.60" // matrix/hardened: remote pin persistence and aggregate pinned view; overridden via -ldflags.
 
 // Table column widths for list command output
 const (
@@ -3121,6 +3121,9 @@ func buildListJSON(profileName string, instances []*session.Instance, cachedStat
 		// background-work (issue #2473): kind, task, step/steps, elapsed,
 		// source. Omitted when nothing is in flight.
 		BackgroundWork *tmux.BackgroundWork `json:"background_work,omitempty"`
+
+		// matrix/hardened: empty pin means known unpinned, not an old remote.
+		Pin session.PinMode `json:"pin"`
 	}
 	sessions := make([]sessionJSON, len(instances))
 	viewers := session.ViewersByTmuxSession(context.Background(), instances)
@@ -3162,6 +3165,7 @@ func buildListJSON(profileName string, instances []*session.Instance, cachedStat
 			ExtraArgs:         inst.ExtraArgs,
 			Color:             inst.Color,
 			Favorite:          inst.Favorite,
+			Pin:               inst.Pin, // matrix/hardened: preserve remote pin metadata.
 			Archived:          inst.IsArchived(),
 			ArchivedAt:        inst.ArchivedAt,
 			SupersededBy:      inst.SupersededBy,

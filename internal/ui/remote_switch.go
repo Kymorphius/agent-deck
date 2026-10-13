@@ -157,6 +157,16 @@ func (h *Home) commitRemoteEditSession() tea.Cmd {
 		h.editSessionDialog.Hide()
 		return nil
 	}
+	for _, c := range changes { // matrix/hardened: pins use confirmed remote persistence, separately from title/harness edits.
+		if c.Field == session.FieldPin {
+			if len(changes) != 1 {
+				h.editSessionDialog.SetError("save pin position separately from other edits")
+				return nil
+			}
+			h.editSessionDialog.Hide()
+			return h.startMatrixRemotePin(remoteName, sessionID, session.PinMode(c.Value))
+		}
+	}
 	var harness, account, newTitle string
 	switching := false
 	for _, c := range changes {

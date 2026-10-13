@@ -131,6 +131,9 @@
         "path": {
           "type": "string"
         },
+        "pin": {
+          "type": "string"
+        },
         "profile": {
           "type": "string"
         },
@@ -191,6 +194,7 @@
         "group",
         "id",
         "path",
+        "pin",
         "profile",
         "status",
         "title",

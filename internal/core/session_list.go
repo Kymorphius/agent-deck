@@ -82,6 +82,10 @@ type SessionRow struct {
 	// BackgroundWork is the in-flight background work behind substate
 	// background-work (issue #2473).
 	BackgroundWork *tmux.BackgroundWork `json:"background_work,omitempty" doc:"live; in-flight background work (workflow, agent, bash, monitor) behind substate background-work"`
+
+	// matrix/hardened: always report pin, including empty, so controllers can
+	// distinguish known unpinned sessions from older remotes that omit it.
+	Pin session.PinMode `json:"pin"`
 }
 
 func sessionList(ctx context.Context, in SessionListIn) (SessionListOut, error) {
@@ -136,6 +140,7 @@ func staticSessionRow(inst *session.Instance, instances []*session.Instance, pro
 		Tool:              inst.Tool,
 		Account:           inst.Account,
 		Command:           inst.Command,
+		Pin:               inst.Pin, // matrix/hardened: persisted pin is static metadata.
 		Status:            string(inst.Status),
 		Profile:           profile,
 		CreatedAt:         inst.CreatedAt,

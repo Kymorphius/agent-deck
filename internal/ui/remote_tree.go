@@ -152,6 +152,7 @@ func buildRemoteFlatItemsWithEmptyGroups(remoteName string, sessions []session.R
 		sessionLevel := len(segments) + 1
 		// #1875: the user's manual order for this bucket, if any.
 		idxs := orderRemoteBucket(sessions, buckets[gp], order[gp])
+		idxs = matrixOrderRemotePins(sessions, idxs) // matrix/hardened: fixed positions override within-group ordering.
 
 		// #2450: a child whose parent is in this bucket sits directly under
 		// it, one level deeper, like a local sub-session. The overlay order

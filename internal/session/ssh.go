@@ -2886,6 +2886,10 @@ type RemoteSessionInfo struct {
 	// shows it as the current slot and the switch confirmation as "from".
 	Account string `json:"account"`
 
+	// matrix/hardened: nil is an older remote that did not report pin; a
+	// pointer to PinNone is a current remote reporting a known unpinned row.
+	Pin *PinMode `json:"pin,omitempty"`
+
 	// Substate and Archived are what the local row needs to pick the same
 	// status glyph a local session would get: the ⚡/🔒 substate refinements
 	// and the archived override (an archived session keeps a live Status, so
@@ -2927,6 +2931,21 @@ type RemoteSessionInfo struct {
 
 	// Set locally, not from JSON
 	RemoteName string `json:"-"`
+}
+
+// PinPosition returns the stored remote pin, defaulting unknown older rows
+// to the normal sort. matrix/hardened: preserve the existing PinMode values.
+func (r RemoteSessionInfo) PinPosition() PinMode {
+	if r.Pin == nil {
+		return PinNone
+	}
+	return *r.Pin
+}
+
+// PinKnown reports whether the remote emitted its pin metadata.
+// matrix/hardened: a known empty pin differs from an omitted legacy field.
+func (r RemoteSessionInfo) PinKnown() bool {
+	return r.Pin != nil
 }
 
 // ViewerList returns the remote session's viewers and whether the remote

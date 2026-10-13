@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.59`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.60`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -66,7 +66,7 @@
 - `internal/session/claude_hooks.go`：`isAgentDeckHookCommand` 的判断规则：先去掉开头的 `VAR=值`，再要求第二个词是 `hook-handler`、程序名的文件名部分是 `agent-deck`。`RemoveClaudeHooks` 会扫描全部事件，并做 UTC 时间戳备份（约 387–414 行）。
 - `cmd/agent-deck/main.go`（约 4845、5070 行）：`agent-deck uninstall` 会移除这些钩子。`uninstall.sh` 第 253 行附近的 jq 过滤用的是同一套规则（正则），写回时用 `cat >` 保持软链接和权限。
 
-**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.59`。
+**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.60`。
 
 **测试**：以 `_hardened_test.go` 结尾的文件、`update_check_disable_test.go`、`update_timer_wiring_test.go` 等是新增或调整过的测试；`testdata/goldens/*` 里的快照已经按加固后的输出更新。
 
@@ -541,7 +541,7 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 `1.16.26+matrix.57` 新增 TUI 的 `Alt+P`（macOS `Option+P`）入口，切换到 `Pinned only`，再次按键回到普通列表。`t` 的视图循环也加入此模式；`,` 继续在不固定、固定到顶部、固定到底部之间切换。
 
 - **matrix/hardened:** 置顶视图集中显示本地会话的两种固定位置，读取完整分组成员，折叠分组或父会话不会隐藏置顶条目。各条目独立显示，退出后保持原分组的折叠状态。
-- **matrix/hardened:** 归档、状态、时间和分组范围继续组合；零匹配保留空视图并显示返回入口。未固定会话、创建中的占位条目及尚无固定位置元数据的远程行不进入此列表。
+- **matrix/hardened:** 归档、状态、时间和分组范围继续组合；零匹配保留空视图并显示返回入口。未固定会话、创建中的占位条目及尚无固定位置元数据的远程行不进入此列表。`matrix.60` 接入已报告固定位置的远程会话，见第 50 节。
 - **matrix/hardened:** `[hotkeys].toggle_pinned_view` 默认 `alt+p`，可重绑或禁用；现有 `group_view_mode` 存储恢复所选视图。帮助页和筛选栏显示入口及当前模式。
 - 验证使用第 4 节的隔离入口，覆盖折叠分组、两种固定位置、独立子会话、筛选组合、空视图、取消最后一个固定位置、快捷键与持久化。安装后在新开或已重载的 TUI 使用此入口，原 AI pane 不需重启。
 
@@ -553,3 +553,14 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 - **matrix/hardened:** `BenchmarkMatrixPinnedRebuild` 使用无 tmux handle、无 storage/watcher/Web menu 的合成本地会话，5% 固定，含嵌套分组和子会话；准备工作在计时之外。它衡量同步列表重建，不包含终端绘制、数据库、进程采集、网络或整机 CPU。
 - 三次短基准的中位数：分组全展开时，80/1,000/10,000 会话每次重建分配分别由 109,928/1,312,955/16,797,620 字节降至 4,864/46,080/384,768 字节。分组全折叠也减少分配；普通和活跃置顶视图的分配量保持。并发负载令耗时有明显波动，不将耗时百分比称为稳定加速比或整机功耗变化。
 - 验证使用第 4 节隔离入口：置顶、视图循环、状态/时间/归档组合及内嵌侧栏回归；性能用 `go test ./internal/ui -run '^$' -bench '^BenchmarkMatrixPinned' -benchmem -benchtime=150ms -count=3`，在改动前后各运行一次。安装后旧 TUI 仍须在会话列表 `Ctrl+T` 重载。
+
+## 50. 远程会话固定位置与混合置顶视图
+
+`1.16.26+matrix.60` 支持选中远程会话后用 `,` 循环 Off/Top/Bottom，或在 `Shift+P` 的 Pin position 中单独保存。`Alt+P` 的 `Pinned only` 同时集中显示本地及远程的固定会话；远程标题带主机名，折叠主机或分组不会隐藏条目。
+
+- **matrix/hardened:** 两个 `list --json` 输出路径始终携带 `pin`，空字符串明确表示未固定；远程 DTO 的空指针表示旧版未报告，操作会提示更新远端。旧版客户端忽略新增 JSON 字段，协议本身不变。
+- **matrix/hardened:** 固定状态保存到所属远端，复用 `session set`，再用完整会话 ID 的 `session show` 回读。只有 ID、字段存在和请求值都吻合才显示成功；未确认状态重新读取，不自动重发写操作。
+- **matrix/hardened:** 操作在分派时绑定显示条目的主机配置；同 ID 在不同主机上的进行中操作互不影响。确认后的代次与短时推送保护拒绝旧列表覆盖；主机重指向后的回执不能改动新主机列表。
+- **matrix/hardened:** 普通远程分组按固定位置优先于本机手动顺序排列，置顶视图的状态/归档/时间/完整分组路径继续组合，条目单独呈现但不改变持久父会话和折叠状态。标题按终端单元宽度处理，窄侧栏也保留合法 UTF-8。
+- 保持现有远程同步频率，只在明确固定操作时增加修改与回读，不增加采集线程或计时器；置顶过滤只为保留的远程条目分配空间。
+- 验证通过第 4 节隔离入口覆盖线格式、未知旧字段、完整固定循环、失败与不完整回读、主机身份、迟到列表、混合与折叠视图、筛选、排序及窄宽度。部署需更新远端二进制并重连旧的列表通道，以实际远端持久状态与原生窗口验收。
