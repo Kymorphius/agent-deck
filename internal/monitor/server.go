@@ -347,6 +347,7 @@ func (s *Server) Status() Status {
 	st := Status{Protocol: Protocol, PID: os.Getpid(), Version: s.opts.Version, Epoch: s.epoch, StartedAt: s.startedAt, Connections: s.connections.Load(), Requests: s.requests.Load(), SourceLoads: s.loads.Load(), Publications: s.publications.Load(), Errors: s.errors.Load(), Inflight: len(s.workers)}
 	// matrix/hardened: status reuses the private monitor route and adds no probes.
 	st.TmuxCommands = tmux.SubprocessMetrics()
+	st.BatchScheduling = CaptureBatchSchedulingSnapshot()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	st.Profiles = len(s.profiles)
