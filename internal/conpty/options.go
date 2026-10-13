@@ -11,6 +11,13 @@ import (
 	"unicode/utf8"
 )
 
+// ValidateOptions checks structured launch data without starting a process.
+// matrix/hardened: the native registry reuses the backend's launch contract.
+func ValidateOptions(options Options) error {
+	_, err := normalizeOptions(options)
+	return err
+}
+
 var (
 	ErrUnsupported = errors.New("native ConPTY sessions require Windows 10 version 1809 or newer")
 	ErrClosed      = errors.New("ConPTY process is closed")

@@ -217,6 +217,13 @@ func (s *Server) handle(request Request) (Response, bool) {
 	return r, false
 }
 
+// Dispatch routes one operation inside an owning multi-session manager.
+// matrix/hardened: session stop closes only this terminal, never its manager.
+func (s *Server) Dispatch(request Request) Response {
+	response, _ := s.handle(request)
+	return response
+}
+
 // Serve accepts bounded independent clients; client EOF is never a stop action.
 func (s *Server) Serve(listener net.Listener) error {
 	s.connMu.Lock()
