@@ -3,6 +3,7 @@ package web
 // matrix/hardened: registry-only catalogue ownership is separate from runtime
 // observations. A source failure never turns the previous overlay into success.
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,14 +17,15 @@ import (
 
 // MenuCatalogueStats exposes bounded counters, never registry data or paths.
 type MenuCatalogueStats struct {
-	Loads        uint64 `json:"loads"`
-	Opens        uint64 `json:"opens"`
-	Reloads      uint64 `json:"reloads"`
-	Hits         uint64 `json:"hits"`
-	Errors       uint64 `json:"errors"`
-	Replacements uint64 `json:"replacements"`
-	RuntimeRows  uint64 `json:"runtimeRows"`
-	Closed       bool   `json:"closed"`
+	Loads         uint64 `json:"loads"`
+	Opens         uint64 `json:"opens"`
+	Reloads       uint64 `json:"reloads"`
+	RegistryReads uint64 `json:"registryReads"`
+	Hits          uint64 `json:"hits"`
+	Errors        uint64 `json:"errors"`
+	Replacements  uint64 `json:"replacements"`
+	RuntimeRows   uint64 `json:"runtimeRows"`
+	Closed        bool   `json:"closed"`
 }
 
 type menuCatalogue struct {
@@ -36,6 +38,7 @@ type menuCatalogue struct {
 	touch    time.Time
 	// The serialized base is immutable, and decodes into private nested values.
 	base       []byte
+	registry   []byte
 	identities map[string]string
 }
 
@@ -220,26 +223,47 @@ func (s *SessionDataService) loadCatalogueMenu() (menu *MenuSnapshot, err error)
 			return nil, e
 		}
 		if c.base == nil || c.version != before || c.epoch != epoch || !c.touch.Equal(touch) || !catalogueSameConfig(c.config, config) {
-			instances, groups, e := c.storage.LoadWithGroups()
+			// matrix/hardened: heartbeat/cost/annotation commits also change the
+			// database version. Compare only persisted registry tables before
+			// paying for Instance hydration and menu reconstruction again.
+			registry, registryBefore, registryAfter, e := c.observer.Snapshot()
 			if e != nil {
 				return nil, e
 			}
-			active := session.FilterInstancesByArchive(instances, false)
-			identities := make(map[string]string, len(active))
-			for _, inst := range active {
-				if inst == nil {
-					continue
+			s.catalogueStats.RegistryReads++
+			if registryBefore != registryAfter || registryBefore != before {
+				c.base = nil
+				continue
+			}
+			registryBytes, e := json.Marshal(registry)
+			if e != nil {
+				return nil, e
+			}
+			if c.base != nil && bytes.Equal(registryBytes, c.registry) && catalogueSameConfig(c.config, config) {
+				s.catalogueStats.Hits++
+			} else {
+				instances, groups, e := c.storage.LoadWithGroups()
+				if e != nil {
+					return nil, e
 				}
-				inst.ExpectRuntimeSnapshot()
-				identities[inst.ID] = inst.RuntimeIdentity()
+				active := session.FilterInstancesByArchive(instances, false)
+				identities := make(map[string]string, len(active))
+				for _, inst := range active {
+					if inst == nil {
+						continue
+					}
+					inst.ExpectRuntimeSnapshot()
+					identities[inst.ID] = inst.RuntimeIdentity()
+				}
+				base := BuildMenuSnapshot(profile, active, groups, s.now())
+				encoded, e := json.Marshal(base)
+				if e != nil {
+					return nil, e
+				}
+				c.base, c.identities = encoded, identities
+				c.registry = registryBytes
+				s.catalogueStats.Reloads++
 			}
-			base := BuildMenuSnapshot(profile, active, groups, s.now())
-			encoded, e := json.Marshal(base)
-			if e != nil {
-				return nil, e
-			}
-			c.base, c.identities = encoded, identities
-			s.catalogueStats.Reloads++
 		} else {
 			s.catalogueStats.Hits++
 		}

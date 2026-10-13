@@ -192,6 +192,42 @@ func TestMatrixMenuCatalogueExternalWritesAndMutationFence(t *testing.T) {
 	}
 }
 
+func TestMatrixMenuCatalogueNonRegistryWritesReuseAndTouchStillFences(t *testing.T) {
+	svc, source, writer, _ := matrixCatalogueFixture(t)
+	if _, err := svc.LoadMenuSnapshot(); err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range []string{"heartbeat-one", "heartbeat-two", "heartbeat-three"} {
+		if err := writer.GetDB().SetMeta("catalogue-fixture-heartbeat", value); err != nil {
+			t.Fatal(err)
+		}
+		got, err := svc.LoadMenuSnapshot()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if runtimeWebSession(t, got).Status != session.StatusRunning {
+			t.Fatal("unrelated commit lost runtime overlay")
+		}
+	}
+	if stats := svc.CatalogueDiagnostics(); stats.Reloads != 1 || stats.Hits != 3 || stats.RegistryReads != 4 {
+		t.Fatalf("unrelated writes rebuilt menu %+v", stats)
+	}
+	if err := writer.GetDB().Touch(); err != nil {
+		t.Fatal(err)
+	}
+	source.snapshot.Sessions[0].ObservedAt = time.Unix(1, 0)
+	got, err := svc.LoadMenuSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item := runtimeWebSession(t, got); item.Status != session.StatusWaiting || item.CanFork || item.BackgroundWork != nil {
+		t.Fatal("new touch failed to fence old observation")
+	}
+	if svc.CatalogueDiagnostics().Reloads != 1 {
+		t.Fatal("touch-only write unnecessarily rebuilt unchanged catalogue")
+	}
+}
+
 func matrixReplaceCatalogueDB(t *testing.T, path string) {
 	t.Helper()
 	other, err := session.NewStorageWithProfile(fmt.Sprintf("_test_replacement_%d", time.Now().UnixNano()))
