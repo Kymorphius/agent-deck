@@ -466,10 +466,10 @@ func (i *Instance) ApplyRuntimeSnapshot(profile string, row RuntimeSessionSnapsh
 
 func (i *Instance) runtimeView() (*RuntimeSessionSnapshot, bool) {
 	// matrix/hardened: some legacy metadata helpers run under i.mu. Atomic
-	// immutable publication keeps those getter calls safe and lock-free.
+	// immutable publication keeps those getter calls safe and lock-free. The
+	// private result is borrowed read-only; mutable exports must still Clone.
 	if row := i.runtimeReplica.Load(); row != nil {
-		copy := *row
-		return &copy, i.runtimeConsumer.Load()
+		return row, i.runtimeConsumer.Load()
 	}
 	return nil, i.runtimeConsumer.Load()
 }
