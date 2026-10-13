@@ -2,6 +2,17 @@ package ui
 
 import "testing"
 
+// matrix/hardened: supplemental default chords must not preempt the layout
+// twin of a remapped action that already owns the matching physical key.
+func TestBuildHotkeyLookupSupplementalAliasesPreserveLayout(t *testing.T) {
+	lookup, _ := buildHotkeyLookup(resolveHotkeys(map[string]string{hotkeyNewSession: "b"}))
+	for _, key := range []string{"b", "и"} {
+		if lookup[key] != defaultHotkeyBindings[hotkeyNewSession] {
+			t.Fatalf("%s resolved to %q, want new session", key, lookup[key])
+		}
+	}
+}
+
 // The overview dispatches on the rune the terminal delivers, and a terminal
 // never says which keyboard layout produced it. With a Russian layout selected
 // the "n" key sends "т", no case matches, and every letter hotkey in the deck

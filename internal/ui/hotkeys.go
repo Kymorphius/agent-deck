@@ -245,11 +245,12 @@ var defaultHotkeyBindings = map[string]string{
 }
 
 var hotkeyActionDefaultTriggers = map[string][]string{
-	hotkeyQuit:            {"q", "ctrl+c"},
-	hotkeyForkWithOptions: {"F", "shift+f"},
-	hotkeyMoveToGroup:     {"M", "shift+m"},
-	hotkeyWorktreeFinish:  {"W", "shift+w"},
-	hotkeyEditSession:     {"P", "shift+p"},
+	hotkeyQuit:             {"q", "ctrl+c"},
+	hotkeyForkWithOptions:  {"F", "shift+f"},
+	hotkeyMoveToGroup:      {"M", "shift+m"},
+	hotkeyWorktreeFinish:   {"W", "shift+w"},
+	hotkeyEditSession:      {"P", "shift+p"},
+	hotkeyTogglePinnedView: {"ctrl+p", "alt+p"}, // matrix/hardened: both default chords open pinned sessions.
 }
 
 // renamedHotkeys maps old action names to new names for backward compatibility.
@@ -324,17 +325,18 @@ func resolveHotkeys(overrides map[string]string) map[string]string {
 	return bindings
 }
 
-// buildHotkeyLookup resolves in two passes so a key the user wrote into
-// [hotkeys] always belongs to that action. Pass one registers every action's
-// bound key with its shift/unshift spellings; pass two adds the layout twins,
-// but only onto keys nobody has claimed. A derived twin therefore never
+// buildHotkeyLookup resolves explicit bindings before derived aliases so a key
+// the user wrote into [hotkeys] always belongs to that action. Pass one registers
+// each bound key with its shift/unshift spellings; matrix/hardened: pass two adds
+// default triggers for unchanged bindings; pass three adds the layout twins.
+// Both alias passes use only unclaimed keys. A derived twin therefore never
 // shadows an explicit binding and never blocks a canonical key: quick_fork =
 // "т" keeps "т" even though it is also the ЙЦУКЕН twin of new_session's "n".
 func buildHotkeyLookup(bindings map[string]string) (map[string]string, map[string]bool) {
 	keyToCanonical := make(map[string]string, len(bindings))
 	blockedCanonical := make(map[string]bool)
 
-	// Actions that ended up with a binding, in hotkeyActionOrder, for pass two.
+	// Actions that ended up with a binding, in hotkeyActionOrder, for alias passes.
 	var active []string
 
 	for _, action := range hotkeyActionOrder {
@@ -358,6 +360,20 @@ func buildHotkeyLookup(bindings map[string]string) (map[string]string, map[strin
 			}
 		}
 		active = append(active, action)
+	}
+
+	for _, action := range active {
+		// matrix/hardened: default aliases follow the primary binding's remap
+		// and disable semantics, and never override an explicit user binding.
+		canonical := defaultHotkeyBindings[action]
+		if strings.TrimSpace(bindings[action]) != canonical {
+			continue
+		}
+		for _, trigger := range hotkeyActionDefaultTriggers[action] {
+			if _, exists := keyToCanonical[trigger]; !exists {
+				keyToCanonical[trigger] = canonical
+			}
+		}
 	}
 
 	for _, action := range active {
