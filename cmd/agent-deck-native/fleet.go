@@ -45,7 +45,7 @@ func runFleet(config options, stdout, stderr io.Writer) error {
 			_, err := fmt.Fprintf(stdout, "管理后台已就绪：PID %d，注册库 %s\n", manager.HostPID, manager.ManagerStateDir)
 			return err
 		}
-		return nativeui.Run(&nativeService{pipe: config.Pipe}, config.Cwd)
+		return nativeui.RunWithOptions(&nativeService{pipe: config.Pipe, store: config.Store}, config.Cwd, nativeui.Options{DefaultTool: config.Tool})
 	}
 	// matrix/hardened: every managed command verifies its selected store and
 	// namespace before a read or mutation, including an explicitly named pipe.
@@ -221,10 +221,22 @@ func lookupSession(ctx context.Context, pipe, id string) (terminalhost.SessionIn
 	return terminalhost.SessionInfo{}, errors.New("找不到所选会话")
 }
 
-type nativeService struct{ pipe string }
+type nativeService struct{ pipe, store string }
+
+// matrix/hardened: translate the original schema's default group at the UI
+// boundary only; persisted records and CLI responses retain their original ID.
+func (s *nativeService) uiSession(info terminalhost.SessionInfo) terminalhost.SessionInfo {
+	if s.store == "statedb" && info.Group == nativestatestore.DefaultGroup {
+		info.Group = ""
+	}
+	return info
+}
 
 func (s *nativeService) List(ctx context.Context) ([]terminalhost.SessionInfo, error) {
 	r, err := callHost(ctx, s.pipe, terminalhost.Request{Op: "fleet-list"})
+	for i := range r.Sessions {
+		r.Sessions[i] = s.uiSession(r.Sessions[i])
+	}
 	return r.Sessions, err
 }
 func (s *nativeService) Create(ctx context.Context, name, tool, cwd string) (terminalhost.SessionInfo, error) {
@@ -238,11 +250,12 @@ func (s *nativeService) CreateInGroup(ctx context.Context, name, tool, cwd, grou
 	r, err := callHost(ctx, s.pipe, terminalhost.Request{Op: "fleet-create", Name: name, Tool: tool, Group: group, Launch: &launch, AutoStart: true})
 	if err != nil {
 		if len(r.Sessions) == 1 {
-			return r.Sessions[0], err
+			return s.uiSession(r.Sessions[0]), err
 		}
 		return terminalhost.SessionInfo{}, err
 	}
-	return oneSession(r)
+	info, err := oneSession(r)
+	return s.uiSession(info), err
 }
 func (s *nativeService) Start(ctx context.Context, id string) (terminalhost.SessionInfo, error) {
 	info, err := lookupSession(ctx, s.pipe, id)
@@ -253,7 +266,8 @@ func (s *nativeService) Start(ctx context.Context, id string) (terminalhost.Sess
 	if err != nil {
 		return terminalhost.SessionInfo{}, err
 	}
-	return oneSession(r)
+	started, err := oneSession(r)
+	return s.uiSession(started), err
 }
 func (s *nativeService) Stop(ctx context.Context, id, runID string) error {
 	_, err := callHost(ctx, s.pipe, terminalhost.Request{Op: "fleet-stop", SessionID: id, RunID: runID})

@@ -37,6 +37,8 @@ type Server struct {
 	done         chan struct{}
 	outputDone   chan struct{}
 	workers      sync.WaitGroup
+
+	bracketedPaste bool
 }
 
 func validSize(cols, rows int) bool {
@@ -48,6 +50,21 @@ func New(process Process, cols, rows int) (*Server, error) {
 		return nil, errors.New("process and terminal dimensions (1..500 by 1..300) required")
 	}
 	s := &Server{process: process, cols: cols, rows: rows, running: true, emulator: vt.NewEmulator(cols, rows), connections: make(map[net.Conn]struct{}), done: make(chan struct{}), outputDone: make(chan struct{})}
+	// matrix/hardened: expose only the input mode a viewer needs, never replay
+	// arbitrary child control sequences. VT callbacks run while s.mu owns Write
+	// or Resize; RIS also resets this mode through DisableMode.
+	s.emulator.SetCallbacks(vt.Callbacks{
+		EnableMode: func(mode ansi.Mode) {
+			if mode == ansi.ModeBracketedPaste {
+				s.bracketedPaste = true
+			}
+		},
+		DisableMode: func(mode ansi.Mode) {
+			if mode == ansi.ModeBracketedPaste {
+				s.bracketedPaste = false
+			}
+		},
+	})
 	// A hosted program cannot request clipboard access through the snapshot engine.
 	s.emulator.RegisterOscHandler(52, func([]byte) bool { return true })
 	// matrix/hardened: plain DSR requires a plain reply; the pinned VT library
@@ -137,6 +154,8 @@ func (s *Server) snapshot(after uint64, capture bool) Response {
 		r.Error = s.processError
 	}
 	if capture {
+		// matrix/hardened: an omitted false value keeps older snapshot clients compatible.
+		r.BracketedPaste = s.bracketedPaste
 		base := s.head - uint64(len(s.history))
 		start := after
 		if start < base {

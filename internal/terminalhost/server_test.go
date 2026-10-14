@@ -295,3 +295,56 @@ func TestHostAnswersQueriesButRenderDoesNotRepeatThem(t *testing.T) {
 		}
 	}
 }
+
+// matrix/hardened: preserve the parsed paste mode across split child writes and
+// reconnect captures without forwarding unrelated modes or terminal queries.
+func TestCaptureBracketedPasteModeTracksSplitOutputAndReset(t *testing.T) {
+	s, p, address := testHost(t)
+	var written uint64
+	write := func(data string) Response {
+		t.Helper()
+		if _, err := io.WriteString(p.writer, data); err != nil {
+			t.Fatal(err)
+		}
+		written += uint64(len(data))
+		waitForOutput(t, s, written)
+		return callTestHost(t, address, Request{Op: "capture", After: written})
+	}
+	initial := callTestHost(t, address, Request{Op: "capture"})
+	if initial.BracketedPaste {
+		t.Fatal("new host enabled bracketed paste before the child requested it")
+	}
+	before := write("paste-ready")
+	partial := write("\x1b[?20")
+	if partial.BracketedPaste {
+		t.Fatal("incomplete child mode sequence changed the capture mode")
+	}
+	enabled := write("04h")
+	if !enabled.BracketedPaste || enabled.Render != before.Render || enabled.CursorX != before.CursorX || enabled.CursorY != before.CursorY || len(enabled.Output) != 0 {
+		t.Fatalf("mode-only snapshot lost parsed state: %+v", enabled)
+	}
+	// A new viewer has no raw output delta but still needs the current mode.
+	reconnected := callTestHost(t, address, Request{Op: "capture", After: written})
+	if !reconnected.BracketedPaste || len(reconnected.Output) != 0 {
+		t.Fatal("reconnect capture did not retain the child paste mode")
+	}
+	otherModes := write("\x1b[?1000h\x1b[?1000l\x1b[c\x1b[6n\x1b]52;c;c2VjcmV0\a")
+	if !otherModes.BracketedPaste {
+		t.Fatal("an unrelated child mode changed bracketed paste state")
+	}
+	for _, raw := range []string{"\x1b[?1000h", "\x1b[?1000l", "\x1b[c", "\x1b[6n", "\x1b]52"} {
+		if strings.Contains(otherModes.Render, raw) {
+			t.Fatalf("render replayed raw child control sequence %q", raw)
+		}
+	}
+	write("\x1b[?200")
+	if disabled := write("4l"); disabled.BracketedPaste {
+		t.Fatal("split child disable did not clear bracketed paste")
+	}
+	if enabled := write("\x1b[?2004;1000h"); !enabled.BracketedPaste {
+		t.Fatal("combined DEC mode sequence did not enable bracketed paste")
+	}
+	if reset := write("\x1bc"); reset.BracketedPaste {
+		t.Fatal("RIS did not reset the captured bracketed paste mode")
+	}
+}

@@ -91,7 +91,7 @@ func parseOptions(args []string, help io.Writer) (options, error) {
 		flags.IntVar(&result.Rows, "rows", 0, "required terminal rows (1..300)")
 	}
 	flags.Usage = func() {
-		fmt.Fprintf(help, "Experimental Windows native terminal prototype.\nUsage: agent-deck-native %s [flags]", result.Command)
+		fmt.Fprintf(help, "Experimental Windows native lightweight edition.\nUsage: agent-deck-native %s [flags]", result.Command)
 		if result.Command == "host" {
 			fmt.Fprint(help, " -- executable [args...]")
 		}
@@ -212,13 +212,14 @@ func mergedEnv(base, overrides []string) []string {
 }
 
 func printHelp(output io.Writer) {
-	fmt.Fprintln(output, `agent-deck-native 0.4.0+matrix.prototype
-Experimental standalone Windows terminal host; this is not the complete Agent Deck port.
+	// matrix/hardened: show the actual lightweight build version and launcher preference.
+	fmt.Fprintln(output, "agent-deck-native", version)
+	fmt.Fprintln(output, `Experimental standalone Windows lightweight edition; this is not the complete Agent Deck port.
 
 Usage:
   agent-deck-native --version
   agent-deck-native serve [--state-dir DIR] [--pipe NAME]
-  agent-deck-native ui [--state-dir DIR] [--pipe NAME] [--cwd DIR]
+  agent-deck-native ui [--state-dir DIR] [--pipe NAME] [--cwd DIR] [--tool shell|codex|powershell]
   agent-deck-native manager-start [--state-dir DIR] [--pipe NAME] [--json]
   agent-deck-native list [--state-dir DIR] [--pipe NAME] [--json]
 

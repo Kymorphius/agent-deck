@@ -71,7 +71,6 @@ func runAttach(config options, input, output *os.File, stderr io.Writer) error {
 		return err
 	}
 	after := snapshot.HeadOffset
-	lastRender, lastX, lastY := snapshot.Render, snapshot.CursorX, snapshot.CursorY
 	inputChunks := make(chan inputChunk, 8)
 	go readInput(ctx, input, inputChunks)
 	poll := time.NewTicker(40 * time.Millisecond)
@@ -124,12 +123,12 @@ func runAttach(config options, input, output *os.File, stderr io.Writer) error {
 			// matrix/hardened: the host emulator is the sole query responder.
 			// Render snapshots instead of forwarding raw DA/DSR/OSC requests to
 			// a second terminal, which would send duplicate replies to the child.
-			if response.Render != lastRender || response.CursorX != lastX || response.CursorY != lastY {
+			if snapshotDisplayChanged(snapshot, response) {
 				if err := paintSnapshot(output, response); err != nil {
 					return err
 				}
-				lastRender, lastX, lastY = response.Render, response.CursorX, response.CursorY
 			}
+			snapshot = response
 			after = response.HeadOffset
 			if !response.Running && after >= response.HeadOffset {
 				return nil
@@ -139,10 +138,23 @@ func runAttach(config options, input, output *os.File, stderr io.Writer) error {
 }
 
 func paintSnapshot(output io.Writer, response terminalhost.Response) error {
+	// matrix/hardened: use the host's parsed DEC 2004 state so a console paste
+	// reaches the child as one paste; queries and other raw modes stay at the host.
+	pasteMode := "\x1b[?2004l"
+	if response.BracketedPaste {
+		pasteMode = "\x1b[?2004h"
+	}
 	// matrix/hardened: screen newlines need explicit CR in a raw Windows VT output console.
 	render := strings.ReplaceAll(response.Render, "\n", "\r\n")
-	_, err := fmt.Fprintf(output, "\x1b[0m\x1b[?25l\x1b[2J\x1b[H%s\x1b[%d;%dH\x1b[?25h", render, response.CursorY+1, response.CursorX+1)
+	_, err := fmt.Fprintf(output, "%s\x1b[0m\x1b[?25l\x1b[2J\x1b[H%s\x1b[%d;%dH\x1b[?25h", pasteMode, render, response.CursorY+1, response.CursorX+1)
 	return err
+}
+
+// matrix/hardened: mode-only child output must reach the viewer even when the
+// screen and cursor did not change; raw history offsets do not trigger replay.
+func snapshotDisplayChanged(previous, current terminalhost.Response) bool {
+	return previous.Render != current.Render || previous.CursorX != current.CursorX ||
+		previous.CursorY != current.CursorY || previous.BracketedPaste != current.BracketedPaste
 }
 
 func readInput(ctx context.Context, input io.Reader, chunks chan<- inputChunk) {

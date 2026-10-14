@@ -105,6 +105,9 @@ type Response struct {
 	ManagerStateDir string        `json:"manager_state_dir,omitempty"`
 	ManagerVersion  string        `json:"manager_version,omitempty"`
 	ProtocolVersion int           `json:"protocol_version,omitempty"`
+
+	// matrix/hardened: a parsed, allowlisted input mode accompanies screen captures.
+	BracketedPaste bool `json:"bracketed_paste,omitempty"`
 }
 
 // Call performs one request; the caller retains ownership of the connection.

@@ -1,21 +1,54 @@
-# Windows 原生终端原型
+# Windows 原生精简版
 
 <!-- matrix/hardened: document the isolated experiment without claiming that the complete app is ported. -->
 
-`agent-deck-native` 是独立的 Windows 原生终端实验，版本为
-`0.4.0+matrix.prototype`。它不依赖 WSL 或 tmux，使用 ConPTY 启动
+`agent-deck-native` 是独立的 Windows 原生精简版，当前实验版本为
+`0.5.0+matrix.lite`。它不依赖 WSL 或 tmux，使用 ConPTY 启动
 交互式子进程，通过本机命名管道提供输入、输出、截图、缩放和停止操作。
 现已支持独立的中文多会话列表、分组、搜索、SQLite 注册库，以及自动启动的后台；
 新增了对原 Agent Deck 数据库格式及会话运行接口的接入；完整 Windows 主程序、
 Web 页面或工具状态识别仍未完成。现有生产配置和数据库不会被原型自动打开。
 现有 macOS/Linux 程序继续沿用原来的入口。
 
+## 桌面入口与默认流程
+
+<!-- matrix/hardened: an explicit verified per-user install makes daily use discoverable. -->
+
+安装后，双击桌面或开始菜单中的 **Agent Deck 原生版**。入口优先打开 Windows
+Terminal，不可用时使用普通控制台。列表默认新建 Codex，名称和目录已填好：
+按 `n`，确认目录后按 Enter 即可创建并进入。需要其它项目时直接修改目录字段；
+需要 Shell 或 PowerShell 时在工具字段选择，同一窗口会保留最后一次工具选择。
+
+在 Codex 内按 Ctrl+Q 返回列表；按 Enter 可接回同一个仍在运行的会话。关闭列表
+或整个终端窗口后，后台和正在运行的会话继续保留。按 `s` 确认停止会结束这次运行，
+保留列表记录和项目文件。精简版尚未接入 Codex 的历史会话恢复；停止后再次打开
+会启动新对话，因此需要继续当前对话时使用返回和重连。
+
+入口使用原来的 StateDB 格式，专用状态目录为
+`%LOCALAPPDATA%\AgentDeckNativeLite\LiteState`，默认项目目录为同级 `Workspace`。
+它不会打开或导入此前的 prototype、manual-state 或现有生产数据库。Codex 沿用
+当前 Windows 用户的正常配置与登录；本安装器不修改这些设置。
+
+部署者将两个安装脚本放在同一目录，核对二进制的 SHA256 后显式安装：
+
+```powershell
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows-native-install.ps1 `
+  -BinaryPath .\agent-deck-native.exe -ExpectedSHA256 '<已核对的 SHA256>' -InstallVersion lite-0.5.0
+```
+
+安装器在专用的 `AgentDeckNativeLite` 根目录创建版本和哈希命名的私有目录，
+并独立读回桌面及开始菜单的快捷方式；启动入口同时固定程序和启动脚本的哈希。
+相同内容可重复安装，已有不同二进制或快捷方式时拒绝覆盖。安装器不替换运行中的
+旧版本、不结束会话，不安装服务、计划任务或登录启动项。若已有其它版本入口，
+先将其改名保留，再显式安装新入口。
+
 ## 复用原主程序的接入阶段
 
 <!-- matrix/hardened: reuse original persistence and business interfaces rather than extend a second UI. -->
 
-后续移植以原主程序为目标。v0.4 的改动集中在共享数据库、会话运行接口与原界面的
-复制和输入动作，没有继续扩充独立列表功能。
+当前以现有精简原生版为交付目标，完整原主程序移植暂缓。v0.4 已接通共享数据库、
+会话运行接口与原界面的复制和输入动作；v0.5 已在 Windows 实机完成实际 Codex
+的创建、两次模型回复、返回、保活、同一对话重连和停止验证。
 
 原生后台可显式使用原来的 `internal/statedb` 和 `instances` / `groups` 表：
 
@@ -54,8 +87,8 @@ Web 页面或工具状态识别仍未完成。现有生产配置和数据库不�
 控制键，函数键和带修饰键的导航暂时返回不支持。
 
 原生 `PreviewFull` 读取有界保留输出（最多 4 MiB）并清除终端控制序列，不能
-当作完整对话历史。完整主程序移植会继续复用原会话模型、列表、搜索和业务，
-把平台执行放入后端；已经验证的 ConPTY、命名管道与进程树管理继续保留。
+当作完整对话历史。以后恢复完整主程序移植时，继续复用原会话模型、列表、搜索
+和业务，把平台执行放入后端。精简版继续使用已验证的 ConPTY、命名管道与进程树管理。
 
 ## 构建
 
@@ -85,7 +118,7 @@ go build -trimpath -o .\agent-deck-native.exe .\cmd\agent-deck-native
 在 Windows Terminal 中直接运行：
 
 ```powershell
-.\agent-deck-native.exe ui --cwd 'C:\Projects\demo'
+.\agent-deck-native.exe ui --cwd 'C:\Projects\demo' --tool codex
 # 不带参数也会打开同一列表。
 .\agent-deck-native.exe
 ```

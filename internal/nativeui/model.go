@@ -17,6 +17,7 @@ import (
 	"github.com/asheshgoplani/agent-deck/internal/terminalhost"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // Service owns persistence and native hosts. The UI never owns their lifetime.
@@ -107,8 +108,26 @@ type attachReturnedMsg struct {
 	err        error
 }
 
-// New creates the native list without starting or stopping any hosted process.
+// Options controls the defaults for one native list window.
+// matrix/hardened: the caller selects a tool once without changing user config.
+type Options struct {
+	DefaultTool string
+}
+
+// New creates the native list with the legacy Shell default.
 func New(service Service, defaultCwd string) tea.Model {
+	return NewWithOptions(service, defaultCwd, Options{})
+}
+
+// NewWithOptions creates the native list without starting or stopping any
+// hosted process. An empty or unsupported default tool falls back to Shell.
+func NewWithOptions(service Service, defaultCwd string, options Options) tea.Model {
+	tool := options.DefaultTool
+	switch tool {
+	case "shell", "codex", "powershell":
+	default:
+		tool = "shell"
+	}
 	name := textinput.New()
 	name.CharLimit = 120
 	name.Prompt = ""
@@ -124,13 +143,18 @@ func New(service Service, defaultCwd string) tea.Model {
 	return &Model{
 		service: service, defaultCwd: defaultCwd,
 		width: 80, height: 24, generation: 1, pollToken: 1,
-		name: name, dir: dir, group: group, search: search, tool: "shell", allGroups: true,
+		name: name, dir: dir, group: group, search: search, tool: tool, allGroups: true,
 	}
 }
 
 // Run displays the list. Quitting this program leaves hosted sessions alive.
 func Run(service Service, defaultCwd string) error {
-	_, err := tea.NewProgram(New(service, defaultCwd), tea.WithAltScreen()).Run()
+	return RunWithOptions(service, defaultCwd, Options{})
+}
+
+// matrix/hardened: tool defaults belong to this window, not the shared manager.
+func RunWithOptions(service Service, defaultCwd string, options Options) error {
+	_, err := tea.NewProgram(NewWithOptions(service, defaultCwd, options), tea.WithAltScreen()).Run()
 	return err
 }
 
@@ -219,7 +243,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.setNotice("返回列表："+msg.err.Error(), true)
 		} else {
-			m.setNotice("已返回列表；正在运行的会话继续保留。", false)
+			// matrix/hardened: reconnect stays discoverable after detaching.
+			m.setNotice("已返回列表；运行中的会话继续保留，按 Enter 可再次进入。", false)
 		}
 		return m, m.showList()
 	case tea.KeyMsg:
@@ -432,7 +457,8 @@ func (m *Model) updateListKey(msg tea.KeyMsg) tea.Cmd {
 
 func (m *Model) openCreate() tea.Cmd {
 	m.invalidate()
-	m.mode, m.focus, m.tool = createMode, 0, "shell"
+	// matrix/hardened: repeated creation keeps this window's last tool choice.
+	m.mode, m.focus = createMode, 0
 	m.setNotice("", false)
 	defaultName := filepath.Base(m.defaultCwd)
 	if defaultName == "." || defaultName == string(filepath.Separator) || defaultName == "" {
@@ -455,6 +481,11 @@ func (m *Model) openCreate() tea.Cmd {
 func (m *Model) resizeInputs() {
 	width := max(1, m.width-8)
 	m.name.Width, m.dir.Width, m.group.Width, m.search.Width = width, width, width, width
+	if m.mode == createMode {
+		// matrix/hardened: textinput pads its field and adds a cursor cell;
+		// reserve both that cell and the default-group hint after resizing.
+		m.group.Width = max(1, width-ansi.StringWidth(createGroupHint)-1)
+	}
 }
 
 func (m *Model) updateForm(msg tea.KeyMsg) tea.Cmd {

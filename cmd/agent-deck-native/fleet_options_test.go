@@ -10,9 +10,48 @@ import (
 	"testing"
 
 	"github.com/asheshgoplani/agent-deck/internal/nativeregistry"
+	"github.com/asheshgoplani/agent-deck/internal/nativestatestore"
 	"github.com/asheshgoplani/agent-deck/internal/terminalhost"
 	"github.com/google/uuid"
 )
+
+// matrix/hardened: explicit launcher defaults do not affect other commands.
+func TestUIAcceptsOnlySupportedDefaultTools(t *testing.T) {
+	for _, tool := range []string{"shell", "codex", "powershell"} {
+		config, err := parseOptions([]string{"ui", "--state-dir", t.TempDir(), "--tool", tool}, io.Discard)
+		if err != nil || config.Tool != tool {
+			t.Fatalf("UI tool preference lost: tool=%s config=%+v err=%v", tool, config, err)
+		}
+	}
+	for _, tool := range []string{"", "custom", "unknown"} {
+		if _, err := parseOptions([]string{"ui", "--tool", tool}, io.Discard); err == nil {
+			t.Fatalf("accepted unsupported UI tool %q", tool)
+		}
+	}
+	config, err := parseOptions([]string{"ui", "--state-dir", t.TempDir()}, io.Discard)
+	if err != nil || config.Tool != "shell" {
+		t.Fatalf("legacy UI default changed: config=%+v err=%v", config, err)
+	}
+}
+
+// matrix/hardened: native UI filtering must use the same default-group value
+// for both stores while preserving literal prototype groups and run identity.
+func TestNativeUITranslatesOnlyStateDBDefaultGroup(t *testing.T) {
+	for _, store := range []string{"", "prototype", "statedb"} {
+		service := &nativeService{store: store}
+		for _, group := range []string{"", nativestatestore.DefaultGroup, "研发"} {
+			original := terminalhost.SessionInfo{ID: uuid.NewString(), RunID: uuid.NewString(), Name: "中文项目", Group: group, PID: 123}
+			got := service.uiSession(original)
+			want := original
+			if store == "statedb" && group == nativestatestore.DefaultGroup {
+				want.Group = ""
+			}
+			if !reflect.DeepEqual(got, want) || original.Group != group {
+				t.Fatalf("group presentation changed other fields or input: store=%s got=%+v want=%+v", store, got, want)
+			}
+		}
+	}
+}
 
 func TestWindowsDefaultRegistryWorksOnFirstRun(t *testing.T) {
 	if runtime.GOOS != "windows" {
