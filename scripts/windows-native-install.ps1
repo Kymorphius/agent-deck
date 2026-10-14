@@ -115,6 +115,23 @@ function Copy-VerifiedFile([string]$Source,[string]$Destination,[string]$Expecte
 
 function ConvertTo-PSLiteral([string]$Value) {return "'"+$Value.Replace("'","''")+"'"}
 
+# matrix/hardened: WScript.Shell truncates shortcut arguments after 1023 UTF-16
+# characters. Keep each path/hash once and use a quoted native -Command value.
+function New-ShortcutArguments([string]$BaseDirectory,[string]$VersionDirectoryName,[string]$BinaryHash,[string]$LauncherHash) {
+    $payload="`$ErrorActionPreference='Stop';`$ad="+(ConvertTo-PSLiteral $BaseDirectory)+
+        ';$p=Join-Path $ad '+(ConvertTo-PSLiteral $VersionDirectoryName)+
+        ";`$l=Join-Path `$p 'windows-native-launch.ps1';`$h="+(ConvertTo-PSLiteral $LauncherHash)+
+        ";if((Get-FileHash -LiteralPath `$l -Algorithm SHA256).Hash -ine `$h){throw 'Agent Deck 启动脚本校验失败，请重新安装。'};& ([WildcardPattern]::Escape(`$l)) -BinaryPath (Join-Path `$p 'agent-deck-native.exe') -ExpectedSHA256 "+(ConvertTo-PSLiteral $BinaryHash)+
+        " -ExpectedLauncherSHA256 `$h -StateDirectory (Join-Path `$ad 'LiteState') -WorkingDirectory (Join-Path `$ad 'Workspace')"
+    # Standard Windows argv quoting preserves the complete PS source as one
+    # argument, without cmd.exe. Paths themselves remain PS single literals.
+    $quoted=[regex]::Replace($payload,'(\\*)"','$1$1\"')
+    $quoted=[regex]::Replace($quoted,'(\\+)$','$1$1')
+    $arguments='-NoLogo -NoProfile -ExecutionPolicy Bypass -Command "'+$quoted+'"'
+    if($arguments.Length -gt 1023){throw '安装路径过长，Windows 无法完整保存启动入口；未创建快捷方式。'}
+    return $arguments
+}
+
 function Assert-Shortcut($Shell,[string]$Path,[string]$Target,[string]$Arguments,[string]$Working) {
     $Path=Assert-PlainPath $Path $false $true
     if(-not (Test-Path -LiteralPath $Path)){return $false}
@@ -174,20 +191,11 @@ try {
     }
 
     $powerShellPath=Assert-PlainPath (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') $false
-    # The .lnk contains only fixed host options plus an encoded invocation. User
-    # paths are not interpreted by cmd.exe or interpolated as executable code.
+    # The .lnk contains fixed host options and one Windows-quoted PS command.
+    # User paths stay in PS literals and are never interpreted by cmd.exe.
     # The verifier lives in the shortcut, outside the script it authenticates.
     # A changed launcher is rejected before its first instruction can execute.
-    $payload="`$ErrorActionPreference='Stop';if((Get-FileHash -LiteralPath "+(ConvertTo-PSLiteral $installedLauncher)+
-        ' -Algorithm SHA256).Hash -ine '+(ConvertTo-PSLiteral $launcherHash)+
-        "){throw 'Agent Deck 启动脚本校验失败，请重新安装。'};& "+(ConvertTo-PSLiteral $installedLauncher)+
-        ' -BinaryPath '+(ConvertTo-PSLiteral $installedBinary)+
-        ' -ExpectedSHA256 '+(ConvertTo-PSLiteral $ExpectedSHA256)+
-        ' -ExpectedLauncherSHA256 '+(ConvertTo-PSLiteral $launcherHash)+
-        ' -StateDirectory '+(ConvertTo-PSLiteral $stateDirectory)+
-        ' -WorkingDirectory '+(ConvertTo-PSLiteral $workingDirectory)
-    $encoded=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($payload))
-    $arguments='-NoLogo -NoProfile -ExecutionPolicy Bypass -EncodedCommand '+$encoded
+    $arguments=New-ShortcutArguments $baseDirectory ([IO.Path]::GetFileName($installDirectory)) $ExpectedSHA256 $launcherHash
     $desktop=[Environment]::GetFolderPath([Environment+SpecialFolder]::DesktopDirectory)
     $programs=[Environment]::GetFolderPath([Environment+SpecialFolder]::Programs)
     if(-not $desktop -or -not $programs){throw '未找到当前用户的桌面或开始菜单目录。'}

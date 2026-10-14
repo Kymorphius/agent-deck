@@ -49,7 +49,7 @@ try {
         # launcher is loaded, so a changed script cannot validate itself.
         $payload="`$ErrorActionPreference='Stop';if((Get-FileHash -LiteralPath "+(ConvertTo-PSLiteral $launcher)+
             ' -Algorithm SHA256).Hash -ine '+(ConvertTo-PSLiteral $ExpectedLauncherSHA256)+
-            "){throw 'Agent Deck 启动脚本校验失败，请重新安装。'};& "+(ConvertTo-PSLiteral $launcher)+
+            "){throw 'Agent Deck 启动脚本校验失败，请重新安装。'};& ([WildcardPattern]::Escape("+(ConvertTo-PSLiteral $launcher)+'))'+
             ' -BinaryPath '+(ConvertTo-PSLiteral $BinaryPath)+
             ' -ExpectedSHA256 '+(ConvertTo-PSLiteral $ExpectedSHA256)+
             ' -ExpectedLauncherSHA256 '+(ConvertTo-PSLiteral $ExpectedLauncherSHA256)+
@@ -72,7 +72,8 @@ try {
     [Console]::OutputEncoding=New-Object Text.UTF8Encoding($false)
     $Host.UI.RawUI.WindowTitle='Agent Deck 原生版'
     Set-Location -LiteralPath $WorkingDirectory
-    & $BinaryPath 'ui' '--store' 'statedb' '--tool' 'codex' '--state-dir' $StateDirectory '--cwd' $WorkingDirectory
+    # matrix/hardened: call-operator command lookup treats brackets as patterns.
+    & ([WildcardPattern]::Escape($BinaryPath)) 'ui' '--store' 'statedb' '--tool' 'codex' '--state-dir' $StateDirectory '--cwd' $WorkingDirectory
     $nativeExitCode=$LASTEXITCODE
     if($nativeExitCode -ne 0){throw 'Agent Deck 未能正常启动或退出，请查看上方提示。'}
     exit 0
