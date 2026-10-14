@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.71`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.72`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -66,7 +66,7 @@
 - `internal/session/claude_hooks.go`：`isAgentDeckHookCommand` 的判断规则：先去掉开头的 `VAR=值`，再要求第二个词是 `hook-handler`、程序名的文件名部分是 `agent-deck`。`RemoveClaudeHooks` 会扫描全部事件，并做 UTC 时间戳备份（约 387–414 行）。
 - `cmd/agent-deck/main.go`（约 4845、5070 行）：`agent-deck uninstall` 会移除这些钩子。`uninstall.sh` 第 253 行附近的 jq 过滤用的是同一套规则（正则），写回时用 `cat >` 保持软链接和权限。
 
-**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.71`。
+**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.72`。
 
 **测试**：以 `_hardened_test.go` 结尾的文件、`update_check_disable_test.go`、`update_timer_wiring_test.go` 等是新增或调整过的测试；`testdata/goldens/*` 里的快照已经按加固后的输出更新。
 
@@ -645,3 +645,11 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 - **matrix/hardened:** 无效、越界或溢出的行号不操作当前选中条目；单独 `0` 仍清除筛选，`:0h` 则按无效行号处理。置顶视图中的独立会话不改变普通列表的隐藏分组折叠状态，文本输入与已连接终端仍沿用各自输入路由。
 - **matrix/hardened:** `12l` / `:12l` 仍只定位，数字配合打开键仍定位并激活，`3j` / `3k` 仍是相对移动计数；帮助页和待输入提示同步展示新入口。
 - 验证覆盖数字和冒号入口、本地与远程分组、会话到父组、无效地址、置顶视图及输入模式隔离。安装后旧 TUI 在列表按 `Ctrl+T` 重载。
+
+## 60. 排队会话保持生命周期状态
+
+`1.16.26+matrix.72` 修复分组达到并发上限时，`session start` 已返回 Queued，后续状态刷新却将尚未创建窗格的会话改成 starting 或 error/unknown-exit 的问题。
+
+- **matrix/hardened:** 在启动宽限与退出分类之前保留 queued；当前进程及从存储恢复的会话使用同一规则。准确查询确认 tmux 会话存在后，仍执行正常状态判断，避免过时的 queued 掩盖实际运行或退出；查询失败时保留排队状态。
+- **matrix/hardened:** 查询在 Instance 锁外执行，回到锁内核对会话、停止代次与排队状态。排队后的 Start 继续进入正常启动流程，启动后失去窗格仍显示实际退出分类。并发上限和队列释放规则保持原样。
+- 验证使用隔离入口，覆盖新旧会话、存储恢复、空与缺失 tmux 句柄、排队后启动、已有窗格及启动后外部终止；同时运行状态分类与停止保护的 race 回归、core 启动排队与释放队列测试。安装后需重载 monitor；已打开的 TUI 在列表按 `Ctrl+T` 重载。

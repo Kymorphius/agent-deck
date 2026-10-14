@@ -45,7 +45,7 @@ import (
 )
 
 // matrix/hardened: identifies our hardened build.
-var Version = "1.16.26+matrix.71" // matrix/hardened: numeric h collapses the addressed group; overridden via -ldflags.
+var Version = "1.16.26+matrix.72" // matrix/hardened: preserve queued sessions before pane startup; overridden via -ldflags.
 
 // Table column widths for list command output
 const (
