@@ -20,6 +20,7 @@ panes are untouched: they receive the raw bytes exactly as typed.
 
 ### Navigation
 
+<!-- matrix/hardened: numeric addresses and counts share the main-list navigation prefix. -->
 | Key | Action |
 |-----|--------|
 | `j` / `↓` | Move down |
@@ -32,7 +33,11 @@ panes are untouched: they receive the raw bytes exactly as typed.
 | `G` | Recall search (see [Search & Filter](#search--filter)) |
 | `h` / `←` | Collapse group / go to parent |
 | `l` / `→` / `Tab` | Toggle expand/collapse group |
-| `1-9` | Jump to Nth root group |
+| `'1` - `'9` | Jump to Nth root group |
+| `3j` / `3k` | Move 3 rows (any count) |
+| `12l` / `:12l` | Go to visible line 12 without opening |
+| `12h` / `:12h` | Collapse group / parent at visible line 12 |
+| `12` / `:12` + `o` / `Enter` | Open session / toggle group at visible line 12 |
 | `Space` | Jump mode |
 | `o` / `Enter` | Attach to session OR toggle group (`open_session` is **rebindable**) |
 | `Shift+Enter` | Open session in new iTerm window (macOS) |

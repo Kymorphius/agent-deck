@@ -121,13 +121,16 @@ agent-deck web                    # Start web UI on http://127.0.0.1:8420
 
 ### Key Shortcuts
 
-<!-- matrix/hardened: o opens, Enter stays compatible, Alt+O prompts, F9 returns, and numeric l only selects. -->
+<!-- matrix/hardened: o opens, F9 returns, p toggles pinned view, numeric l selects and numeric h collapses. -->
 | Key | Action |
 |-----|--------|
 | `o` / `Enter` | Attach to session |
 | `Alt+O` | Prompt Claude session without attaching |
 | `F9` / `Ctrl+Q` | Detach from session |
 | `12l` / `:12l` | Go to list line 12 without opening |
+| `12h` / `:12h` | Collapse group / parent at list line 12 |
+| `p` / `Ctrl+P` / `Alt+P` (`Option+P` on macOS) | Toggle pinned-only view |
+| `Ctrl+L` | Edit multi-repo paths |
 | `n` | New session |
 | `f` / `F` | Fork (quick / dialog) |
 | `A` / `Shift+U` | Archive / unarchive session |

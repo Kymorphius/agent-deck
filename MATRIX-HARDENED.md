@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.70`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.71`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -66,7 +66,7 @@
 - `internal/session/claude_hooks.go`：`isAgentDeckHookCommand` 的判断规则：先去掉开头的 `VAR=值`，再要求第二个词是 `hook-handler`、程序名的文件名部分是 `agent-deck`。`RemoveClaudeHooks` 会扫描全部事件，并做 UTC 时间戳备份（约 387–414 行）。
 - `cmd/agent-deck/main.go`（约 4845、5070 行）：`agent-deck uninstall` 会移除这些钩子。`uninstall.sh` 第 253 行附近的 jq 过滤用的是同一套规则（正则），写回时用 `cat >` 保持软链接和权限。
 
-**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.70`。
+**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.71`。
 
 **测试**：以 `_hardened_test.go` 结尾的文件、`update_check_disable_test.go`、`update_timer_wiring_test.go` 等是新增或调整过的测试；`testdata/goldens/*` 里的快照已经按加固后的输出更新。
 
@@ -637,3 +637,11 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 - **matrix/hardened:** `[hotkeys].toggle_pinned_view` 默认 `p`；帮助展示实际可用的三个入口，筛选栏和空列表显示主入口。重绑或禁用会释放默认入口，显式配置的备用键仍优先，布局字符继续沿用统一映射。
 - **matrix/hardened:** 原 `p` 的多仓库路径编辑移至 `Ctrl+L`，仍由 `[hotkeys].edit_paths` 重绑或禁用；所有路径提示同步读取映射。普通文本输入、模态窗口及已连接终端继续使用各自的输入路由。
 - 验证覆盖主界面实际派发、三入口及 Mac/俄语字符、选中会话保持、重绑和禁用、冲突归属、多仓库编辑仍可达、普通导航与界面提示。安装后旧 TUI 在列表按 `Ctrl+T` 重载。
+
+## 59. 数字配合 h 收起指定分组
+
+`1.16.26+matrix.71` 支持 `12h` 和 `:12h`：定位到当前可见列表第 12 行，再执行原有 `h` / 左方向键的收起逻辑。分组行收起该分组；会话行先收起已展开的多窗口，否则收起父分组。本地和远程列表使用同一入口。
+
+- **matrix/hardened:** 无效、越界或溢出的行号不操作当前选中条目；单独 `0` 仍清除筛选，`:0h` 则按无效行号处理。置顶视图中的独立会话不改变普通列表的隐藏分组折叠状态，文本输入与已连接终端仍沿用各自输入路由。
+- **matrix/hardened:** `12l` / `:12l` 仍只定位，数字配合打开键仍定位并激活，`3j` / `3k` 仍是相对移动计数；帮助页和待输入提示同步展示新入口。
+- 验证覆盖数字和冒号入口、本地与远程分组、会话到父组、无效地址、置顶视图及输入模式隔离。安装后旧 TUI 在列表按 `Ctrl+T` 重载。
