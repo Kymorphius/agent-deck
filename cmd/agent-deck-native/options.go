@@ -219,7 +219,7 @@ func printHelp(output io.Writer) {
 Usage:
   agent-deck-native --version
   agent-deck-native serve [--state-dir DIR] [--pipe NAME]
-  agent-deck-native ui [--state-dir DIR] [--pipe NAME] [--cwd DIR] [--tool shell|codex|powershell]
+  agent-deck-native ui [--state-dir DIR] [--pipe NAME] [--cwd DIR] [--tool shell|codex|powershell] [--codex-executable PATH]
   agent-deck-native manager-start [--state-dir DIR] [--pipe NAME] [--json]
   agent-deck-native list [--state-dir DIR] [--pipe NAME] [--json]
 
@@ -227,6 +227,7 @@ Usage:
   in a dedicated integration directory; the prototype store remains the default.
   agent-deck-native create --name NAME [--tool shell|codex|powershell|custom] [--cwd DIR] [--group NAME] [--no-start] [--pipe NAME] [-- executable args...]
   agent-deck-native start --session UUID [--pipe NAME] [--json]
+  agent-deck-native resume --session UUID [--run-id UUID] [--pipe NAME] [--json]
   agent-deck-native rename --session UUID --name NAME [--pipe NAME]
   agent-deck-native move --session UUID --group NAME [--run-id UUID] [--pipe NAME]
   agent-deck-native remove --session UUID [--run-id UUID] [--pipe NAME]
@@ -247,6 +248,9 @@ No service, scheduled task, hook, update check or telemetry is installed.
 serve owns multiple sessions and a private local registry; ui exits independently.
 ui (or no arguments) starts or reuses a verified detached manager automatically.
 Use / to search, Tab to filter groups, and g to move a selected session.
+For stopped/exited Codex, Enter starts a new dialog; h (or resume) opens Codex's
+history picker for the saved working directory. Running sessions must stop first.
+ui --codex-executable selects a native Codex executable for new sessions only.
 Managed attach/send/capture/resize/stop accept --session UUID and --run-id UUID.
 Use COMMAND --help for flags.`)
 }

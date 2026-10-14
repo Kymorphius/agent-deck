@@ -87,10 +87,14 @@ func (m *Model) View() string {
 
 func (m *Model) listLines() []string {
 	header := fmt.Sprintf("Agent Deck · Windows 原生会话 · %d/%d 个", len(m.items), len(m.allItems))
-	toolbar := "n 新建 · Enter/o 打开 · s 停止 · r 改名 · g 分组 · d 移除"
+	toolbar := "n 新建 · Enter/o 打开 · h 历史 · s 停止 · r 改名 · g 分组 · d 移除"
 	// matrix/hardened: distinguish leaving a view from stopping its process.
 	footer := "↑↓/j/k 选择 · / 搜索 · Tab 分组 · q/Ctrl+C 退出列表"
 	lifetime := "会话内 Ctrl+Q 返回列表 · q 退出列表 · 会话继续运行"
+	// matrix/hardened: stopped Codex has two explicit, different launch actions.
+	if selected, ok := m.selected(); ok && selected.Tool == "codex" && (selected.State == "stopped" || selected.State == "exited") {
+		lifetime = "Codex：Enter 新对话 · h 选择历史 · q 退出列表"
+	}
 	group := "全部分组"
 	if !m.allGroups {
 		group = groupLabel(m.filterGroup)
@@ -251,9 +255,9 @@ func (m *Model) confirmationLines() []string {
 		detail,
 	}
 	if m.mode == confirmStopMode {
-		// matrix/hardened: the lite launcher cannot resume a stopped Codex thread.
+		// matrix/hardened: stop ends the process; history selection is explicit.
 		if m.target.Tool == "codex" {
-			lines = append(lines, "停止后再次打开会启动新的 Codex 对话。")
+			lines = append(lines, "停止后 Enter 新对话；h 选择此目录的 Codex 历史。")
 		}
 		lines = append(lines, "只需返回列表请在会话内按 Ctrl+Q。")
 	}

@@ -5,7 +5,12 @@
 Windows 专属开发使用独立源码 checkout 和与 `go.mod` 匹配的 Go 工具链。
 macOS/Linux 可继续做跨平台回归和交叉编译；Windows 上直接构建、运行 ConPTY
 及命名管道测试，验证目标机的实际行为。完整原主程序仍有 Unix 依赖，此流程
-针对 `cmd/agent-deck-native`。
+针对 `cmd/agent-deck-native`，当前版本为 `0.6.0+matrix.lite`。
+
+目标 Windows Server 2025 已在专用 `AgentDeckNativeDev-*` 目录安装 Go 1.25.13
+和 MinGit 2.56.0.windows.2，保留独立源码 checkout、工具及测试产物；没有替换
+现有生产二进制、全局 Git/Go 安装或运行中的会话。该环境已完成原生 Go 构建和
+离线集成验证，并完成了下文记录的一次限定范围的真实 Codex 编码与测试执行。
 
 ## 原生构建
 
@@ -68,6 +73,46 @@ APPDATA、LOCALAPPDATA、CODEX_HOME、XDG 与临时目录均指向本次 GUID �
 模型能回复并不证明 Windows 命令执行器可用。SSH 非交互会话与已登录的桌面会话
 可能表现不同；执行器或沙箱初始化失败时保留错误证据，不自动关闭沙箱或改写用户
 配置。后台开发迁移需先验证真实文件操作和 Git 保存。
+独立验证必须记录实际执行器版本、进程所在的 Windows 会话、项目文件差异及
+测试结果，并保持已登录的其他进程运行。
+
+### 2026-10-14 限定编码验证
+
+官方 Codex `0.163.0-alpha.11` 在已登录的 Windows Session 2 中，使用原生
+`gpt-6.1-sol` 及正常的 elevated `workspace-write` 沙箱完成了一次真实编码任务：
+
+- 只新增 `cmd/agent-deck-native/codex_runtime_test.go`，父会话预先提供的
+  `codex_runtime.go` 保持不变。六个用例覆盖默认空选择、有效绝对普通文件、相对
+  路径、错误文件名、不存在文件及同名目录。
+- 工作目录内使用经哈希核对的 Go 1.25.13 windows/amd64 和 MinGit
+  2.56.0.windows.2 工具副本，原工具目录、全局 PATH 和用户配置保持不变。
+- 实际执行 `scripts/windows-native-test.ps1`，`-GoPath` 指向该 Go 副本，
+  `-Packages` 仅包含上述两个 Go 文件。标准库文件列表测试退出码为零，输出为
+  `ok command-line-arguments 0.496s`；不需要联网或读取用户凭据。
+- 实际执行的 `git diff --check` 退出码为零。工作者没有写入 `.git` 或提交代码，
+  父会话负责复核差异及保存 Git 记录；macOS 的三个相关包隔离 race 回归也通过。
+
+这次证据确认真实模型能在 Windows 原生沙箱内修改项目文件并运行有意义的测试，
+范围仅为程序选择边界的六个用例。它不代表 0.6 的全模块验证或可见桌面验收已通过。
+
+v0.6 的历史恢复验收还需确认：先保活并接回同一进程，显式停止后按 `h`，在
+Codex 历史列表独立核对项目及原对话身份，选择后在同一历史中完成新模型回合。
+新的 RunID 应拒绝旧查看者的输入及停止请求，保存的启动描述保持不变。
+离线恢复接口测试通过，不能代替这段真实在线流程。
 
 Windows Terminal、中文输入法和桌面剪贴板的验收需要实际桌面交互。
 SSH 下的进程、模型回复、快捷方式读回或 headless ConPTY 测试不能代替这一层。
+
+## 并行部署与程序选择
+
+使用原生安装器的 `-StateDirectoryName LiteState-0.6 -ShortcutSuffix 0.6`，可创建
+独立的 0.6 列表及入口，保留旧 `LiteState`、旧快捷方式和运行中的后台。发布前
+从已提交的源码构建，核对提交身份、`--version`、二进制 SHA256 及快捷方式读回；
+不同版本不复用同一状态目录的后台。
+
+如需固定 Codex 程序，安装时同时指定 `-CodexExecutable` 的绝对 `codex.exe` 路径
+及 `-ExpectedCodexSHA256`。安装清单和快捷方式保存经核对的哈希，入口启动时
+再次验证外部文件；不复制外部程序、登录凭据或修改 PATH。直接运行 UI 时可用
+`--codex-executable` 选择程序，但该参数仅检查路径及普通文件身份，不提供安装器
+的哈希固定；它只影响随后创建的新 Codex 记录，已有记录继续沿用已保存路径。
+完整安装命令见 [Windows 原生精简版](windows-native-prototype.md)。

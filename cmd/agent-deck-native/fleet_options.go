@@ -19,7 +19,7 @@ import (
 
 func isFleetCommand(command string) bool {
 	switch command {
-	case "serve", "ui", "manager-start", "list", "create", "start", "rename", "move", "remove", "shutdown":
+	case "serve", "ui", "manager-start", "list", "create", "start", "resume", "rename", "move", "remove", "shutdown":
 		return true
 	}
 	return false
@@ -72,6 +72,9 @@ func parseFleetOptions(args []string, help io.Writer) (options, error) {
 		flags.StringVar(&o.Cwd, "cwd", "", "default project directory")
 		// matrix/hardened: an explicit launcher preference never changes saved sessions.
 		flags.StringVar(&o.Tool, "tool", "shell", "default new-session tool: shell, codex or powershell")
+		// matrix/hardened: this window selects a validated native executable only
+		// for newly created Codex descriptions, never for already saved sessions.
+		flags.StringVar(&o.Executable, "codex-executable", "", "absolute native Codex path for new Codex sessions")
 	case "create":
 		flags.StringVar(&o.Name, "name", "", "required session name")
 		flags.StringVar(&o.Tool, "tool", "shell", "shell, codex, powershell or custom")
@@ -81,7 +84,7 @@ func parseFleetOptions(args []string, help io.Writer) (options, error) {
 		flags.IntVar(&o.Rows, "rows", 30, "initial rows")
 		flags.Var(&env, "env", "saved environment override NAME=VALUE")
 		flags.BoolVar(&o.NoStart, "no-start", false, "save without launching")
-	case "start", "rename", "move", "remove":
+	case "start", "resume", "rename", "move", "remove":
 		flags.StringVar(&o.SessionID, "session", "", "required session UUID")
 		flags.StringVar(&o.RunID, "run-id", "", "expected run UUID")
 		if o.Command == "rename" {
@@ -112,6 +115,14 @@ func parseFleetOptions(args []string, help io.Writer) (options, error) {
 	}
 	if o.Command == "ui" && o.Tool != "shell" && o.Tool != "codex" && o.Tool != "powershell" {
 		return o, errors.New("ui --tool must be shell, codex or powershell")
+	}
+	if o.Command == "ui" && o.Executable != "" {
+		// matrix/hardened: invalid explicit paths fail before manager startup.
+		validated, err := validatedCodexExecutable(o.Executable)
+		if err != nil {
+			return o, err
+		}
+		o.Executable = validated
 	}
 	if o.StateDir == "" {
 		dir, err := defaultStateDirectory()
@@ -147,7 +158,7 @@ func parseFleetOptions(args []string, help io.Writer) (options, error) {
 			}
 		}
 	}
-	if (o.Command == "start" || o.Command == "rename" || o.Command == "move" || o.Command == "remove") && o.SessionID == "" {
+	if (o.Command == "start" || o.Command == "resume" || o.Command == "rename" || o.Command == "move" || o.Command == "remove") && o.SessionID == "" {
 		return o, errors.New("--session is required")
 	}
 	if (o.Command == "create" || o.Command == "rename") && strings.TrimSpace(o.Name) == "" {

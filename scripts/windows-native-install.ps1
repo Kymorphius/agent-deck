@@ -3,12 +3,19 @@
 param(
     [Parameter(Mandatory=$true)][string]$BinaryPath,
     [Parameter(Mandatory=$true)][ValidatePattern('^[0-9a-fA-F]{64}$')][string]$ExpectedSHA256,
-    [ValidatePattern('^[a-zA-Z0-9][a-zA-Z0-9._+-]{0,63}$')][string]$InstallVersion='lite'
+    [ValidatePattern('^[a-zA-Z0-9][a-zA-Z0-9._+-]{0,63}$')][string]$InstallVersion='lite',
+    [string]$CodexExecutable='',
+    [ValidatePattern('^([0-9a-fA-F]{64})?$')][string]$ExpectedCodexSHA256='',
+    # matrix/hardened: allow parallel releases without adopting an arbitrary
+    # state path or overwriting the active release's shortcut entry.
+    [ValidatePattern('^(?!.*\.\.)[a-zA-Z0-9][a-zA-Z0-9._+-]{0,63}$')][string]$StateDirectoryName='LiteState',
+    [ValidatePattern('^[a-zA-Z0-9._+ -]{0,32}$')][string]$ShortcutSuffix=''
 )
 
 $ErrorActionPreference='Stop'
 $ProgressPreference='SilentlyContinue'
 $ExpectedSHA256=$ExpectedSHA256.ToLowerInvariant()
+$ExpectedCodexSHA256=$ExpectedCodexSHA256.ToLowerInvariant()
 
 function Assert-PlainPath([string]$Path,[bool]$Directory,[bool]$MayBeMissing=$false) {
     $fullPath=[IO.Path]::GetFullPath($Path)
@@ -113,16 +120,49 @@ function Copy-VerifiedFile([string]$Source,[string]$Destination,[string]$Expecte
     if((Get-FileHash -LiteralPath $Destination -Algorithm SHA256).Hash -ine $Expected){throw '复制后的文件校验失败，已停止安装。'}
 }
 
+# matrix/hardened: an explicitly chosen Codex stays external; never replace the
+# npm installation, mutate PATH or copy authentication into the release folder.
+function Assert-CodexExecutable([string]$Path,[string]$Expected) {
+    if($Path -notmatch '^(?:[a-zA-Z]:[\\/]|\\\\[^\\]+\\[^\\]+\\)' -or
+        [IO.Path]::GetFileName($Path) -ine 'codex.exe'){
+        throw 'Codex 运行程序必须是绝对路径的 codex.exe。'
+    }
+    $fullPath=Assert-PlainPath $Path $false
+    if((Get-Item -LiteralPath $fullPath -Force) -isnot [IO.FileInfo]){throw 'Codex 运行程序不是普通文件。'}
+    if((Get-FileHash -LiteralPath $fullPath -Algorithm SHA256).Hash -ine $Expected){throw 'Codex 运行程序校验失败，未安装。'}
+    return $fullPath
+}
+
+function Write-VerifiedPrivateFile([byte[]]$Bytes,[string]$Destination,[string]$Expected) {
+    $Destination=Assert-PlainPath $Destination $false $true
+    Assert-PrivatePath ([IO.Path]::GetDirectoryName($Destination)) $true|Out-Null
+    if(Test-Path -LiteralPath $Destination){
+        Assert-PrivatePath $Destination $false|Out-Null
+        if((Get-FileHash -LiteralPath $Destination -Algorithm SHA256).Hash -ine $Expected){throw '版本目录已有不同的 Codex 运行配置，未覆盖已有文件。'}
+        return
+    }
+    # The manifest receives its protected owner-only ACL at CreateNew, before
+    # any bytes exist. A concurrent installer cannot replace this release data.
+    $fileACL=New-PrivateFileACL
+    $outputStream=New-Object IO.FileStream -ArgumentList @($Destination,[IO.FileMode]::CreateNew,[Security.AccessControl.FileSystemRights]::Write,[IO.FileShare]::None,4096,[IO.FileOptions]::None,$fileACL)
+    try {$outputStream.Write($Bytes,0,$Bytes.Length);$outputStream.Flush($true)}
+    finally {$outputStream.Dispose()}
+    Assert-PrivatePath $Destination $false|Out-Null
+    if((Get-FileHash -LiteralPath $Destination -Algorithm SHA256).Hash -ine $Expected){throw 'Codex 运行配置写入后的校验失败，已停止安装。'}
+}
+
 function ConvertTo-PSLiteral([string]$Value) {return "'"+$Value.Replace("'","''")+"'"}
 
 # matrix/hardened: WScript.Shell truncates shortcut arguments after 1023 UTF-16
 # characters. Keep each path/hash once and use a quoted native -Command value.
-function New-ShortcutArguments([string]$BaseDirectory,[string]$VersionDirectoryName,[string]$BinaryHash,[string]$LauncherHash) {
+function New-ShortcutArguments([string]$BaseDirectory,[string]$VersionDirectoryName,[string]$BinaryHash,[string]$LauncherHash,[string]$CodexManifestHash,[ValidatePattern('^(?!.*\.\.)[a-zA-Z0-9][a-zA-Z0-9._+-]{0,63}$')][string]$StateDirectoryName='LiteState') {
     $payload="`$ErrorActionPreference='Stop';`$ad="+(ConvertTo-PSLiteral $BaseDirectory)+
         ';$p=Join-Path $ad '+(ConvertTo-PSLiteral $VersionDirectoryName)+
         ";`$l=Join-Path `$p 'windows-native-launch.ps1';`$h="+(ConvertTo-PSLiteral $LauncherHash)+
         ";if((Get-FileHash -LiteralPath `$l -Algorithm SHA256).Hash -ine `$h){throw 'Agent Deck 启动脚本校验失败，请重新安装。'};& ([WildcardPattern]::Escape(`$l)) -BinaryPath (Join-Path `$p 'agent-deck-native.exe') -ExpectedSHA256 "+(ConvertTo-PSLiteral $BinaryHash)+
-        " -ExpectedLauncherSHA256 `$h -StateDirectory (Join-Path `$ad 'LiteState') -WorkingDirectory (Join-Path `$ad 'Workspace')"
+        ' -ExpectedLauncherSHA256 $h -StateDirectory (Join-Path $ad '+(ConvertTo-PSLiteral $StateDirectoryName)+
+        ") -WorkingDirectory (Join-Path `$ad 'Workspace')"
+    if($CodexManifestHash){$payload+=' -ExpectedCodexManifestSHA256 '+(ConvertTo-PSLiteral $CodexManifestHash)}
     # Standard Windows argv quoting preserves the complete PS source as one
     # argument, without cmd.exe. Paths themselves remain PS single literals.
     $quoted=[regex]::Replace($payload,'(\\*)"','$1$1\"')
@@ -166,6 +206,18 @@ function Write-Shortcut($Shell,[string]$Path,[string]$Target,[string]$Arguments,
 $shell=$null
 try {
     if([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT){throw '该安装器只能在 Windows 上运行。'}
+    # matrix/hardened: selecting a newer native Codex is explicit and hash-bound.
+    if([bool]$CodexExecutable -ne [bool]$ExpectedCodexSHA256){throw 'CodexExecutable 和 ExpectedCodexSHA256 必须同时提供。'}
+    $codexManifestBytes=$null
+    $codexManifestHash=''
+    if($CodexExecutable){
+        $CodexExecutable=Assert-CodexExecutable $CodexExecutable $ExpectedCodexSHA256
+        $codexManifestJSON=[ordered]@{path=$CodexExecutable;sha256=$ExpectedCodexSHA256}|ConvertTo-Json -Compress
+        $codexManifestBytes=(New-Object Text.UTF8Encoding($false)).GetBytes($codexManifestJSON)
+        $manifestStream=New-Object IO.MemoryStream -ArgumentList @(,$codexManifestBytes)
+        try {$codexManifestHash=Get-StreamHash $manifestStream}
+        finally {$manifestStream.Dispose()}
+    }
     $BinaryPath=Assert-PlainPath $BinaryPath $false
     if((Get-FileHash -LiteralPath $BinaryPath -Algorithm SHA256).Hash -ine $ExpectedSHA256){throw 'Agent Deck 文件校验失败，未安装。'}
     $launcherSource=Assert-PlainPath (Join-Path $PSScriptRoot 'windows-native-launch.ps1') $false
@@ -174,7 +226,8 @@ try {
     $installDirectory=Join-Path $baseDirectory ($InstallVersion+'-'+$ExpectedSHA256.Substring(0,12))
     $installedBinary=Join-Path $installDirectory 'agent-deck-native.exe'
     $installedLauncher=Join-Path $installDirectory 'windows-native-launch.ps1'
-    $stateDirectory=Join-Path $baseDirectory 'LiteState'
+    $codexManifestPath=Join-Path $installDirectory 'codex-runtime.json'
+    $stateDirectory=Join-Path $baseDirectory $StateDirectoryName
     $workingDirectory=Join-Path $baseDirectory 'Workspace'
     # Preflight every existing managed boundary before copying files or saving
     # shortcuts. Old releases and an unowned directory retain their bytes/ACLs.
@@ -190,17 +243,30 @@ try {
         }
     }
 
+    # A pre-existing manifest is part of this immutable release, including when
+    # a caller omits Codex selection; never silently ignore or adopt that file.
+    Assert-PlainPath $codexManifestPath $false $true|Out-Null
+    if(Test-Path -LiteralPath $codexManifestPath){
+        Assert-PrivatePath $codexManifestPath $false|Out-Null
+        if(-not $codexManifestHash -or (Get-FileHash -LiteralPath $codexManifestPath -Algorithm SHA256).Hash -ine $codexManifestHash){
+            throw '版本目录已有不同的 Codex 运行配置，未覆盖或安装。'
+        }
+    }
+
     $powerShellPath=Assert-PlainPath (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') $false
     # The .lnk contains fixed host options and one Windows-quoted PS command.
     # User paths stay in PS literals and are never interpreted by cmd.exe.
     # The verifier lives in the shortcut, outside the script it authenticates.
     # A changed launcher is rejected before its first instruction can execute.
-    $arguments=New-ShortcutArguments $baseDirectory ([IO.Path]::GetFileName($installDirectory)) $ExpectedSHA256 $launcherHash
+    $arguments=New-ShortcutArguments $baseDirectory ([IO.Path]::GetFileName($installDirectory)) $ExpectedSHA256 $launcherHash $codexManifestHash $StateDirectoryName
     $desktop=[Environment]::GetFolderPath([Environment+SpecialFolder]::DesktopDirectory)
     $programs=[Environment]::GetFolderPath([Environment+SpecialFolder]::Programs)
     if(-not $desktop -or -not $programs){throw '未找到当前用户的桌面或开始菜单目录。'}
     foreach($directory in @($desktop,$programs)){Assert-PlainPath $directory $true|Out-Null}
-    $shortcuts=@((Join-Path $desktop 'Agent Deck 原生版.lnk'),(Join-Path $programs 'Agent Deck 原生版.lnk'))
+    $shortcutName='Agent Deck 原生版'
+    if($ShortcutSuffix){$shortcutName+=' '+$ShortcutSuffix}
+    $shortcutName+='.lnk'
+    $shortcuts=@((Join-Path $desktop $shortcutName),(Join-Path $programs $shortcutName))
     $shell=New-Object -ComObject WScript.Shell
     # Check both destinations before copying files or changing either shortcut.
     foreach($shortcutPath in $shortcuts){Assert-Shortcut $shell $shortcutPath $powerShellPath $arguments $workingDirectory|Out-Null}
@@ -209,12 +275,15 @@ try {
     foreach($directory in @($installDirectory,$stateDirectory,$workingDirectory)){New-PrivateDirectory $directory|Out-Null}
     Copy-VerifiedFile $BinaryPath $installedBinary $ExpectedSHA256
     Copy-VerifiedFile $launcherSource $installedLauncher $launcherHash
+    if($codexManifestHash){Write-VerifiedPrivateFile $codexManifestBytes $codexManifestPath $codexManifestHash}
     foreach($shortcutPath in $shortcuts){Write-Shortcut $shell $shortcutPath $powerShellPath $arguments $workingDirectory $installedBinary}
     [ordered]@{
         installed=$true;binary_path=$installedBinary;sha256=$ExpectedSHA256
         launcher_path=$installedLauncher;launcher_sha256=$launcherHash;state_directory=$stateDirectory
         working_directory=$workingDirectory;shortcuts=$shortcuts
         existing_files_preserved=$true
+        codex_manifest_path=$(if($codexManifestHash){$codexManifestPath}else{''})
+        codex_manifest_sha256=$codexManifestHash;codex_executable=$CodexExecutable;codex_sha256=$ExpectedCodexSHA256
     }|ConvertTo-Json -Depth 3
 } finally {
     if($shell){[Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell)|Out-Null}
