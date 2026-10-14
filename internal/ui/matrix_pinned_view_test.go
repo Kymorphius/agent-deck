@@ -167,6 +167,8 @@ func TestMatrixPinnedViewHotkeyDispatchAndSelection(t *testing.T) {
 		name string
 		key  tea.KeyMsg
 	}{
+		{"p", plainKeyMsg('p')},
+		{"Russian p twin", plainKeyMsg('з')},
 		{"ctrl+p", tea.KeyMsg{Type: tea.KeyCtrlP}},
 		{"alt+p", altKeyMsg('p')},
 		{"mac Option+P", plainKeyMsg('π')},
@@ -305,7 +307,7 @@ func TestMatrixPinnedViewRenderedRowsAndEmptyState(t *testing.T) {
 		}
 	}
 	state, filtered := home.filteredEmptyState()
-	if !filtered || state.Title != "No pinned sessions" || !strings.Contains(strings.Join(state.Hints, " "), "ctrl+p") {
+	if !filtered || state.Title != "No pinned sessions" || !strings.Contains(strings.Join(state.Hints, " "), "p back to normal view") {
 		t.Fatalf("empty pinned view lacks its identity and exit: %+v", state)
 	}
 }
@@ -325,11 +327,46 @@ func TestMatrixPinnedViewHotkeyRebindAndDisable(t *testing.T) {
 	}
 	home.groupViewMode = session.GroupViewNormal
 	home.setHotkeys(resolveHotkeys(map[string]string{hotkeyTogglePinnedView: ""}))
-	for _, key := range []tea.KeyMsg{{Type: tea.KeyCtrlP}, altKeyMsg('p'), plainKeyMsg('π')} {
+	for _, key := range []tea.KeyMsg{plainKeyMsg('p'), plainKeyMsg('з'), {Type: tea.KeyCtrlP}, altKeyMsg('p'), plainKeyMsg('π')} {
 		home.Update(key)
 		if home.groupViewMode != session.GroupViewNormal {
 			t.Fatalf("disabled shortcut %q opened pinned view", key.String())
 		}
+	}
+}
+
+// matrix/hardened: p opens pinned view even for multi-repo sessions; their
+// dedicated path editor remains reachable through its configurable Ctrl+L key.
+func TestMatrixPinnedViewKeepsMultiRepoEditorAccessible(t *testing.T) {
+	home := matrixPinnedHome(t)
+	inst := matrixPinnedInstance(t, home, "a1")
+	inst.MultiRepoEnabled, inst.Pin = true, session.PinTop
+	inst.AdditionalPaths = []string{t.TempDir()}
+	home.rebuildFlatItems()
+	home.cursor = sessionIndexByTitle(home, "a1")
+	home.Update(plainKeyMsg('p'))
+	if home.groupViewMode != session.GroupViewPinnedOnly || home.editPathsDialog.IsVisible() {
+		t.Fatal("p must toggle pinned view without opening the multi-repo editor")
+	}
+	home.Update(tea.KeyMsg{Type: tea.KeyCtrlL})
+	if !home.editPathsDialog.IsVisible() || home.groupViewMode != session.GroupViewPinnedOnly {
+		t.Fatal("Ctrl+L did not open the multi-repo editor in the pinned view")
+	}
+	home.editPathsDialog.Hide()
+	home.setHotkeys(resolveHotkeys(map[string]string{hotkeyEditPaths: "ctrl+k"}))
+	home.Update(tea.KeyMsg{Type: tea.KeyCtrlL})
+	if home.editPathsDialog.IsVisible() {
+		t.Fatal("Ctrl+L remained active after rebinding the path editor")
+	}
+	home.Update(tea.KeyMsg{Type: tea.KeyCtrlK})
+	if !home.editPathsDialog.IsVisible() {
+		t.Fatal("rebound key did not open the multi-repo editor")
+	}
+	home.editPathsDialog.Hide()
+	home.setHotkeys(resolveHotkeys(map[string]string{hotkeyEditPaths: ""}))
+	home.Update(tea.KeyMsg{Type: tea.KeyCtrlL})
+	if home.editPathsDialog.IsVisible() {
+		t.Fatal("disabled path editor still opened")
 	}
 }
 
@@ -366,7 +403,7 @@ func TestMatrixPinnedControlKeysDoNotNavigate(t *testing.T) {
 func TestMatrixPinnedViewAliasRemapAndConflict(t *testing.T) {
 	home := matrixPinnedHome(t)
 	home.setHotkeys(resolveHotkeys(map[string]string{hotkeyTogglePinnedView: "ctrl+g"}))
-	for _, key := range []tea.KeyMsg{{Type: tea.KeyCtrlP}, altKeyMsg('p'), plainKeyMsg('π')} {
+	for _, key := range []tea.KeyMsg{plainKeyMsg('p'), plainKeyMsg('з'), {Type: tea.KeyCtrlP}, altKeyMsg('p'), plainKeyMsg('π')} {
 		home.Update(key)
 		if home.groupViewMode != session.GroupViewNormal {
 			t.Fatalf("default alias %q survived rebinding", key.String())
@@ -396,8 +433,9 @@ func TestMatrixPinnedViewHelpShowsOnlyActiveAlias(t *testing.T) {
 		overrides map[string]string
 		want      string
 	}{
-		{nil, "ctrl+p/alt+p"},
-		{map[string]string{hotkeyCopyPane: "alt+p"}, "ctrl+p"},
+		{nil, "p/ctrl+p/alt+p"},
+		{map[string]string{hotkeyCopyPane: "alt+p"}, "p/ctrl+p"},
+		{map[string]string{hotkeyCopyPane: "ctrl+p"}, "p/alt+p"},
 		{map[string]string{hotkeyTogglePinnedView: "ctrl+g"}, "ctrl+g"},
 		{map[string]string{hotkeyTogglePinnedView: ""}, ""},
 	} {
@@ -409,7 +447,7 @@ func TestMatrixPinnedViewHelpShowsOnlyActiveAlias(t *testing.T) {
 		for _, line := range strings.Split(h.View(), "\n") {
 			if strings.Contains(line, "Toggle pinned-only view") {
 				found = true
-				if tc.want == "" || !strings.Contains(line, tc.want) || (tc.want != "ctrl+p/alt+p" && strings.Contains(line, "/alt+p")) {
+				if tc.want == "" || !strings.Contains(line, tc.want) || (strings.Contains(line, "/alt+p") != strings.Contains(tc.want, "/alt+p")) || (strings.Contains(line, "/ctrl+p") != strings.Contains(tc.want, "/ctrl+p")) {
 					t.Fatalf("unexpected pinned help row: %q", line)
 				}
 				break
