@@ -233,6 +233,12 @@ func resolveAttachInterrupt(chunk []byte, detach byte, opts AttachOptions) (int,
 	if MatrixIsAltQDetach(chunk) {
 		return 0, SwitchNone
 	}
+	return resolveAttachInterruptKeys(chunk, detach, opts)
+}
+
+// matrix/hardened: rejoined F9-parser output must not turn Esc then q from
+// separate reads into the existing exact-read Alt+Q shortcut.
+func resolveAttachInterruptKeys(chunk []byte, detach byte, opts AttachOptions) (int, SwitchIntent) {
 	detachIdx := IndexDetachKey(chunk, detach)
 	switchIdx, switchIn := indexSwitchKey(chunk, opts)
 	scrollIdx := indexScrollbackTrigger(chunk, opts)
@@ -279,6 +285,9 @@ type attachStdinPump struct {
 func (p *attachStdinPump) run(ctx context.Context) (SwitchIntent, bool) {
 	buf := make([]byte, 32)
 	var replyFilter termreply.Filter
+	// matrix/hardened: F9 must survive split reads without matching paste or
+	// the body of another ANSI token; keep its state local to this attach.
+	var f9Input MatrixF9DetachInput
 	fd := int(p.in.Fd()) // #nosec G115 -- an OS file descriptor is a small positive int
 
 	reportErr := func(err error) {
@@ -293,9 +302,7 @@ func (p *attachStdinPump) run(ctx context.Context) (SwitchIntent, bool) {
 			return SwitchNone, false
 		}
 		// Poll first so the read below never blocks longer than the interval.
-		if !PollFdReady(fd, AttachStdinPollInterval) {
-			continue
-		}
+		ready := PollFdReady(fd, AttachStdinPollInterval)
 		// Re-check cancellation: ctx can be cancelled while this goroutine was
 		// parked inside poll, and a keystroke can land in that same window. The
 		// stale byte still gets read below without this check — harmless today
@@ -306,24 +313,41 @@ func (p *attachStdinPump) run(ctx context.Context) (SwitchIntent, bool) {
 			return SwitchNone, false
 		}
 
-		n, err := p.in.Read(buf)
-		if err != nil {
-			if err == io.EOF {
+		var chunk []byte
+		f9Detached := false
+		if ready {
+			n, err := p.in.Read(buf)
+			if err != nil {
+				if err == io.EOF {
+					return SwitchNone, false
+				}
+				reportErr(fmt.Errorf("stdin read error: %w", err))
 				return SwitchNone, false
 			}
-			reportErr(fmt.Errorf("stdin read error: %w", err))
-			return SwitchNone, false
+			// matrix/hardened: preserve Alt+Q's original read boundary;
+			// pasted or token-body bytes cannot become a separate keypress.
+			if !f9Input.Protected() && MatrixIsAltQDetach(buf[:n]) {
+				return SwitchNone, true
+			}
+			chunk, f9Detached = f9Input.Consume(buf[:n])
+		} else {
+			// matrix/hardened: a single Esc still reaches the child after
+			// one idle poll; partial CSI tokens wait for their remaining bytes.
+			if !f9Input.HasPendingEscape() {
+				continue
+			}
+			chunk = f9Input.Flush()
 		}
-
-		chunk := buf[:n]
 		// Always run the reply filter: escape-string replies (DCS/OSC/etc.)
 		// can arrive long after the initial quarantine (e.g. iTerm2
 		// XTVERSION reply on window focus/resize — #731). `armed` stays
 		// gated to the quarantine window so generic CSI pass-through
 		// works for keyboard input outside it.
 		armed := time.Since(p.startTime) < attachReplyQuarantine
-		chunk = replyFilter.Consume(chunk, armed, false)
-		if len(chunk) == 0 {
+		// matrix/hardened: an idle, standalone Esc already received its
+		// timeout; release it even during the initial reply quarantine.
+		chunk = replyFilter.Consume(chunk, armed, !ready)
+		if len(chunk) == 0 && !f9Detached {
 			continue
 		}
 
@@ -334,7 +358,7 @@ func (p *attachStdinPump) run(ctx context.Context) (SwitchIntent, bool) {
 		// Whichever interrupt key appears first in the buffer wins, with
 		// detach > switch > scrollback precedence on a tie. Resolved by a
 		// pure helper so the precedence is unit-testable.
-		interruptIdx, outcome := resolveAttachInterrupt(chunk, p.detach, p.opts)
+		interruptIdx, outcome := resolveAttachInterruptKeys(chunk, p.detach, p.opts)
 
 		if interruptIdx >= 0 {
 			// Forward any bytes before the interrupt key, then stop.
@@ -348,9 +372,16 @@ func (p *attachStdinPump) run(ctx context.Context) (SwitchIntent, bool) {
 		}
 
 		// Forward other input to tmux PTY
-		if _, err := p.out.Write(chunk); err != nil {
-			reportErr(fmt.Errorf("PTY write error: %w", err))
-			return SwitchNone, false
+		if len(chunk) > 0 {
+			if _, err := p.out.Write(chunk); err != nil {
+				reportErr(fmt.Errorf("PTY write error: %w", err))
+				return SwitchNone, false
+			}
+		}
+		// matrix/hardened: an earlier control/switch key in the forwarded
+		// prefix wins; F9 itself and all bytes after it stay out of the pane.
+		if f9Detached {
+			return SwitchNone, true
 		}
 	}
 }

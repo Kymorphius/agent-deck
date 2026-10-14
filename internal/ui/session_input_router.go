@@ -14,6 +14,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/asheshgoplani/agent-deck/internal/tmux"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -37,9 +38,10 @@ func (r terminalCellRect) contains(x, y int) bool {
 // SessionInputRouter keeps Bubble Tea as the owner of the real stdin file
 // descriptor while allowing an embedded tmux client to receive the original
 // byte stream. In dashboard mode it uses the existing compatibility reader;
-// in session mode it bypasses Bubble Tea entirely except for Ctrl+Q, the
+// in session mode it bypasses Bubble Tea entirely except for F9 / Ctrl+Q, the
 // configured session-switch key, and mouse events outside the embedded cell
 // rectangle.
+// matrix/hardened: F9 shares the established detach signal and cancellation.
 type SessionInputRouter struct {
 	*os.File // preserve Fd() so Bubble Tea can put stdin into raw mode
 	normal   *csiuReader
@@ -55,6 +57,11 @@ type SessionInputRouter struct {
 	pending    []byte
 	rawBuf     []byte
 	inPaste    bool
+	// matrix/hardened: terminal strings stream without buffering their body;
+	// F9-looking bytes inside them remain opaque session input.
+	opaqueString    bool
+	opaqueStringEsc bool
+	opaqueStringBEL bool // matrix/hardened: BEL terminates OSC only; other strings require ST.
 
 	// Dashboard reads stop at a complete event. A matching Home.Update must
 	// finish before another read can cross a possible attach transition.
@@ -238,6 +245,9 @@ func (r *SessionInputRouter) deactivateLocked() {
 	r.switchByte = 0
 	r.rawBuf = r.rawBuf[:0]
 	r.inPaste = false
+	r.opaqueString = false // matrix/hardened: parser state belongs to this input generation.
+	r.opaqueStringEsc = false
+	r.opaqueStringBEL = false
 }
 
 func (r *SessionInputRouter) UpdateRect(rect terminalCellRect) {
@@ -417,7 +427,12 @@ func (r *SessionInputRouter) Read(p []byte) (int, error) {
 			r.mu.Unlock()
 			return copied, nil
 		}
-		partial := len(r.rawBuf) == 1 && r.rawBuf[0] == 0x1b && !r.inPaste
+		// matrix/hardened: an Escape prefix remains literal input after the
+		// same short timeout, including consecutive standalone Escape keys.
+		partial := len(r.rawBuf) > 0 && !r.inPaste
+		for _, b := range r.rawBuf {
+			partial = partial && b == 0x1b
+		}
 		r.mu.Unlock()
 		if routeErr != nil {
 			return 0, routeErr
@@ -537,6 +552,18 @@ func (r *SessionInputRouter) routeEmbeddedLocked(final bool) (toDashboard, toChi
 	i := 0
 
 	for i < len(data) {
+		// matrix/hardened: opaque terminal strings can be arbitrarily long;
+		// stream their payload until ST (or OSC's BEL) without recognizing return keys.
+		if r.opaqueString {
+			b := data[i]
+			child.WriteByte(b)
+			i++
+			if (b == 0x07 && r.opaqueStringBEL) || (r.opaqueStringEsc && b == '\\') {
+				r.opaqueString = false
+			}
+			r.opaqueStringEsc = b == 0x1b
+			continue
+		}
 		if r.inPaste {
 			if end := bytes.Index(data[i:], []byte(bracketedPasteEnd)); end >= 0 {
 				end += i + len(bracketedPasteEnd)
@@ -558,6 +585,39 @@ func (r *SessionInputRouter) routeEmbeddedLocked(final bool) (toDashboard, toChi
 			continue
 		}
 		if !final && isIncompletePrefix(data[i:], []byte(bracketedPasteStart)) {
+			break
+		}
+
+		// matrix/hardened: retain only the string introducer across reads;
+		// an Alt-prefixed string belongs to the same opaque input token.
+		if data[i] == 0x1b {
+			end := i + 1
+			for end < len(data) && data[end] == 0x1b {
+				end++
+			}
+			if end < len(data) && strings.ContainsRune("]P_^X", rune(data[end])) {
+				child.Write(data[i : end+1])
+				i = end + 1
+				r.opaqueString = true
+				r.opaqueStringEsc = false
+				r.opaqueStringBEL = data[end] == ']' // matrix/hardened: preserve each string family's terminator.
+				continue
+			}
+		}
+
+		// matrix/hardened: classify complete terminal tokens before reserving
+		// F9. Split reads, modifier prefixes and escape-string payloads must
+		// not turn an embedded terminal's ordinary bytes into a return key.
+		tokenLen, incomplete := tmux.MatrixInputTokenLength(data[i:], final)
+		if incomplete {
+			break
+		}
+		if tokenLen > 0 && tmux.MatrixIsF9Detach(data[i:i+tokenLen]) {
+			// Reuse the existing Ctrl+Q dashboard signal and its input barrier.
+			dashboard.WriteByte(0x11)
+			i = len(data)
+			r.deactivateLocked()
+			r.discardUntilIdle = true
 			break
 		}
 
@@ -630,6 +690,13 @@ func (r *SessionInputRouter) routeEmbeddedLocked(final bool) (toDashboard, toChi
 			continue
 		}
 
+		// matrix/hardened: keep non-keyboard strings and other ANSI tokens
+		// opaque so an F9-looking suffix cannot be interpreted separately.
+		if tokenLen > 1 {
+			child.Write(data[i : i+tokenLen])
+			i += tokenLen
+			continue
+		}
 		child.WriteByte(data[i])
 		i++
 	}

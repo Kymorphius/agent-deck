@@ -45,7 +45,7 @@ import (
 )
 
 // matrix/hardened: identifies our hardened build.
-var Version = "1.16.26+matrix.68" // matrix/hardened: numeric jumps activate the addressed row; overridden via -ldflags.
+var Version = "1.16.26+matrix.69" // matrix/hardened: F9 returns from sessions and Nl only jumps; overridden via -ldflags.
 
 // Table column widths for list command output
 const (
@@ -4749,7 +4749,8 @@ func printHelp() {
 	fmt.Println("  d          Delete session/group")
 	fmt.Println("  S          Settings")
 	fmt.Println("  /          Search")
-	fmt.Println("  Ctrl+Q     Detach from session")
+	// matrix/hardened: advertise the single function-key return and compatible Ctrl key.
+	fmt.Println("  F9 / Ctrl+Q  Detach from session")
 	fmt.Println("  q          Quit")
 }
 

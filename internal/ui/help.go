@@ -290,6 +290,12 @@ func (h *HelpOverlay) View() string {
 	unarchiveKey := h.key(hotkeyUnarchiveSession, "Shift+U")
 	viewArchivedKey := h.key(hotkeyViewArchived, "^")
 	detachKey := DetachByteLabel(DetachByteFromBinding(h.key(hotkeyDetach, "ctrl+q")))
+	// matrix/hardened: F9 returns in every session layout. Embedded input
+	// still uses Ctrl+Q and does not implement the full-screen Alt+Q alias.
+	detachKeys := "F9 / " + detachKey + " / Alt+Q"
+	if h.embeddedLayout {
+		detachKeys = "F9 / Ctrl+Q"
+	}
 	altSessionKey := h.key(hotkeyAltSession, "`")
 	mruBackKey := h.key(hotkeyMRUBack, "alt+left")
 	mruForwardKey := h.key(hotkeyMRUForward, "alt+right")
@@ -309,6 +315,7 @@ func (h *HelpOverlay) View() string {
 		{"'1-'9", "Jump to root group"},
 		{"3j / 3k", "Move 3 rows (any count)"},
 		{"12 / :12 + " + openSessionKey, "Open session / toggle group at line 12 (:set nonu hides numbers)"},
+		{"12l / :12l", "Go to line 12 without opening"}, // matrix/hardened: keep a cursor-only address alongside numeric activation.
 		{"''", "Back to the row before the last 'N / :N jump"},
 		{"Space", "Jump mode"},
 		{altSessionKey, "Alternate session (swap with the previous one, vim-style)"},
@@ -340,7 +347,7 @@ func (h *HelpOverlay) View() string {
 			items: [][2]string{
 				{openSessionKey, quickStartEnter}, // matrix/hardened: primary open key follows configuration.
 				{restartKey, "Restart selected session"},
-				{detachKey + " / Alt+Q", "Detach from session"}, // matrix/hardened: Alt+Q too
+				{detachKeys, "Detach from session"}, // matrix/hardened: single-key return and available compatibility chords.
 				{helpKey, "Open this help"},
 			},
 		},

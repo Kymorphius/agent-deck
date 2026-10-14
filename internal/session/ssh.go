@@ -741,6 +741,16 @@ func runRemoteAttach(cmd *exec.Cmd, transport string) error {
 			default:
 			}
 			if !tmux.PollFdReady(fd, tmux.AttachStdinPollInterval) {
+				// matrix/hardened: F9-prefix buffering must not keep a lone
+				// Esc from the remote session when no following byte arrives.
+				select {
+				case <-stdinReaderStop:
+					return
+				default:
+				}
+				if err := input.flushEscape(); err != nil {
+					return
+				}
 				continue
 			}
 			// Re-check the stop signal: it can fire while this goroutine was
@@ -884,14 +894,19 @@ func (o *attachOutput) discard() {
 type sshAttachInput struct {
 	writer          io.Writer
 	detachRequested atomic.Bool
+	// matrix/hardened: SSH and mosh share local F9/paste token recognition.
+	f9Input tmux.MatrixF9DetachInput
 }
 
 func (input *sshAttachInput) forward(data []byte) (bool, error) {
 	// matrix/hardened: Alt+Q also detaches (tmux/matrix_alt_detach.go).
-	if tmux.MatrixIsAltQDetach(data) {
+	if !input.f9Input.Protected() && tmux.MatrixIsAltQDetach(data) {
 		input.detachRequested.Store(true)
 		return true, nil
 	}
+	// matrix/hardened: inspect only original reads for Alt+Q; F9 may span
+	// reads and must be recognized outside paste/ANSI strings before writing.
+	data, f9Detached := input.f9Input.Consume(data)
 	if idx := tmux.IndexCtrlQ(data); idx >= 0 {
 		// Record intent before forwarding can block or SSH can exit.
 		input.detachRequested.Store(true)
@@ -900,8 +915,30 @@ func (input *sshAttachInput) forward(data []byte) (bool, error) {
 		}
 		return true, nil
 	}
+	if f9Detached {
+		// matrix/hardened: publish detach intent before prefix forwarding
+		// can block or the transport exits, matching the Ctrl+Q ordering.
+		input.detachRequested.Store(true)
+		if len(data) > 0 {
+			_, _ = input.writer.Write(data)
+		}
+		return true, nil
+	}
+	if len(data) == 0 {
+		return false, nil
+	}
 	_, err := input.writer.Write(data)
 	return false, err
+}
+
+// matrix/hardened: retain paste/ANSI state across idle polls; only an isolated
+// Esc prefix receives the short timeout used to preserve ordinary cancellation.
+func (input *sshAttachInput) flushEscape() error {
+	if !input.f9Input.HasPendingEscape() {
+		return nil
+	}
+	_, err := input.writer.Write(input.f9Input.Flush())
+	return err
 }
 
 func (input *sshAttachInput) result(err error) error {

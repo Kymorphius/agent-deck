@@ -10,7 +10,8 @@ import (
 
 // matrix/hardened: vim-style count prefix for the session list ("3j", "12k").
 //
-// Digits followed by Enter/o activate the numbered row. With j/k they remain
+// matrix/hardened: digits followed by l only select the numbered row;
+// Enter/o activate it. With j/k they remain
 // a movement count, as in vim: "3j" moves three rows down, "12k"
 // twelve up (also with up/down). Ctrl+N/P are not navigation. "0" extends a pending count
 // ("10j"); with no count pending it still clears the status filter. The old
@@ -180,7 +181,8 @@ func (h *Home) matrixRenderPendingBar() string {
 		if keys == "" {
 			keys = strconv.Itoa(h.navCount.n)
 		}
-		hint = fmt.Sprintf("   %s opens line %s · j/k (or ↓/↑) moves %d rows · Esc cancels", h.matrixNumericConfirmKeys(), keys, h.navCount.n)
+		// matrix/hardened: distinguish selecting a line from opening its target.
+		hint = fmt.Sprintf("   l goes to line %s · %s opens · j/k (or ↓/↑) moves %d rows · Esc cancels", keys, h.matrixNumericConfirmKeys(), h.navCount.n)
 	}
 	line := lipgloss.NewStyle().Foreground(ColorYellow).Bold(true).Render(keys) +
 		lipgloss.NewStyle().Foreground(ColorComment).Render(hint)

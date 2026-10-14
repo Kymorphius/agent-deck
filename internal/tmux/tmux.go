@@ -151,7 +151,8 @@ func (s *Session) themedStatusRight(themeStyle tmuxThemeStyle) string {
 	detach, switchKey, switchOn := detachHintLabel, switchHintLabel, switchHintEnabled
 	statusHintMu.RUnlock()
 
-	hints := fmt.Sprintf("#[fg=%s]%s detach#[default]", themeStyle.hintColor, detach)
+	// matrix/hardened: F9 returns to the deck alongside the configured Ctrl key.
+	hints := fmt.Sprintf("#[fg=%s]f9/%s detach#[default]", themeStyle.hintColor, detach)
 	if switchOn {
 		hints += fmt.Sprintf(" · #[fg=%s]%s switch#[default]", themeStyle.hintColor, switchKey)
 	}

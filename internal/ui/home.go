@@ -11891,12 +11891,12 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	raw := msg.String()
 	key := h.normalizeMainKey(raw)
 	uiLog.Info("keypress", "raw", raw, "normalized", key, "type", msg.Type, "runes", string(msg.Runes))
-	// matrix/hardened: N followed by an opening key activates numbered row N;
+	// matrix/hardened: Nl only selects numbered row N; Enter/open activates it.
 	// j/k still consume the same digits as a relative movement count.
-	if h.navCount.n > 0 && !h.navCount.groupJump && (raw == "enter" || key == defaultHotkeyBindings[hotkeyOpenSession]) {
+	if h.navCount.n > 0 && !h.navCount.groupJump && (raw == "l" || raw == "enter" || key == defaultHotkeyBindings[hotkeyOpenSession]) {
 		text := h.navCount.digits
 		h.matrixResetNav()
-		return h, h.matrixRunCmd(text)
+		return h, h.matrixRunCmd(text, raw == "l")
 	}
 
 	if key == "" {

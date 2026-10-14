@@ -4,7 +4,8 @@ package ui
 //
 // Every list row except view-mode dividers gets a number (group headers too,
 // so ":N" can land on a group). ":" opens a one-line command prompt in place of
-// the help bar: ":12<Enter>" or ":12o" jumps to and activates row 12, ":set nonu" /
+// the help bar: ":12<Enter>" or ":12o" jumps to and activates row 12,
+// matrix/hardened: ":12l" only selects row 12. ":set nonu" /
 // ":set nu" hide or show the numbers for this run. Numbers are drawn only in
 // the classic one-line-per-row list; the embedded sidebar's card heights
 // depend on width, so it keeps its full width (":N" still works there).
@@ -89,11 +90,16 @@ func (h *Home) matrixJumpToLine(n int) bool {
 
 // matrixHandleCmdKey handles keys while the ":" prompt is open.
 func (h *Home) matrixHandleCmdKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	// matrix/hardened: only a complete numeric command accepts the configured
-	// open key; the o in commands such as "set nonu" remains ordinary text.
+	// matrix/hardened: only a complete numeric command accepts l or the
+	// configured open key; letters in textual commands remain ordinary text.
 	text := strings.TrimSpace(h.navCount.cmdBuf)
-	if matrixNumericCommand(text) && h.normalizeMainKey(msg.String()) == defaultHotkeyBindings[hotkeyOpenSession] {
-		return h.matrixSubmitCmd()
+	if matrixNumericCommand(text) {
+		if msg.String() == "l" {
+			return h.matrixSubmitCmd(true)
+		}
+		if h.normalizeMainKey(msg.String()) == defaultHotkeyBindings[hotkeyOpenSession] {
+			return h.matrixSubmitCmd(false)
+		}
 	}
 	switch msg.Type {
 	case tea.KeyEsc, tea.KeyCtrlC:
@@ -109,7 +115,7 @@ func (h *Home) matrixHandleCmdKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		h.navCount.cmdBuf = string(r[:len(r)-1])
 		return h, nil
 	case tea.KeyEnter:
-		return h.matrixSubmitCmd()
+		return h.matrixSubmitCmd(false)
 	case tea.KeySpace:
 		h.matrixCmdAppend(" ")
 		return h, nil
@@ -128,15 +134,15 @@ func (h *Home) matrixCmdAppend(s string) {
 	}
 }
 
-// matrix/hardened: submit once, clearing the numeric prefix before activation.
-func (h *Home) matrixSubmitCmd() (tea.Model, tea.Cmd) {
+// matrix/hardened: clear the numeric prefix before either selecting or opening.
+func (h *Home) matrixSubmitCmd(jumpOnly bool) (tea.Model, tea.Cmd) {
 	text, overflow := strings.TrimSpace(h.navCount.cmdBuf), h.navCount.cmdOverflow
 	h.matrixResetNav()
 	if overflow {
 		h.setError(fmt.Errorf("command is too long (maximum %d bytes)", matrixCmdMaxLen))
 		return h, nil
 	}
-	return h, h.matrixRunCmd(text)
+	return h, h.matrixRunCmd(text, jumpOnly)
 }
 
 func matrixNumericCommand(text string) bool {
@@ -156,7 +162,9 @@ func matrixNumericCommand(text string) bool {
 	return true
 }
 
-func (h *Home) matrixRunCmd(text string) tea.Cmd {
+// matrix/hardened: numeric l refreshes the selection preview without entering
+// a session, restarting a stopped session, or changing group/window expansion.
+func (h *Home) matrixRunCmd(text string, jumpOnly bool) tea.Cmd {
 	if text == "" {
 		return nil
 	}
@@ -165,6 +173,9 @@ func (h *Home) matrixRunCmd(text string) tea.Cmd {
 			_, total := h.matrixRowNumbers()
 			h.setError(fmt.Errorf("no line %d (list has %d)", n, total))
 			return nil
+		}
+		if jumpOnly {
+			return h.fetchSelectedPreview()
 		}
 		// matrix/hardened: reuse the ordinary opening action after resolving the row.
 		_, cmd := h.activateSelectedItem()
@@ -195,6 +206,7 @@ func (h *Home) matrixNumericConfirmKeys() string {
 func (h *Home) matrixRenderCmdBar() string {
 	border := lipgloss.NewStyle().Foreground(ColorBorder).Render(strings.Repeat("─", max(0, h.width)))
 	prompt := lipgloss.NewStyle().Foreground(ColorText).Render(":" + h.navCount.cmdBuf + "█")
-	hint := lipgloss.NewStyle().Foreground(ColorComment).Render("   N + " + h.matrixNumericConfirmKeys() + " opens line · set nu / set nonu · Esc cancel")
+	// matrix/hardened: the command bar advertises the cursor-only suffix too.
+	hint := lipgloss.NewStyle().Foreground(ColorComment).Render("   N+l goes to line · N+" + h.matrixNumericConfirmKeys() + " opens · set nu / set nonu · Esc cancel")
 	return lipgloss.JoinVertical(lipgloss.Left, border, lipgloss.NewStyle().MaxWidth(h.width).Render(prompt+hint))
 }
