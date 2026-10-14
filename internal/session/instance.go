@@ -6569,6 +6569,29 @@ func (i *Instance) updateStatus(pass *StatusUpdatePass, syncMetadata bool) error
 	defer i.matrixRefreshTurnInterrupt()
 	i.mu.Lock()
 	defer i.mu.Unlock()
+	var exists bool
+	var checkedExists bool
+	// matrix/hardened: queued launches intentionally have no pane yet. Preserve
+	// that durable state before startup grace/death classification, including
+	// after reload. A demonstrably existing pane still reconciles normally so
+	// a stale queued value cannot hide an already-started or dead pane.
+	if i.Status == StatusQueued {
+		s := i.tmuxSession
+		if s == nil {
+			return nil
+		}
+		stopRevision := i.stopRevision
+		i.mu.Unlock()
+		live, err := s.ProbeExists()
+		i.mu.Lock()
+		if i.tmuxSession != s || i.stopRevision != stopRevision || i.Status != StatusQueued {
+			return nil
+		}
+		if err != nil || !live {
+			return nil
+		}
+		exists, checkedExists = true, true
+	}
 	// Short grace period for tmux initialization (not Claude startup)
 	// Use lastStartTime for accuracy on restarts, fallback to CreatedAt
 	graceTime := i.lastStartTime
@@ -6577,9 +6600,7 @@ func (i *Instance) updateStatus(pass *StatusUpdatePass, syncMetadata bool) error
 	}
 	// 1.5 seconds is enough for tmux to create the session (<100ms typically)
 	// Don't block status detection once tmux session exists
-	var exists bool
-	var checkedExists bool
-	if time.Since(graceTime) < 1500*time.Millisecond {
+	if !checkedExists && time.Since(graceTime) < 1500*time.Millisecond {
 		// Only skip if tmux session doesn't exist yet
 		if i.tmuxSession == nil {
 			if i.Status != StatusRunning && i.Status != StatusIdle && i.Status != StatusStopped {
