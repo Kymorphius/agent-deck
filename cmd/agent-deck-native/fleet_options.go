@@ -13,12 +13,13 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/asheshgoplani/agent-deck/internal/nativeregistry"
 	"github.com/google/uuid"
 )
 
 func isFleetCommand(command string) bool {
 	switch command {
-	case "serve", "ui", "list", "create", "start", "rename", "remove", "shutdown":
+	case "serve", "ui", "manager-start", "list", "create", "start", "rename", "move", "remove", "shutdown":
 		return true
 	}
 	return false
@@ -62,21 +63,27 @@ func parseFleetOptions(args []string, help io.Writer) (options, error) {
 	}
 	var env envFlags
 	switch o.Command {
+	case "serve":
+		flags.BoolVar(&o.Background, "background", false, "internal detached child: readiness is provided over IPC")
 	case "ui":
 		flags.StringVar(&o.Cwd, "cwd", "", "default project directory")
 	case "create":
 		flags.StringVar(&o.Name, "name", "", "required session name")
-		flags.StringVar(&o.Tool, "tool", "shell", "shell, codex or custom")
+		flags.StringVar(&o.Tool, "tool", "shell", "shell, codex, powershell or custom")
+		flags.StringVar(&o.Group, "group", "", "session group (empty: default)")
 		flags.StringVar(&o.Cwd, "cwd", "", "project working directory")
 		flags.IntVar(&o.Cols, "cols", 120, "initial columns")
 		flags.IntVar(&o.Rows, "rows", 30, "initial rows")
 		flags.Var(&env, "env", "saved environment override NAME=VALUE")
 		flags.BoolVar(&o.NoStart, "no-start", false, "save without launching")
-	case "start", "rename", "remove":
+	case "start", "rename", "move", "remove":
 		flags.StringVar(&o.SessionID, "session", "", "required session UUID")
 		flags.StringVar(&o.RunID, "run-id", "", "expected run UUID")
 		if o.Command == "rename" {
 			flags.StringVar(&o.Name, "name", "", "required new name")
+		}
+		if o.Command == "move" {
+			flags.StringVar(&o.Group, "group", "", "required group; empty moves to default")
 		}
 	}
 	flagArgs := args[1:]
@@ -123,15 +130,27 @@ func parseFleetOptions(args []string, help io.Writer) (options, error) {
 			}
 		}
 	}
-	if (o.Command == "start" || o.Command == "rename" || o.Command == "remove") && o.SessionID == "" {
+	if (o.Command == "start" || o.Command == "rename" || o.Command == "move" || o.Command == "remove") && o.SessionID == "" {
 		return o, errors.New("--session is required")
 	}
 	if (o.Command == "create" || o.Command == "rename") && strings.TrimSpace(o.Name) == "" {
 		return o, errors.New("--name is required")
 	}
+	if o.Command == "create" || o.Command == "move" {
+		if err := nativeregistry.ValidateGroup(o.Group); err != nil {
+			return o, err
+		}
+	}
+	if o.Command == "move" {
+		groupProvided := false
+		flags.Visit(func(f *flag.Flag) { groupProvided = groupProvided || f.Name == "group" })
+		if !groupProvided {
+			return o, errors.New("move requires --group; an empty value selects the default group")
+		}
+	}
 	if o.Command == "create" {
-		if o.Tool != "shell" && o.Tool != "codex" && o.Tool != "custom" {
-			return o, errors.New("tool must be shell, codex or custom")
+		if o.Tool != "shell" && o.Tool != "codex" && o.Tool != "powershell" && o.Tool != "custom" {
+			return o, errors.New("tool must be shell, codex, powershell or custom")
 		}
 		if o.Cols < 1 || o.Cols > 500 || o.Rows < 1 || o.Rows > 300 {
 			return o, errors.New("dimensions must be 1..500 by 1..300")

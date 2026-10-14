@@ -47,7 +47,7 @@ func nativeStartFleet(t *testing.T, stateDir string) *nativeFleetFixture {
 			return nil, err
 		}
 		return process, nil
-	})
+	}, nativefleet.Identity{StateDir: stateDir, Version: version})
 	if err != nil {
 		_ = store.Close()
 		t.Fatalf("create private native manager: %v", err)

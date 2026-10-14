@@ -26,6 +26,8 @@ type options struct {
 	Screen, JSON                           bool
 	Data                                   []byte
 	StateDir, SessionID, RunID, Name, Tool string
+	Group                                  string
+	Background                             bool
 	NoStart                                bool
 }
 
@@ -208,17 +210,19 @@ func mergedEnv(base, overrides []string) []string {
 }
 
 func printHelp(output io.Writer) {
-	fmt.Fprintln(output, `agent-deck-native 0.2.0+matrix.prototype
+	fmt.Fprintln(output, `agent-deck-native 0.3.0+matrix.prototype
 Experimental standalone Windows terminal host; this is not the complete Agent Deck port.
 
 Usage:
   agent-deck-native --version
   agent-deck-native serve [--state-dir DIR] [--pipe NAME]
   agent-deck-native ui [--state-dir DIR] [--pipe NAME] [--cwd DIR]
+  agent-deck-native manager-start [--state-dir DIR] [--pipe NAME] [--json]
   agent-deck-native list [--state-dir DIR] [--pipe NAME] [--json]
-  agent-deck-native create --name NAME [--tool shell|codex|custom] [--cwd DIR] [--no-start] [--pipe NAME] [-- executable args...]
+  agent-deck-native create --name NAME [--tool shell|codex|powershell|custom] [--cwd DIR] [--group NAME] [--no-start] [--pipe NAME] [-- executable args...]
   agent-deck-native start --session UUID [--pipe NAME] [--json]
   agent-deck-native rename --session UUID --name NAME [--pipe NAME]
+  agent-deck-native move --session UUID --group NAME [--run-id UUID] [--pipe NAME]
   agent-deck-native remove --session UUID [--run-id UUID] [--pipe NAME]
   agent-deck-native shutdown [--pipe NAME]
   agent-deck-native host --pipe NAME [--cwd DIR] [--cols N --rows N] [--env NAME=VALUE] -- executable [args...]
@@ -235,6 +239,8 @@ host runs in the foreground and owns one ConPTY child. Launch it independently
 to keep the child alive when a client closes. Ctrl+Q detaches attach only.
 No service, scheduled task, hook, update check or telemetry is installed.
 serve owns multiple sessions and a private local registry; ui exits independently.
+ui (or no arguments) starts or reuses a verified detached manager automatically.
+Use / to search, Tab to filter groups, and g to move a selected session.
 Managed attach/send/capture/resize/stop accept --session UUID and --run-id UUID.
 Use COMMAND --help for flags.`)
 }

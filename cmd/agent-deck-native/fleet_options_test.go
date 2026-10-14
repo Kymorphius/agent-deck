@@ -105,3 +105,32 @@ func TestUIAttachCommandBindsExactSessionAndRun(t *testing.T) {
 		t.Fatal("attach accepted an unstarted descriptor")
 	}
 }
+
+func TestManagedGroupMoveRequiresExplicitDestinationAndRun(t *testing.T) {
+	id, runID := uuid.NewString(), uuid.NewString()
+	config, err := parseOptions([]string{"move", "--state-dir", t.TempDir(), "--session", id, "--run-id", runID, "--group", ""}, io.Discard)
+	if err != nil || config.Group != "" || config.SessionID != id || config.RunID != runID {
+		t.Fatalf("move to default group lost exact run: config=%+v err=%v", config, err)
+	}
+	for _, args := range [][]string{
+		{"move", "--session", id},
+		{"move", "--session", id, "--group", "研发\n运维"},
+		{"create", "--name", "test", "--group", "\x1b[31mhidden"},
+	} {
+		if _, err := parseOptions(args, io.Discard); err == nil {
+			t.Fatalf("accepted ambiguous or controlled group mutation: %q", args)
+		}
+	}
+}
+
+func TestPowerShellLaunchUsesNativeProgramAndExplicitArgv(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("native Windows tool")
+	}
+	root := t.TempDir()
+	t.Setenv("SystemRoot", root)
+	launch, err := launchSpec("powershell", root, "", nil, nil, 120, 30)
+	if err != nil || launch.Executable != filepath.Join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe") || !reflect.DeepEqual(launch.Args, []string{"-NoLogo", "-NoProfile"}) || len(launch.Env) != 0 {
+		t.Fatalf("PowerShell launch changed native argv or saved inherited env: launch=%+v err=%v", launch, err)
+	}
+}

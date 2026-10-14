@@ -124,6 +124,9 @@ func TestReplacedRootFailsClosedAndCloseDoesNotTraverse(t *testing.T) {
 	if _, err := store.List(); !errors.Is(err, ErrUnsafePath) {
 		t.Fatalf("replaced root read: %v", err)
 	}
+	if advertised, err := store.Directory(); advertised != "" || !errors.Is(err, ErrUnsafePath) {
+		t.Fatalf("replaced root advertised as owned: %q, %v", advertised, err)
+	}
 	if _, err := store.Create("rejected", "shell", testLaunch()); !errors.Is(err, ErrUnsafePath) {
 		t.Fatalf("replaced root write: %v", err)
 	}

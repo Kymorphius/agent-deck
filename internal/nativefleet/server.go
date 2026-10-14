@@ -7,9 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"reflect"
+	"runtime"
 	"sort"
+	"strings"
 	"sync"
+	"unicode"
 
 	"github.com/asheshgoplani/agent-deck/internal/nativeregistry"
 	"github.com/asheshgoplani/agent-deck/internal/terminalhost"
@@ -17,8 +21,9 @@ import (
 )
 
 const (
-	MaxSessions = 32
-	MaxClients  = 64
+	MaxSessions     = 32
+	MaxClients      = 64
+	ProtocolVersion = 2
 )
 
 var (
@@ -44,6 +49,7 @@ type Server struct {
 	store    *nativeregistry.Store
 	launch   func(terminalhost.LaunchSpec) (terminalhost.Process, error)
 	identity string
+	metadata Identity
 	mu       sync.Mutex
 	sessions map[string]*entry
 	closing  bool
@@ -58,11 +64,46 @@ type Server struct {
 	transport transport
 }
 
+// Identity describes the explicit manager scope clients must verify before
+// reusing a background process. It does not change registry or launch paths.
+// matrix/hardened: mismatched old managers must never be silently restarted.
+type Identity struct {
+	StateDir string
+	Version  string
+}
+
 // New consumes store ownership only on success. Recovered descriptions are
 // stopped; restarting a manager must never restart an agent or account flow.
-func New(store *nativeregistry.Store, launch func(terminalhost.LaunchSpec) (terminalhost.Process, error)) (*Server, error) {
+func New(store *nativeregistry.Store, launch func(terminalhost.LaunchSpec) (terminalhost.Process, error), identities ...Identity) (*Server, error) {
 	if store == nil || launch == nil {
 		return nil, errors.New("native registry and process launcher are required")
+	}
+	var metadata Identity
+	if len(identities) > 1 {
+		return nil, errors.New("native manager accepts at most one identity")
+	}
+	if len(identities) == 1 {
+		metadata = identities[0]
+		if !filepath.IsAbs(metadata.StateDir) || filepath.Clean(metadata.StateDir) != metadata.StateDir {
+			return nil, errors.New("native manager identity requires a canonical absolute state directory")
+		}
+		if metadata.Version == "" || strings.TrimSpace(metadata.Version) != metadata.Version || strings.ContainsFunc(metadata.Version, unicode.IsControl) {
+			return nil, errors.New("native manager identity requires a nonempty version without whitespace or controls")
+		}
+		root, err := store.Directory()
+		if err != nil {
+			return nil, err
+		}
+		matches := metadata.StateDir == root
+		if runtime.GOOS == "windows" {
+			matches = strings.EqualFold(metadata.StateDir, root)
+		}
+		if !matches {
+			return nil, errors.New("native manager identity state directory differs from its owned registry")
+		}
+		// matrix/hardened: the store verifies held path identities before this
+		// handshake; a caller label cannot advertise a different namespace.
+		metadata.StateDir = root
 	}
 	records, err := store.List()
 	if err != nil {
@@ -71,7 +112,7 @@ func New(store *nativeregistry.Store, launch func(terminalhost.LaunchSpec) (term
 	if len(records) > MaxSessions {
 		return nil, ErrCapacity
 	}
-	s := &Server{store: store, launch: launch, identity: uuid.NewString(), sessions: make(map[string]*entry)}
+	s := &Server{store: store, launch: launch, identity: uuid.NewString(), metadata: metadata, sessions: make(map[string]*entry)}
 	for _, record := range records {
 		if !supportedTool(record.Tool) {
 			return nil, fmt.Errorf("unsupported native tool %q", record.Tool)
@@ -82,7 +123,9 @@ func New(store *nativeregistry.Store, launch func(terminalhost.LaunchSpec) (term
 	return s, nil
 }
 
-func supportedTool(tool string) bool { return tool == "shell" || tool == "codex" || tool == "custom" }
+func supportedTool(tool string) bool {
+	return tool == "shell" || tool == "codex" || tool == "powershell" || tool == "custom"
+}
 
 func (s *Server) begin() error {
 	s.mu.Lock()
@@ -119,7 +162,7 @@ func (s *Server) Dispatch(request terminalhost.Request) terminalhost.Response {
 		return s.list(request.Op == "fleet-status")
 	case "fleet-create":
 		return s.create(request)
-	case "fleet-start", "fleet-stop", "fleet-rename", "fleet-remove", "status", "capture", "send", "resize", "stop":
+	case "fleet-start", "fleet-stop", "fleet-rename", "fleet-move", "fleet-remove", "status", "capture", "send", "resize", "stop":
 		return s.route(request)
 	default:
 		return failed(fmt.Errorf("unknown native manager operation %q", request.Op))
@@ -177,7 +220,7 @@ func (e *entry) info() terminalhost.SessionInfo {
 			state = "exited"
 		}
 	}
-	return terminalhost.SessionInfo{ID: e.record.ID, Name: e.record.Name, Tool: e.record.Tool, Dir: e.record.Launch.Dir,
+	return terminalhost.SessionInfo{ID: e.record.ID, Name: e.record.Name, Tool: e.record.Tool, Group: e.record.Group, Dir: e.record.Launch.Dir,
 		State: state, PID: r.PID, HostPID: r.HostPID, RunID: e.runID, ExitCode: r.ExitCode, Error: r.Error,
 		CreatedAt: e.record.CreatedAt, UpdatedAt: e.record.UpdatedAt}
 }
@@ -200,6 +243,9 @@ func (s *Server) list(identity bool) terminalhost.Response {
 	r := terminalhost.Response{OK: true, HostPID: os.Getpid(), Sessions: make([]terminalhost.SessionInfo, 0)}
 	if identity {
 		r.RunID = s.identity
+		// matrix/hardened: only the startup handshake needs manager scope and
+		// protocol details; frequent session-list refreshes omit them.
+		r.ManagerStateDir, r.ManagerVersion, r.ProtocolVersion = s.metadata.StateDir, s.metadata.Version, ProtocolVersion
 	}
 	for _, e := range s.entries() {
 		e.mu.Lock()
@@ -224,7 +270,7 @@ func (s *Server) create(request terminalhost.Request) terminalhost.Response {
 		return failed(errors.New("native session launch description is required"))
 	}
 	if !supportedTool(request.Tool) {
-		return failed(errors.New("native tool must be shell, codex, or custom"))
+		return failed(errors.New("native tool must be shell, codex, powershell, or custom"))
 	}
 	if request.SessionID != "" || request.RunID != "" {
 		return failed(errors.New("new native session must not specify an existing session or run ID"))
@@ -238,7 +284,7 @@ func (s *Server) create(request terminalhost.Request) terminalhost.Response {
 		s.createMu.Unlock()
 		return failed(ErrCapacity)
 	}
-	record, err := s.store.Create(request.Name, request.Tool, *request.Launch)
+	record, err := s.store.CreateInGroup(request.Name, request.Tool, request.Group, *request.Launch)
 	if err != nil {
 		s.createMu.Unlock()
 		return failed(err)
@@ -284,6 +330,12 @@ func (s *Server) route(request terminalhost.Request) terminalhost.Response {
 		err = e.stop()
 	case "fleet-rename":
 		if err = s.store.Rename(e.record.ID, request.Name); err == nil {
+			e.record, err = s.store.Get(e.record.ID)
+		}
+	case "fleet-move":
+		// matrix/hardened: moving updates only durable metadata under the same
+		// run fence as rename; it must never restart or reconfigure the process.
+		if err = s.store.Move(e.record.ID, request.Group); err == nil {
 			e.record, err = s.store.Get(e.record.ID)
 		}
 	case "fleet-remove":

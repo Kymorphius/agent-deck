@@ -19,16 +19,34 @@ import (
 	"github.com/asheshgoplani/agent-deck/internal/nativeui"
 	"github.com/asheshgoplani/agent-deck/internal/terminalhost"
 	"github.com/asheshgoplani/agent-deck/internal/winipc"
+	"golang.org/x/term"
 )
 
 func runFleet(config options, stdout, stderr io.Writer) error {
 	if config.Command == "serve" {
+		if config.Background {
+			stdout = io.Discard
+		}
 		return runFleetServer(config, stdout)
 	}
-	if config.Command == "ui" {
+	if config.Command == "ui" || config.Command == "manager-start" {
+		if config.Command == "ui" && (!term.IsTerminal(int(os.Stdin.Fd())) || !term.IsTerminal(int(os.Stdout.Fd()))) {
+			return errors.New("请在交互式 Windows 终端中打开列表；后台启动可使用 manager-start")
+		}
+		manager, err := ensureNativeManager(context.Background(), config)
+		if err != nil {
+			return err
+		}
+		if config.Command == "manager-start" {
+			if config.JSON {
+				return json.NewEncoder(stdout).Encode(manager)
+			}
+			_, err := fmt.Fprintf(stdout, "管理后台已就绪：PID %d，注册库 %s\n", manager.HostPID, manager.ManagerStateDir)
+			return err
+		}
 		return nativeui.Run(&nativeService{pipe: config.Pipe}, config.Cwd)
 	}
-	request := terminalhost.Request{SessionID: config.SessionID, RunID: config.RunID, Name: config.Name, Tool: config.Tool}
+	request := terminalhost.Request{SessionID: config.SessionID, RunID: config.RunID, Name: config.Name, Tool: config.Tool, Group: config.Group}
 	switch config.Command {
 	case "list":
 		request.Op = "fleet-list"
@@ -38,7 +56,7 @@ func runFleet(config options, stdout, stderr io.Writer) error {
 			return err
 		}
 		request.Op, request.Launch, request.AutoStart = "fleet-create", &launch, !config.NoStart
-	case "start", "rename", "remove":
+	case "start", "rename", "move", "remove":
 		request.Op = "fleet-" + config.Command
 		if request.RunID == "" {
 			info, err := lookupSession(context.Background(), config.Pipe, config.SessionID)
@@ -74,7 +92,7 @@ func runFleet(config options, stdout, stderr io.Writer) error {
 	}
 	if len(response.Sessions) > 0 {
 		for _, info := range response.Sessions {
-			fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\t%s\n", info.ID, info.Name, info.Tool, info.State, info.Dir)
+			fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\t%s\t%s\n", info.ID, info.Name, info.Tool, info.State, info.Group, info.Dir)
 		}
 		return nil
 	}
@@ -98,7 +116,7 @@ func runFleetServer(config options, stdout io.Writer) (resultErr error) {
 			return nil, err
 		}
 		return process, nil
-	})
+	}, nativefleet.Identity{StateDir: config.StateDir, Version: version})
 	if err != nil {
 		_ = store.Close()
 		return err
@@ -140,6 +158,12 @@ func launchSpec(tool, cwd, executable string, args, env []string, cols, rows int
 			} else {
 				executable = "/bin/sh"
 			}
+		case "powershell":
+			if runtime.GOOS != "windows" {
+				return terminalhost.LaunchSpec{}, errors.New("PowerShell 工具需要 Windows 原生环境")
+			}
+			executable = filepath.Join(os.Getenv("SystemRoot"), "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+			args = []string{"-NoLogo", "-NoProfile"}
 		case "codex":
 			if path, err := exec.LookPath("codex.exe"); err == nil {
 				executable = path
@@ -185,11 +209,14 @@ func (s *nativeService) List(ctx context.Context) ([]terminalhost.SessionInfo, e
 	return r.Sessions, err
 }
 func (s *nativeService) Create(ctx context.Context, name, tool, cwd string) (terminalhost.SessionInfo, error) {
+	return s.CreateInGroup(ctx, name, tool, cwd, "")
+}
+func (s *nativeService) CreateInGroup(ctx context.Context, name, tool, cwd, group string) (terminalhost.SessionInfo, error) {
 	launch, err := launchSpec(tool, cwd, "", nil, nil, 120, 30)
 	if err != nil {
 		return terminalhost.SessionInfo{}, err
 	}
-	r, err := callHost(ctx, s.pipe, terminalhost.Request{Op: "fleet-create", Name: name, Tool: tool, Launch: &launch, AutoStart: true})
+	r, err := callHost(ctx, s.pipe, terminalhost.Request{Op: "fleet-create", Name: name, Tool: tool, Group: group, Launch: &launch, AutoStart: true})
 	if err != nil {
 		if len(r.Sessions) == 1 {
 			return r.Sessions[0], err
@@ -223,6 +250,10 @@ func (s *nativeService) Rename(ctx context.Context, id, name string) error {
 }
 func (s *nativeService) Remove(ctx context.Context, id, runID string) error {
 	_, err := callHost(ctx, s.pipe, terminalhost.Request{Op: "fleet-remove", SessionID: id, RunID: runID})
+	return err
+}
+func (s *nativeService) Move(ctx context.Context, id, runID, group string) error {
+	_, err := callHost(ctx, s.pipe, terminalhost.Request{Op: "fleet-move", SessionID: id, RunID: runID, Group: group})
 	return err
 }
 func (s *nativeService) AttachCommand(info terminalhost.SessionInfo) (*exec.Cmd, error) {
