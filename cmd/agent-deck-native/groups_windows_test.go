@@ -83,9 +83,10 @@ func nativeGroupShellFromUI(t *testing.T, ui *nativeFleetUI, fixture *nativeFlee
 	nativeWrite(t, ui.viewer, "\x01\x0b"+name+"\t")
 	nativeFleetFrame(t, ui, "grouped creation directory focus", name, "› 目录：")
 	nativeWrite(t, ui.viewer, "\x01\x0b"+cwd+"\t")
-	nativeFleetFrame(t, ui, "grouped creation tool focus", cwd, "› 工具：", "[Shell]")
+	// matrix/hardened: focus and Shell selection must be on the same current row.
+	nativeFleetFrame(t, ui, "grouped creation tool focus", cwd, "› 工具：[Shell]")
 	nativeWrite(t, ui.viewer, "\t")
-	nativeFleetFrame(t, ui, "fourth creation field is group", "› 分组：", "[Shell]")
+	nativeFleetFrame(t, ui, "fourth creation field is group", "› 分组：", "工具：[Shell]")
 	nativeWrite(t, ui.viewer, "\x01\x0b"+group+"\r")
 	info := nativeFleetFind(t, fixture.pipe, name, "running")
 	if info.Group != group || info.Tool != "shell" || info.ID == "" || info.RunID == "" || info.PID == 0 || info.HostPID != os.Getpid() || !strings.EqualFold(info.Dir, cwd) {
