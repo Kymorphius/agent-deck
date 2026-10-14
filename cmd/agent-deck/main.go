@@ -45,7 +45,7 @@ import (
 )
 
 // matrix/hardened: identifies our hardened build.
-var Version = "1.16.26+matrix.67" // matrix/hardened: Ctrl+P and Option+P open pinned view; overridden via -ldflags.
+var Version = "1.16.26+matrix.68" // matrix/hardened: numeric jumps activate the addressed row; overridden via -ldflags.
 
 // Table column widths for list command output
 const (

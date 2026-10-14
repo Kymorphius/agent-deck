@@ -10,7 +10,8 @@ import (
 
 // matrix/hardened: vim-style count prefix for the session list ("3j", "12k").
 //
-// Digits are a count only, as in vim: "3j" moves three rows down, "12k"
+// Digits followed by Enter/o activate the numbered row. With j/k they remain
+// a movement count, as in vim: "3j" moves three rows down, "12k"
 // twelve up (also with up/down). Ctrl+N/P are not navigation. "0" extends a pending count
 // ("10j"); with no count pending it still clears the status filter. The old
 // plain-digit "jump to root group N" moved to "'" followed by the digit
@@ -27,11 +28,13 @@ const matrixGroupJumpKey = "'"
 const matrixCmdKey = ":"
 
 type matrixNavCount struct {
-	n         int
-	groupJump bool   // "'" pressed; the next digit picks the root group
-	cmd       bool   // ":" prompt open (matrix_line_numbers.go)
-	cmdBuf    string // text typed after ":"
-	noNumbers bool   // ":set nonu"; survives resets
+	n           int
+	digits      string // matrix/hardened: retain the full row number separately from the capped movement count.
+	groupJump   bool   // "'" pressed; the next digit picks the root group
+	cmd         bool   // ":" prompt open (matrix_line_numbers.go)
+	cmdBuf      string // text typed after ":"
+	cmdOverflow bool   // matrix/hardened: never activate a truncated numeric command.
+	noNumbers   bool   // ":set nonu"; survives resets
 
 	// Jump mark for "''", survives resets: the row before the last jump.
 	hasMark bool
@@ -118,6 +121,11 @@ func (h *Home) matrixHandleNavPrefix(key string) bool {
 	if key == "0" && h.navCount.n == 0 {
 		return false // plain "0" keeps clearing the status filter
 	}
+	// matrix/hardened: a row can exceed the legacy 999 movement-count limit.
+	// A positive 32-digit prefix cannot fit an int, so truncation remains invalid.
+	if len(h.navCount.digits) < matrixCmdMaxLen {
+		h.navCount.digits += key
+	}
 	if n := h.navCount.n*10 + int(key[0]-'0'); n <= matrixNavCountMax {
 		h.navCount.n = n
 	}
@@ -168,8 +176,11 @@ func (h *Home) matrixRenderPendingBar() string {
 	border := lipgloss.NewStyle().Foreground(ColorBorder).Render(strings.Repeat("─", max(0, h.width)))
 	keys, hint := "'", "   press 1-9 to jump to that root group ('' jumps back) · any other key cancels"
 	if !h.navCount.groupJump {
-		keys = strconv.Itoa(h.navCount.n)
-		hint = fmt.Sprintf("   j/k (or ↓/↑) moves %d rows · more digits extend the count · any other key cancels", h.navCount.n)
+		keys = h.navCount.digits
+		if keys == "" {
+			keys = strconv.Itoa(h.navCount.n)
+		}
+		hint = fmt.Sprintf("   %s opens line %s · j/k (or ↓/↑) moves %d rows · Esc cancels", h.matrixNumericConfirmKeys(), keys, h.navCount.n)
 	}
 	line := lipgloss.NewStyle().Foreground(ColorYellow).Bold(true).Render(keys) +
 		lipgloss.NewStyle().Foreground(ColorComment).Render(hint)

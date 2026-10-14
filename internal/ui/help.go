@@ -308,7 +308,7 @@ func (h *HelpOverlay) View() string {
 		// matrix/hardened: digits are a vim count; group jump moved to 'N.
 		{"'1-'9", "Jump to root group"},
 		{"3j / 3k", "Move 3 rows (any count)"},
-		{":12 Enter", "Jump to line 12 (:set nonu hides numbers)"},
+		{"12 / :12 + " + openSessionKey, "Open session / toggle group at line 12 (:set nonu hides numbers)"},
 		{"''", "Back to the row before the last 'N / :N jump"},
 		{"Space", "Jump mode"},
 		{altSessionKey, "Alternate session (swap with the previous one, vim-style)"},
