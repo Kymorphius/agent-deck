@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.68`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.69`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -66,7 +66,7 @@
 - `internal/session/claude_hooks.go`：`isAgentDeckHookCommand` 的判断规则：先去掉开头的 `VAR=值`，再要求第二个词是 `hook-handler`、程序名的文件名部分是 `agent-deck`。`RemoveClaudeHooks` 会扫描全部事件，并做 UTC 时间戳备份（约 387–414 行）。
 - `cmd/agent-deck/main.go`（约 4845、5070 行）：`agent-deck uninstall` 会移除这些钩子。`uninstall.sh` 第 253 行附近的 jq 过滤用的是同一套规则（正则），写回时用 `cat >` 保持软链接和权限。
 
-**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.68`。
+**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.69`。
 
 **测试**：以 `_hardened_test.go` 结尾的文件、`update_check_disable_test.go`、`update_timer_wiring_test.go` 等是新增或调整过的测试；`testdata/goldens/*` 里的快照已经按加固后的输出更新。
 
@@ -619,3 +619,13 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 - **matrix/hardened:** 使用 `[hotkeys].open_session` 的实际绑定；重绑或禁用后不会让原 `o` 继续激活。`:set nu` / `:set nonu` 仍作为文字命令输入。无效、越界、溢出及被截断的命令不会激活当前停留的条目。
 - **matrix/hardened:** 新入口和普通打开键共用本地、远程、窗口行、内嵌终端和停止会话恢复流程。帮助页及待输入提示同步说明数字激活方式。
 - 验证使用第 4 节隔离入口，覆盖数字确认、分组折叠与展开、分隔线、真实激活目标、重绑与禁用、长行号、无效输入及现有计数、行号显示、跳回和文本输入回归。已打开的 TUI 仍在列表按 `Ctrl+T` 重载。
+
+## 57. F9 返回会话列表、数字配合 l 只定位
+
+`1.16.26+matrix.69` 支持按未修饰的 `F9` 从 Agent Deck 内的本地全屏、SSH/mosh 和内嵌会话返回列表。返回只断开当前查看入口，会话本身继续运行。
+
+- **matrix/hardened:** 本地原有可配置的 Ctrl 返回键、远程和内嵌的 Ctrl+Q 继续生效，全屏会话的 Alt+Q 也保留。帮助、会话状态栏和内嵌输入提示显示 F9。Mac 顶排发送媒体键时，仍需用 Fn+F9 或由用户选择标准功能键设置；程序不修改系统键盘配置。
+- **matrix/hardened:** F9 支持传统及增强终端键盘编码，并处理分片输入；粘贴内容、带修饰的 F9 和其他终端序列继续传给会话。内嵌模式沿用原有输入代际取消、尾部丢弃和列表焦点恢复流程。
+- **matrix/hardened:** Shift+Enter 新开的独立终端直接执行 tmux 或远端命令，未经过当前 TUI 的输入路由；其中返回键以该终端、远端的实际支持为准。
+- **matrix/hardened:** `12l` 或 `:12l` 只把光标移到当前可见列表第 12 行，不打开会话或切换分组。`12` / `:12` 后按 Enter 或配置的打开键仍定位并激活，`3j` / `3k` 仍按相对移动计数，单独 `l` 仍执行原有右移、展开操作。无效、越界或溢出的行号不会操作当前条目。
+- 验证使用第 4 节隔离入口，覆盖实际输入转发、分片与粘贴、按键兼容、数字只定位，以及真实 PTY 的打开与返回。已打开的 TUI 在列表按 `Ctrl+T` 重载新版本。

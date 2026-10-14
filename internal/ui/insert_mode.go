@@ -493,6 +493,17 @@ func (h *Home) exitInsertMode() {
 // users can edit input and navigate menus inside the focused session
 // (claude often shows arrow-driven pickers).
 func (h *Home) handleInsertModeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// matrix/hardened: reserve plain F9 for returning to the list across the
+	// embedded and type-through paths; Alt+F9 remains session input.
+	if msg.Type == tea.KeyF9 && !msg.Alt && !msg.Paste {
+		wasEmbedded := h.embeddedMode
+		h.flushInsertBuf()
+		h.exitInsertMode()
+		if wasEmbedded {
+			return h, h.fetchSelectedPreview()
+		}
+		return h, nil
+	}
 	if h.embeddedMode {
 		if msg.Type == tea.KeyCtrlQ {
 			h.flushInsertBuf()
@@ -930,7 +941,7 @@ func (h *Home) renderInsertModeBar() string {
 	targetTitle := h.insertTargetDisplayName()
 
 	badgeText := " -- INSERT -- "
-	hint := "Esc to exit · Enter to submit"
+	hint := "F9 / Esc to exit · Enter to submit" // matrix/hardened: single-key return also works in type-through mode.
 	if h.embeddedMode {
 		badgeText = " -- SESSION -- "
 		if h.sessionInput != nil {
@@ -938,9 +949,9 @@ func (h *Home) renderInsertModeBar() string {
 			if h.embeddedSidebarHidden {
 				sidebarAction = "show sidebar"
 			}
-			hint = "Ctrl+Alt+B " + sidebarAction + " · Ctrl+Q detach · direct tmux input"
+			hint = "Ctrl+Alt+B " + sidebarAction + " · F9 / Ctrl+Q detach · direct tmux input" // matrix/hardened: advertise the new return key.
 		} else {
-			hint = "Ctrl+Q detach · Ctrl+↑/↓ scroll · Esc forwarded · Enter submit"
+			hint = "F9 / Ctrl+Q detach · Ctrl+↑/↓ scroll · Esc forwarded · Enter submit" // matrix/hardened: legacy key remains available.
 		}
 	}
 	badge := lipgloss.NewStyle().
