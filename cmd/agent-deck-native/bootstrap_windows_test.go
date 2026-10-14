@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/asheshgoplani/agent-deck/internal/nativeregistry"
+	"github.com/asheshgoplani/agent-deck/internal/nativestatestore"
 	"github.com/asheshgoplani/agent-deck/internal/terminalhost"
 	"github.com/asheshgoplani/agent-deck/internal/winipc"
 	"github.com/google/uuid"
@@ -77,7 +78,13 @@ func nativeBootstrapCleanup(t *testing.T, config options, identity *terminalhost
 			return
 		}
 		// Closing the verified daemon must release the exact registry lease.
-		store, err := nativeregistry.Open(config.StateDir)
+		var store interface{ Close() error }
+		// matrix/hardened: verify lease release with the same authoritative store.
+		if config.Store == "statedb" {
+			store, err = nativestatestore.Open(config.StateDir)
+		} else {
+			store, err = nativeregistry.Open(config.StateDir)
+		}
 		if err != nil {
 			t.Errorf("private manager shutdown did not release its registry owner: %v", err)
 			return

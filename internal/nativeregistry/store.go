@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"net/url"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -72,9 +71,7 @@ type Store struct {
 	mu       sync.Mutex
 	db       *sql.DB
 	dir      string
-	root     *os.File
-	owner    *os.File
-	data     *os.File
+	lease    *Lease
 	closeErr error
 }
 
@@ -83,36 +80,16 @@ type Store struct {
 // caller must not use a project, account directory or another application's root.
 // matrix/hardened: no fallback to HOME or a production registry is permitted.
 func Open(dir string) (_ *Store, resultErr error) {
-	if err := prepareDirectory(dir); err != nil {
+	lease, err := AcquireLease(dir, DatabaseFilename)
+	if err != nil {
 		return nil, err
 	}
-	s := &Store{dir: dir}
+	s := &Store{dir: dir, lease: lease}
 	defer func() {
 		if resultErr != nil {
 			_ = s.Close()
 		}
 	}()
-	var err error
-	s.owner, err = acquireOwner(filepath.Join(dir, OwnerFilename))
-	if err != nil {
-		return nil, err
-	}
-	s.root, err = os.Open(dir)
-	if err != nil {
-		return nil, fmt.Errorf("hold registry root: %w", err)
-	}
-	s.data, err = prepareData(filepath.Join(dir, DatabaseFilename))
-	if err != nil {
-		return nil, err
-	}
-	for _, suffix := range []string{"-journal", "-wal", "-shm"} {
-		if err := protectOptionalData(filepath.Join(dir, DatabaseFilename) + suffix); err != nil {
-			return nil, err
-		}
-	}
-	if err := s.verifyPaths(); err != nil {
-		return nil, err
-	}
 	// matrix/hardened: URI-escape directory characters so '?' cannot redirect
 	// SQLite to another pathname or be interpreted as connection options.
 	dataPath := filepath.ToSlash(filepath.Join(dir, DatabaseFilename))
@@ -326,17 +303,7 @@ func (s *Store) checkOpen() error {
 	return s.verifyPaths()
 }
 
-func (s *Store) verifyPaths() error {
-	for path, file := range map[string]*os.File{s.dir: s.root, filepath.Join(s.dir, OwnerFilename): s.owner, filepath.Join(s.dir, DatabaseFilename): s.data} {
-		if file == nil {
-			return fmt.Errorf("%w: incomplete file ownership", ErrUnsafePath)
-		}
-		if err := verifyHeldPath(path, file); err != nil {
-			return err
-		}
-	}
-	return nil
-}
+func (s *Store) verifyPaths() error { return s.lease.Verify() }
 
 // Directory returns the canonical root accepted by Open while ownership still
 // holds. It exposes no database handle and never creates or resolves new paths.
@@ -366,17 +333,9 @@ func (s *Store) Close() error {
 		s.closeErr = errors.Join(s.closeErr, s.db.Close())
 		s.db = nil
 	}
-	if s.data != nil {
-		s.closeErr = errors.Join(s.closeErr, s.data.Close())
-		s.data = nil
-	}
-	if s.root != nil {
-		s.closeErr = errors.Join(s.closeErr, s.root.Close())
-		s.root = nil
-	}
-	if s.owner != nil {
-		s.closeErr = errors.Join(s.closeErr, releaseOwner(s.owner))
-		s.owner = nil
+	if s.lease != nil {
+		s.closeErr = errors.Join(s.closeErr, s.lease.Close())
+		s.lease = nil
 	}
 	return s.closeErr
 }

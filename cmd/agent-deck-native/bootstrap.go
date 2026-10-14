@@ -19,6 +19,15 @@ import (
 const nativeManagerProtocol = 2
 const nativeManagerStartupTimeout = 15 * time.Second
 
+// matrix/hardened: a caller cannot reuse a same-directory manager backed by
+// another store, including when the user supplies an explicit pipe name.
+func nativeManagerVersion(config options) string {
+	if config.Store == "statedb" {
+		return version + "/statedb"
+	}
+	return version
+}
+
 type nativeBootstrapDeps struct {
 	probe  func(context.Context, string) (terminalhost.Response, error)
 	spawn  func(context.Context, options) (uint32, error)
@@ -26,6 +35,10 @@ type nativeBootstrapDeps struct {
 }
 
 func ensureNativeManagerWith(ctx context.Context, config options, deps nativeBootstrapDeps) (terminalhost.Response, error) {
+	// matrix/hardened: an unrecognized store cannot authorize any bootstrap.
+	if config.Store != "" && config.Store != "prototype" && config.Store != "statedb" {
+		return terminalhost.Response{}, errors.New("unsupported native session store")
+	}
 	if err := ctx.Err(); err != nil {
 		return terminalhost.Response{}, err
 	}
@@ -102,7 +115,7 @@ func validateNativeManager(config options, response terminalhost.Response) error
 	if err != nil || runID == uuid.Nil || runID.String() != response.RunID {
 		return errors.New("现有后台未返回有效的运行标识；请检查对应的 serve 进程")
 	}
-	if response.ProtocolVersion != nativeManagerProtocol || response.ManagerVersion != version {
+	if response.ProtocolVersion != nativeManagerProtocol || response.ManagerVersion != nativeManagerVersion(config) {
 		return errors.New("现有后台的版本与当前程序不兼容；请先使用原版本显式关闭对应后台，再重新启动")
 	}
 	if !filepath.IsAbs(response.ManagerStateDir) || strings.ContainsRune(response.ManagerStateDir, '\x00') {

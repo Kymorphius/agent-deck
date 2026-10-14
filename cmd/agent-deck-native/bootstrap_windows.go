@@ -84,6 +84,10 @@ func spawnNativeManager(ctx context.Context, config options) (uint32, error) {
 		return 0, errors.New("当前原生程序不是可读取的普通文件")
 	}
 	args := []string{executable, "serve", "--background", "--state-dir", config.StateDir, "--pipe", config.Pipe}
+	// matrix/hardened: the detached child must open the exact selected store.
+	if config.Store == "statedb" {
+		args = append(args, "--store", "statedb")
+	}
 	escaped := make([]string, len(args))
 	for index, arg := range args {
 		if strings.ContainsRune(arg, '\x00') {

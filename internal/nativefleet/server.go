@@ -32,6 +32,20 @@ var (
 	ErrCapacity = errors.New("native session manager has reached its 32-session limit")
 )
 
+// Registry is the native manager's persistence seam; the original StateDB and
+// the v0.3 private registry can both supply immutable launch descriptions.
+// matrix/hardened: lifecycle code does not own a second database schema.
+type Registry interface {
+	Directory() (string, error)
+	List() ([]nativeregistry.Record, error)
+	Get(string) (nativeregistry.Record, error)
+	CreateInGroup(string, string, string, terminalhost.LaunchSpec) (nativeregistry.Record, error)
+	Move(string, string) error
+	Rename(string, string) error
+	Delete(string) error
+	Close() error
+}
+
 type entry struct {
 	// matrix/hardened: route and lifecycle changes share one session lock;
 	// a viewer for an old run cannot send to a replacement while it launches.
@@ -46,7 +60,7 @@ type entry struct {
 }
 
 type Server struct {
-	store    *nativeregistry.Store
+	store    Registry
 	launch   func(terminalhost.LaunchSpec) (terminalhost.Process, error)
 	identity string
 	metadata Identity
@@ -74,8 +88,8 @@ type Identity struct {
 
 // New consumes store ownership only on success. Recovered descriptions are
 // stopped; restarting a manager must never restart an agent or account flow.
-func New(store *nativeregistry.Store, launch func(terminalhost.LaunchSpec) (terminalhost.Process, error), identities ...Identity) (*Server, error) {
-	if store == nil || launch == nil {
+func New(store Registry, launch func(terminalhost.LaunchSpec) (terminalhost.Process, error), identities ...Identity) (*Server, error) {
+	if store == nil || reflect.ValueOf(store).Kind() == reflect.Pointer && reflect.ValueOf(store).IsNil() || launch == nil {
 		return nil, errors.New("native registry and process launcher are required")
 	}
 	var metadata Identity

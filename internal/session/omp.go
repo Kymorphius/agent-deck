@@ -155,6 +155,10 @@ func (i *Instance) buildOMPForkCommandForTarget(target *Instance, baseCommand st
 
 // CanForkOMP returns true if this omp session can be forked by Agent Deck.
 func (i *Instance) CanForkOMP() bool {
+	// matrix/hardened: omp's existing fork command requires a POSIX launch plan.
+	if i.UsesTerminalBackend() {
+		return false
+	}
 	if i.Tool != "omp" || i.ID == "" {
 		return false
 	}
@@ -195,6 +199,10 @@ func (i *Instance) CreateForkedOMPInstanceWithOptions(
 	newTitle, newGroupPath string,
 	opts *ClaudeOptions,
 ) (*Instance, string, error) {
+	// matrix/hardened: reject native sources before creating a tmux fork record.
+	if err := i.terminalLaunchGuard(); err != nil {
+		return nil, "", err
+	}
 	projectPath := i.ProjectPath
 	if opts != nil && opts.WorkDir != "" {
 		projectPath = opts.WorkDir

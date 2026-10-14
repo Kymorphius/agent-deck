@@ -13,6 +13,7 @@ import (
 
 	"github.com/asheshgoplani/agent-deck/internal/health"
 	"github.com/asheshgoplani/agent-deck/internal/logging"
+	"github.com/asheshgoplani/agent-deck/internal/nativestatestore"
 	"github.com/asheshgoplani/agent-deck/internal/statedb"
 	"github.com/asheshgoplani/agent-deck/internal/tmux"
 )
@@ -84,6 +85,9 @@ type InstanceData struct {
 	SupersededBy string        `json:"superseded_by,omitempty"`
 	Supersedes   string        `json:"supersedes,omitempty"`
 	TmuxSession  string        `json:"tmux_session"`
+	// matrix/hardened: an explicit native backend marker survives original
+	// storage hydration; it never implies a tmux session or an automatic launch.
+	NativeBackend json.RawMessage `json:"native_backend,omitempty"`
 	// TmuxSocketName is the tmux -L selector captured at Instance creation
 	// (issue #687, v1.7.50). Empty for pre-v1.7.50 rows — those keep hitting
 	// the default server after upgrade.
@@ -1028,8 +1032,8 @@ func instanceToRow(inst *Instance) (*statedb.InstanceRow, error) {
 		inst.GroupPath = DefaultGroupPath
 	}
 	tmuxName := ""
-	if inst.tmuxSession != nil {
-		tmuxName = inst.tmuxSession.Name
+	if tmuxSession := inst.GetTmuxSession(); tmuxSession != nil {
+		tmuxName = tmuxSession.Name
 	}
 	var sandboxJSON json.RawMessage
 	if inst.Sandbox != nil {
@@ -1125,8 +1129,14 @@ func instanceToRow(inst *Instance) (*statedb.InstanceRow, error) {
 	// can only ever be "restarted" into dsh's usage error.
 	toolData = WriteDeepSeekTaskToToolData(toolData, inst.DeepSeekTask)
 	toolData = WriteCrossHarnessLineageToToolData(toolData, inst.SupersededBy, inst.Supersedes)
+	// matrix/hardened: keep the immutable launch descriptor alongside the
+	// original tool metadata, without persisting a transient native RunID.
+	toolData, err := writeNativeBackendData(toolData, inst.nativeBackendData)
+	if err != nil {
+		return nil, fmt.Errorf("native backend for %s: %w", inst.ID, err)
+	}
 
-	return &statedb.InstanceRow{
+	row := &statedb.InstanceRow{
 		ID:                  inst.ID,
 		Title:               inst.Title,
 		ProjectPath:         inst.ProjectPath,
@@ -1153,7 +1163,13 @@ func instanceToRow(inst *Instance) (*statedb.InstanceRow, error) {
 		ArchivedAt:          inst.ArchivedAt,
 		Pin:                 string(inst.Pin),
 		ToolData:            toolData,
-	}, nil
+	}
+	if len(inst.nativeBackendData) != 0 {
+		if _, _, err := nativestatestore.RecordFromRow(row); err != nil {
+			return nil, fmt.Errorf("native backend for %s: %w", inst.ID, err)
+		}
+	}
+	return row, nil
 }
 
 // SaveGroupsOnly persists only the groups table to SQLite.
@@ -1214,6 +1230,10 @@ func (s *Storage) LoadLite() ([]*InstanceData, []*GroupData, error) {
 	// Convert to InstanceData format (for backward compat with CLI commands)
 	instances := make([]*InstanceData, len(dbRows))
 	for i, r := range dbRows {
+		nativeBackend, err := nativeBackendFromRow(r)
+		if err != nil {
+			return nil, nil, fmt.Errorf("native backend for %s: %w", r.ID, err)
+		}
 		claudeSID, claudeAt,
 			geminiSID, geminiAt,
 			geminiYolo, geminiModel,
@@ -1234,6 +1254,7 @@ func (s *Storage) LoadLite() ([]*InstanceData, []*GroupData, error) {
 		sandboxCfg := decodeSandboxConfig(sandboxJSON)
 
 		instances[i] = &InstanceData{
+			NativeBackend:             nativeBackend,
 			ID:                        r.ID,
 			Title:                     r.Title,
 			ProjectPath:               r.ProjectPath,
@@ -1353,6 +1374,10 @@ func (s *Storage) LoadWithGroupsSnapshot() ([]*Instance, []*GroupData, *statedb.
 		Instances: make([]*InstanceData, len(dbRows)),
 	}
 	for i, r := range dbRows {
+		nativeBackend, err := nativeBackendFromRow(r)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("native backend for %s: %w", r.ID, err)
+		}
 		claudeSID, claudeAt,
 			geminiSID, geminiAt,
 			geminiYolo, geminiModel,
@@ -1373,6 +1398,7 @@ func (s *Storage) LoadWithGroupsSnapshot() ([]*Instance, []*GroupData, *statedb.
 		sandboxCfg := decodeSandboxConfig(sandboxJSON)
 
 		data.Instances[i] = &InstanceData{
+			NativeBackend:             nativeBackend,
 			ID:                        r.ID,
 			Title:                     r.Title,
 			ProjectPath:               r.ProjectPath,
@@ -1613,12 +1639,17 @@ func (s *Storage) convertToInstances(data *StorageData) ([]*Instance, []*GroupDa
 	// Convert to instances
 	instances := make([]*Instance, len(data.Instances))
 	for i, instData := range data.Instances {
+		// matrix/hardened: validate explicit native identity before any lazy
+		// tmux reconnect, including the legacy JSON compatibility load path.
+		if err := validateNativeInstanceData(instData); err != nil {
+			return nil, nil, fmt.Errorf("native backend for %s: %w", instData.ID, err)
+		}
 		// PERFORMANCE: Use lazy reconnect to defer tmux configuration until first attach
 		// This reduces TUI startup from ~6s to ~2s by avoiding subprocess overhead.
 		// Configuration (EnableMouseMode, ConfigureStatusBar) runs
 		// on-demand via EnsureConfigured() when user interacts with the session.
 		var tmuxSess *tmux.Session
-		if instData.TmuxSession != "" {
+		if len(instData.NativeBackend) == 0 && instData.TmuxSession != "" {
 			// Convert Status enum to string for tmux package
 			// This restores the exact status across app restarts
 			previousStatus := statusToString(instData.Status)
@@ -1762,6 +1793,12 @@ func (s *Storage) convertToInstances(data *StorageData) ([]*Instance, []*GroupDa
 			AdditionalPaths:       instData.AdditionalPaths,
 			MultiRepoTempDir:      instData.MultiRepoTempDir,
 			tmuxSession:           tmuxSess,
+			nativeBackendData:     append(json.RawMessage(nil), instData.NativeBackend...),
+		}
+		if len(inst.nativeBackendData) != 0 {
+			if err := inst.MarkTerminalBackendPending(); err != nil {
+				return nil, nil, fmt.Errorf("native backend for %s: %w", inst.ID, err)
+			}
 		}
 		// matrix/hardened: hydration binds every targeted monitor write to this profile.
 		inst.restartDB.Store(s.db)

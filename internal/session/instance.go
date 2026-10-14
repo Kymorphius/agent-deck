@@ -73,6 +73,8 @@ const (
 	// group max_concurrent caps; a launch into a group at cap stores the
 	// instance with this status and starts it once a running session ends.
 	StatusQueued Status = "queued"
+	// matrix/hardened: process liveness alone supplies no AI activity verdict.
+	StatusUnknown Status = "unknown"
 )
 
 // Substate is the additive Honest-Status-v2 refinement of a session's coarse
@@ -578,6 +580,16 @@ type Instance struct {
 	ToolOptionsJSON json.RawMessage `json:"tool_options,omitempty"`
 
 	tmuxSession *tmux.Session // Internal tmux session
+	// matrix/hardened: native descriptors fail closed before their exact run is
+	// bound. These runtime handles/errors never become a second session identity.
+	terminalBackend         TerminalBackend
+	terminalBackendExpected bool
+	terminalBackendError    error
+	terminalOutputSequence  uint64
+	terminalStopConfirmed   bool
+	terminalStopMu          sync.Mutex
+	terminalTmuxAdapter     *tmuxTerminalBackend
+	nativeBackendData       json.RawMessage
 	// Database that last loaded or saved this instance. Restart bookkeeping must
 	// return to that profile instead of whichever database is process-global.
 	restartDB atomic.Pointer[statedb.StateDB]
@@ -4934,6 +4946,10 @@ func (i *Instance) DisplaySessionID() string {
 
 // CanRestartGeneric returns true if a custom tool can be restarted with session resume
 func (i *Instance) CanRestartGeneric() bool {
+	// matrix/hardened: native launch plans are not installed by this runtime seam.
+	if i.UsesTerminalBackend() {
+		return false
+	}
 	toolDef := GetToolDef(i.Tool)
 	if toolDef == nil {
 		return false
@@ -5266,6 +5282,10 @@ func (i *Instance) ensureClaudeSessionIDFromDiskForRestart() {
 // matrix/hardened: the shared body also accepts an admission acquired before
 // RestartFresh teardown; fork dispatch retains the same guarded branches.
 func (i *Instance) Start() error {
+	// matrix/hardened: do not turn a native descriptor into a POSIX/tmux launch.
+	if err := i.terminalLaunchGuard(); err != nil {
+		return err
+	}
 	// matrix/hardened: a pre-mutation monitor probe cannot overwrite this action.
 	i.InvalidateRuntimeSnapshot()
 	return i.startWithClaudeAdmission(nil, false)
@@ -5274,6 +5294,10 @@ func (i *Instance) Start() error {
 // matrix/hardened: RestartFresh passes its already admitted launch while holding
 // the spawn lock, so teardown cannot be followed by a second budget charge.
 func (i *Instance) startWithClaudeAdmission(admission *claudeLaunchAdmission, lockHeld bool) (returnErr error) {
+	// matrix/hardened: internal callers must also stop before admission or locks.
+	if err := i.terminalLaunchGuard(); err != nil {
+		return err
+	}
 	if err := i.ValidateAccount(); err != nil {
 		return err
 	}
@@ -5669,6 +5693,10 @@ func (i *Instance) startWithClaudeAdmission(admission *claudeLaunchAdmission, lo
 // `launch -m "..."` racing with a poller-triggered Start() must not
 // produce two parallel tmux sessions.
 func (i *Instance) StartWithMessage(message string) (returnErr error) {
+	// matrix/hardened: raw terminal transport is not a native launch/message plan.
+	if err := i.terminalLaunchGuard(); err != nil {
+		return err
+	}
 	// matrix/hardened: a pre-mutation monitor probe cannot overwrite this action.
 	i.InvalidateRuntimeSnapshot()
 	if err := i.ValidateAccount(); err != nil {
@@ -6523,6 +6551,10 @@ func (i *Instance) probeTmuxExists() (exists, current bool) {
 }
 
 func (i *Instance) updateStatus(pass *StatusUpdatePass, syncMetadata bool) error {
+	// matrix/hardened: native process facts must bypass tmux death/AI heuristics.
+	if i.UsesTerminalBackend() {
+		return i.updateTerminalStatus()
+	}
 	// matrix/hardened: monitor consumers use complete verdicts without local probes.
 	if _, consumer := i.runtimeView(); consumer {
 		return nil
@@ -8107,6 +8139,20 @@ func (i *Instance) autoConfirmClaudeResumePicker() {
 
 // Preview returns the last 3 lines of terminal output
 func (i *Instance) Preview() (string, error) {
+	// matrix/hardened: reuse the original preview formatting with native capture.
+	if i.UsesTerminalBackend() {
+		ctx, cancel := context.WithTimeout(context.Background(), terminalOperationTimeout)
+		defer cancel()
+		content, err := i.CaptureTerminal(ctx, false)
+		if err != nil {
+			return "", err
+		}
+		lines := strings.Split(strings.TrimSpace(content), "\n")
+		if len(lines) > 3 {
+			lines = lines[len(lines)-3:]
+		}
+		return strings.Join(lines, "\n"), nil
+	}
 	if i.tmuxSession == nil {
 		return "", fmt.Errorf("tmux session not initialized")
 	}
@@ -8132,6 +8178,12 @@ func (i *Instance) Preview() (string, error) {
 
 // PreviewFull returns all terminal output
 func (i *Instance) PreviewFull() (string, error) {
+	// matrix/hardened: capture the pinned native run, never the unused tmux object.
+	if i.UsesTerminalBackend() {
+		ctx, cancel := context.WithTimeout(context.Background(), terminalOperationTimeout)
+		defer cancel()
+		return i.CaptureTerminal(ctx, true)
+	}
 	if i.tmuxSession == nil {
 		return "", fmt.Errorf("tmux session not initialized")
 	}
@@ -8168,6 +8220,12 @@ func (i *Instance) spawnFailurePreview() string {
 // PreviewPrimaryFull returns the managed agent window's scrollback rather than
 // whichever auxiliary tmux window the operator most recently focused.
 func (i *Instance) PreviewPrimaryFull() (string, error) {
+	// matrix/hardened: a native run has one managed terminal and no auxiliary pane.
+	if i.UsesTerminalBackend() {
+		ctx, cancel := context.WithTimeout(context.Background(), terminalOperationTimeout)
+		defer cancel()
+		return i.CaptureTerminal(ctx, true)
+	}
 	if i.tmuxSession == nil {
 		return "", fmt.Errorf("tmux session not initialized")
 	}
@@ -8176,6 +8234,13 @@ func (i *Instance) PreviewPrimaryFull() (string, error) {
 
 // PreviewWindowFull returns the full scrollback of a specific tmux window.
 func (i *Instance) PreviewWindowFull(windowIndex int) (string, error) {
+	// matrix/hardened: only the native terminal's primary view exists.
+	if i.UsesTerminalBackend() {
+		if windowIndex != 0 {
+			return "", ErrTerminalWindowUnsupported
+		}
+		return i.PreviewPrimaryFull()
+	}
 	if i.tmuxSession == nil {
 		return "", fmt.Errorf("tmux session not initialized")
 	}
@@ -8184,6 +8249,10 @@ func (i *Instance) PreviewWindowFull(windowIndex int) (string, error) {
 
 // HasUpdated checks if there's new output since last check
 func (i *Instance) HasUpdated() bool {
+	// matrix/hardened: native output watermarks do not infer an AI activity state.
+	if i.UsesTerminalBackend() {
+		return i.terminalHasUpdated()
+	}
 	if i.tmuxSession == nil {
 		return false
 	}
@@ -10063,6 +10132,11 @@ func (i *Instance) KillAndWait() error {
 }
 
 func (i *Instance) killInternal(sync bool) error {
+	// matrix/hardened: the native owner stops its exact job; Unix PID discovery,
+	// sandbox cleanup and tmux teardown must not touch an injected runtime.
+	if i.UsesTerminalBackend() {
+		return i.stopTerminalBackend()
+	}
 	// #1580/#1775: supersede any in-flight fast-death watcher BEFORE the tmux
 	// kill (not after). watchForFastDeath only writes a SpawnFailureRecord /
 	// lifecycle event on an iteration whose gen check passes; bumping here
@@ -10217,6 +10291,10 @@ func (i *Instance) Restart() error {
 // The values apply to the replacement process only and are not persisted in
 // the Instance or tmux session environment for future restarts.
 func (i *Instance) RestartWithEnv(env map[string]string) error {
+	// matrix/hardened: reject before invalidation or launch environment mutation.
+	if err := i.terminalLaunchGuard(); err != nil {
+		return err
+	}
 	// matrix/hardened: a pre-mutation monitor probe cannot overwrite this action.
 	i.InvalidateRuntimeSnapshot()
 	for key := range env {
@@ -10237,6 +10315,10 @@ func (i *Instance) restartRecorded(env map[string]string) error {
 }
 
 func (i *Instance) restart(env map[string]string) (returnErr error) {
+	// matrix/hardened: Restart and internal restart callers share the early guard.
+	if err := i.terminalLaunchGuard(); err != nil {
+		return err
+	}
 	if err := i.ValidateAccount(); err != nil {
 		return err
 	}
@@ -10934,6 +11016,10 @@ func (i *Instance) restart(env map[string]string) (returnErr error) {
 // This recreates the tmux session and clears the stored tool session binding first,
 // so the next start gets a brand-new tool session ID.
 func (i *Instance) RestartFresh() error {
+	// matrix/hardened: refuse before clearing tool bindings or killing a live run.
+	if err := i.terminalLaunchGuard(); err != nil {
+		return err
+	}
 	// matrix/hardened: a pre-mutation monitor probe cannot overwrite this action.
 	i.InvalidateRuntimeSnapshot()
 	// matrix/hardened: acquire once, admit once, then clear/kill/start under the
@@ -11260,6 +11346,10 @@ func (i *Instance) ClearLaunchModel() error {
 // For custom tools with session resume config: can restart if session ID available
 // For other sessions: only if dead/error state
 func (i *Instance) CanRestart() bool {
+	// matrix/hardened: do not advertise a launch plan this backend cannot execute.
+	if i.UsesTerminalBackend() {
+		return false
+	}
 	// Gemini sessions with known session ID can always be restarted
 	if i.Tool == "gemini" && i.GeminiSessionID != "" {
 		return true
@@ -11360,6 +11450,10 @@ func (i *Instance) CanRestart() bool {
 // CanRestartFresh returns true when the session has a known tool session binding
 // that can be intentionally discarded to start with a new session ID.
 func (i *Instance) CanRestartFresh() bool {
+	// matrix/hardened: native runtime support does not imply a fresh launch plan.
+	if i.UsesTerminalBackend() {
+		return false
+	}
 	if IsClaudeCompatible(i.Tool) {
 		return i.ClaudeSessionID != ""
 	}
@@ -11398,6 +11492,10 @@ func SupportsNativeFork(tool string) bool {
 // CanFork returns true if this session currently has the source state needed
 // by its native fork implementation.
 func (i *Instance) CanFork() bool {
+	// matrix/hardened: do not reuse a stale tmux fork capability for a native run.
+	if i.UsesTerminalBackend() {
+		return false
+	}
 	// matrix/hardened: dashboard capability rendering uses the shared verdict;
 	// explicit fork execution retains each tool's current native preflight.
 	if row, consumer := i.runtimeView(); row != nil {
@@ -11410,6 +11508,10 @@ func (i *Instance) CanFork() bool {
 
 // matrix/hardened: explicit fork execution validates the current native source.
 func (i *Instance) canForkCurrentSource() bool {
+	// matrix/hardened: direct fork executors must also reject a native source.
+	if i.UsesTerminalBackend() {
+		return false
+	}
 	// Gemini CLI doesn't support forking
 	if i.Tool == "gemini" {
 		return false
@@ -11456,12 +11558,20 @@ func (i *Instance) canForkCurrentSource() bool {
 
 // CanForkOpenCode returns true if this OpenCode session can be forked
 func (i *Instance) CanForkOpenCode() bool {
+	// matrix/hardened: OpenCode's current fork serialization requires POSIX launch.
+	if i.UsesTerminalBackend() {
+		return false
+	}
 	sessionID, err := normalizeToolSessionID(FieldOpenCodeSessionID, i.OpenCodeSessionID)
 	return i.Tool == "opencode" && err == nil && sessionID != "" && sessionID == strings.TrimSpace(i.OpenCodeSessionID) && time.Since(i.OpenCodeDetectedAt) < 5*time.Minute
 }
 
 // CanForkPi returns true if this Pi session can be forked by Agent Deck.
 func (i *Instance) CanForkPi() bool {
+	// matrix/hardened: Pi's current fork serialization requires POSIX launch.
+	if i.UsesTerminalBackend() {
+		return false
+	}
 	if i.Tool != "pi" || i.ID == "" {
 		return false
 	}
@@ -11507,6 +11617,10 @@ func (i *Instance) Fork(newTitle, newGroupPath string) (string, error) {
 // Uses capture-resume pattern: starts fork in print mode to get new session ID,
 // stores in tmux environment, then resumes interactively
 func (i *Instance) ForkWithOptions(newTitle, newGroupPath string, opts *ClaudeOptions) (string, error) {
+	// matrix/hardened: refuse before creating a target or a POSIX fork script.
+	if err := i.terminalLaunchGuard(); err != nil {
+		return "", err
+	}
 	projectPath := i.ProjectPath
 	if opts != nil && opts.WorkDir != "" {
 		projectPath = opts.WorkDir
@@ -11609,6 +11723,10 @@ func (i *Instance) CreateForkedInstanceWithOptions(
 	newTitle, newGroupPath string,
 	opts *ClaudeOptions,
 ) (*Instance, string, error) {
+	// matrix/hardened: refuse native sources before generating a second registry ID.
+	if err := i.terminalLaunchGuard(); err != nil {
+		return nil, "", err
+	}
 	// Create new instance - use worktree path if provided, otherwise parent's project path
 	projectPath := i.ProjectPath
 	if opts != nil && opts.WorkDir != "" {
@@ -11673,6 +11791,10 @@ func (i *Instance) CreateForkedInstanceWithOptions(
 // tool-specific fork implementation. opts is the shared fork carrier for
 // worktree fields; non-Claude tool options continue to come from global config.
 func (i *Instance) CreateForkedInstanceForTool(newTitle, newGroupPath string, opts *ClaudeOptions) (*Instance, string, error) {
+	// matrix/hardened: native sources cannot enter any legacy tool-specific fork.
+	if err := i.terminalLaunchGuard(); err != nil {
+		return nil, "", err
+	}
 	switch {
 	case i.Tool == "opencode":
 		workDir := i.ProjectPath
@@ -11708,6 +11830,10 @@ func (i *Instance) ForkOpenCode(newTitle, newGroupPath string) (string, error) {
 // which branches the parent transcript into a fresh session while leaving the
 // parent intact, plus any model/agent flags.
 func (i *Instance) ForkOpenCodeWithOptions(newTitle, newGroupPath string, opts *OpenCodeOptions) (string, error) {
+	// matrix/hardened: refuse before the OpenCode POSIX fork command is built.
+	if err := i.terminalLaunchGuard(); err != nil {
+		return "", err
+	}
 	return i.forkOpenCodeWithOptionsInWorkDir(newTitle, newGroupPath, opts, i.ProjectPath)
 }
 
@@ -11775,6 +11901,10 @@ func (i *Instance) CreateForkedOpenCodeInstanceWithOptionsAndWorkDir(
 	opts *OpenCodeOptions,
 	workDir, worktreeRepoRoot, worktreeBranch string,
 ) (*Instance, string, error) {
+	// matrix/hardened: direct native fork calls must not create a tmux child record.
+	if err := i.terminalLaunchGuard(); err != nil {
+		return nil, "", err
+	}
 	if strings.TrimSpace(workDir) == "" {
 		workDir = i.ProjectPath
 	}
@@ -11829,6 +11959,10 @@ func (i *Instance) CreateForkedPiInstanceWithOptions(
 	newTitle, newGroupPath string,
 	opts *ClaudeOptions,
 ) (*Instance, string, error) {
+	// matrix/hardened: preserve the source binding until native launch is available.
+	if err := i.terminalLaunchGuard(); err != nil {
+		return nil, "", err
+	}
 	projectPath := i.ProjectPath
 	if opts != nil && opts.WorkDir != "" {
 		projectPath = opts.WorkDir
@@ -11874,6 +12008,10 @@ func (i *Instance) CreateForkedPiInstanceWithOptions(
 // is a newer codex CLI subcommand; if the installed binary predates it the
 // launched command fails into a recoverable error state.
 func (i *Instance) CanForkCodex() bool {
+	// matrix/hardened: Codex's current fork serialization requires POSIX launch.
+	if i.UsesTerminalBackend() {
+		return false
+	}
 	if !IsCodexCompatible(i.Tool) || i.CodexSessionID == "" {
 		return false
 	}
@@ -11917,6 +12055,10 @@ func (i *Instance) CreateForkedCodexInstanceWithOptions(
 	newTitle, newGroupPath string,
 	opts *ClaudeOptions,
 ) (*Instance, string, error) {
+	// matrix/hardened: refuse before reading a rollout or creating a fork record.
+	if err := i.terminalLaunchGuard(); err != nil {
+		return nil, "", err
+	}
 	projectPath := i.ProjectPath
 	if opts != nil && opts.WorkDir != "" {
 		projectPath = opts.WorkDir
@@ -11970,6 +12112,13 @@ func (i *Instance) CreateForkedCodexInstanceWithOptions(
 
 // Exists checks if the tmux session still exists
 func (i *Instance) Exists() bool {
+	// matrix/hardened: a native descriptor never probes a same-named tmux session.
+	if i.UsesTerminalBackend() {
+		ctx, cancel := context.WithTimeout(context.Background(), terminalOperationTimeout)
+		defer cancel()
+		observation, err := i.ObserveTerminal(ctx)
+		return err == nil && observation.Alive
+	}
 	if i.tmuxSession == nil {
 		return false
 	}
@@ -11978,6 +12127,10 @@ func (i *Instance) Exists() bool {
 
 // GetTmuxSession returns the tmux session object
 func (i *Instance) GetTmuxSession() *tmux.Session {
+	// matrix/hardened: tmux-specific callers must not act on an unused native stub.
+	if i.UsesTerminalBackend() {
+		return nil
+	}
 	return i.tmuxSession
 }
 
@@ -11994,6 +12147,10 @@ func (i *Instance) GetTmuxSession() *tmux.Session {
 // status --json, web, transition events) the auth-401 substate for a dead
 // session without any of them changing.
 func (i *Instance) Substate() Substate {
+	// matrix/hardened: no native AI semantic classifier is installed by this seam.
+	if i.UsesTerminalBackend() {
+		return SubstateNone
+	}
 	// matrix/hardened: monitor consumers use complete verdicts without local probes.
 	if row, consumer := i.runtimeView(); row != nil {
 		return row.Substate
@@ -12050,6 +12207,10 @@ func (i *Instance) Substate() Substate {
 // Call after Substate/CachedSubstate; it reads the cached value and never
 // captures the pane.
 func (i *Instance) SubstateDetail() string {
+	// matrix/hardened: native process observations do not supply tmux AI details.
+	if i.UsesTerminalBackend() {
+		return ""
+	}
 	// matrix/hardened: monitor consumers use complete verdicts without local probes.
 	if row, consumer := i.runtimeView(); row != nil {
 		return row.Detail
@@ -12102,6 +12263,10 @@ func (i *Instance) getTerminatedPaneSubstate() Substate {
 // Like Substate, an auth hold wins — read from the in-memory mirror so the
 // render path stays filesystem-free.
 func (i *Instance) CachedSubstate() Substate {
+	// matrix/hardened: native metadata cannot inherit an unused tmux classifier.
+	if i.UsesTerminalBackend() {
+		return SubstateNone
+	}
 	// matrix/hardened: monitor consumers use complete verdicts without local probes.
 	if row, consumer := i.runtimeView(); row != nil {
 		return row.Substate
