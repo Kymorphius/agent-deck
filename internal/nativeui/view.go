@@ -10,6 +10,9 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
+// matrix/hardened: rendering and input sizing share one cell-width-aware hint.
+const createGroupHint = "（留空为默认分组）"
+
 func plain(value string) string {
 	return strings.Map(func(r rune) rune {
 		if unicode.IsControl(r) {
@@ -85,7 +88,9 @@ func (m *Model) View() string {
 func (m *Model) listLines() []string {
 	header := fmt.Sprintf("Agent Deck · Windows 原生会话 · %d/%d 个", len(m.items), len(m.allItems))
 	toolbar := "n 新建 · Enter/o 打开 · s 停止 · r 改名 · g 分组 · d 移除"
-	footer := "↑↓/j/k 选择 · / 搜索 · Tab 分组 · q/Ctrl+C 退出（会话继续运行）"
+	// matrix/hardened: distinguish leaving a view from stopping its process.
+	footer := "↑↓/j/k 选择 · / 搜索 · Tab 分组 · q/Ctrl+C 退出列表"
+	lifetime := "会话内 Ctrl+Q 返回列表 · q 退出列表 · 会话继续运行"
 	group := "全部分组"
 	if !m.allGroups {
 		group = groupLabel(m.filterGroup)
@@ -97,17 +102,22 @@ func (m *Model) listLines() []string {
 		toolbar = "Enter 保留 · Esc 清除 · Ctrl+C 退出"
 		footer = toolbar + "（会话继续运行）"
 		filter = "分组：" + group + " · 搜索：" + m.search.View()
+		lifetime = "会话内 Ctrl+Q 返回列表 · 会话继续运行"
 	}
-	path := "目录："
+	// matrix/hardened: the launcher's project stays visible before first create.
+	path := "目录：" + plain(m.defaultCwd)
 	if selected, ok := m.selected(); ok {
-		path += plain(selected.Dir)
+		path = "目录：" + plain(selected.Dir)
 	}
 	message := plain(m.notice)
 	if m.noticeErr {
 		message = lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Render(message)
 	}
-	if m.height < 7 {
+	if m.height < 8 {
 		// Very small windows retain an action line before optional detail.
+		if !m.searching {
+			footer += "（会话继续运行）"
+		}
 		shortToolbar := toolbar
 		if !m.searching {
 			shortToolbar += " · q 退出"
@@ -124,10 +134,11 @@ func (m *Model) listLines() []string {
 		}
 		return append(lines, filter, path, message, footer)
 	}
-	rows := m.height - 6
+	rows := m.height - 7
 	lines := []string{header, toolbar, filter}
 	if len(m.items) == 0 {
-		empty := "没有会话；按 n 新建 Shell、Codex 或 PowerShell。"
+		// matrix/hardened: usable defaults make the first n → Enter flow clear.
+		empty := "没有会话；按 n 新建，Enter 直接进入 " + toolLabel(m.tool) + "。"
 		if m.searching {
 			empty = "没有匹配的会话；Esc 清除搜索。"
 		} else if len(m.allItems) > 0 {
@@ -164,11 +175,12 @@ func (m *Model) listLines() []string {
 			lines = append(lines, "")
 		}
 	}
-	return append(lines, path, message, footer)
+	return append(lines, path, message, lifetime, footer)
 }
 
 func (m *Model) formLines() []string {
-	title := "新建会话"
+	// matrix/hardened: creation immediately attaches to the new hosted process.
+	title := "新建会话 · Enter 创建并进入"
 	if m.mode == renameMode {
 		title = "修改会话名称"
 	}
@@ -194,9 +206,14 @@ func (m *Model) formLines() []string {
 				choices[i] = "[" + choices[i] + "]"
 			}
 		}
-		lines = append(lines, dirPrefix+"目录："+m.dir.View(), toolPrefix+"工具："+strings.Join(choices, "   "), groupPrefix+"分组："+m.group.View()+"（留空为默认分组）")
+		lines = append(lines, dirPrefix+"目录："+m.dir.View(), toolPrefix+"工具："+strings.Join(choices, "   "), groupPrefix+"分组："+m.group.View()+createGroupHint)
 	}
-	lines = append(lines, plain(m.notice), "Tab/↑↓ 切换 · ←→ 选工具 · Enter 保存 · Esc 取消")
+	footer := "Enter 保存 · Esc 取消"
+	if m.mode == createMode {
+		lines = append(lines, "确认名称和目录后，按 Enter 创建并进入 "+toolLabel(m.tool)+"。")
+		footer = "Enter 创建并进入 · Tab/↑↓ 切换 · ←→ 选工具 · Esc 取消"
+	}
+	lines = append(lines, plain(m.notice), footer)
 	return formViewport(lines, m.focus+1, m.height)
 }
 
@@ -221,15 +238,30 @@ func formViewport(lines []string, active, height int) []string {
 }
 
 func (m *Model) confirmationLines() []string {
-	title, detail := "停止此会话？", "将停止这次运行的进程；列表记录和项目文件保留。"
+	// matrix/hardened: stop is explicit and separate from a reversible detach.
+	title, detail := "停止此会话？", "确认后结束这次运行；列表记录和项目文件保留。"
 	if m.mode == confirmRemoveMode {
 		title, detail = "移除此会话？", "移除列表记录，不删除项目文件。"
 		if m.target.State == "running" {
 			detail = "会先停止此会话，再移除列表记录；项目文件保留。"
 		}
 	}
-	return []string{
+	lines := []string{
 		title, plain(m.target.Name) + " · " + stateLabel(m.target.State),
-		detail, "目录：" + plain(m.target.Dir), "Enter 确认 · Esc 取消 · Ctrl+C 退出界面",
+		detail,
 	}
+	if m.mode == confirmStopMode {
+		// matrix/hardened: the lite launcher cannot resume a stopped Codex thread.
+		if m.target.Tool == "codex" {
+			lines = append(lines, "停止后再次打开会启动新的 Codex 对话。")
+		}
+		lines = append(lines, "只需返回列表请在会话内按 Ctrl+Q。")
+	}
+	lines = append(lines, "目录："+plain(m.target.Dir))
+	footer := "Enter 确认 · Esc 取消 · Ctrl+C 退出界面"
+	// matrix/hardened: extra lifecycle guidance cannot hide confirmation keys.
+	if len(lines) >= m.height {
+		lines = lines[:max(0, m.height-1)]
+	}
+	return append(lines, footer)
 }

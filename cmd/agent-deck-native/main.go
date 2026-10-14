@@ -16,7 +16,8 @@ import (
 	"github.com/asheshgoplani/agent-deck/internal/winipc"
 )
 
-const version = "0.4.0+matrix.prototype"
+// matrix/hardened: the lightweight native release remains separate from the original TUI.
+const version = "0.5.0+matrix.lite"
 
 func main() {
 	if err := run(os.Args[1:], os.Stdout, os.Stderr); err != nil {
@@ -30,7 +31,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 		args = []string{"ui"}
 	}
 	if len(args) == 1 && (args[0] == "--version" || args[0] == "version") {
-		_, err := fmt.Fprintln(stdout, "agent-deck-native", version, "(experimental Windows native terminal prototype)")
+		_, err := fmt.Fprintln(stdout, "agent-deck-native", version, "(experimental Windows native lightweight edition)")
 		return err
 	}
 	config, err := parseOptions(args, stderr)

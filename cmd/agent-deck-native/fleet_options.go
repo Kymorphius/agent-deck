@@ -70,6 +70,8 @@ func parseFleetOptions(args []string, help io.Writer) (options, error) {
 		flags.BoolVar(&o.Background, "background", false, "internal detached child: readiness is provided over IPC")
 	case "ui":
 		flags.StringVar(&o.Cwd, "cwd", "", "default project directory")
+		// matrix/hardened: an explicit launcher preference never changes saved sessions.
+		flags.StringVar(&o.Tool, "tool", "shell", "default new-session tool: shell, codex or powershell")
 	case "create":
 		flags.StringVar(&o.Name, "name", "", "required session name")
 		flags.StringVar(&o.Tool, "tool", "shell", "shell, codex, powershell or custom")
@@ -107,6 +109,9 @@ func parseFleetOptions(args []string, help io.Writer) (options, error) {
 	}
 	if o.Store != "prototype" && o.Store != "statedb" {
 		return o, errors.New("--store must be prototype or statedb")
+	}
+	if o.Command == "ui" && o.Tool != "shell" && o.Tool != "codex" && o.Tool != "powershell" {
+		return o, errors.New("ui --tool must be shell, codex or powershell")
 	}
 	if o.StateDir == "" {
 		dir, err := defaultStateDirectory()

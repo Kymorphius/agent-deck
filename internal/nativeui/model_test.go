@@ -298,6 +298,62 @@ func TestCreateKeyboardFlowStartsAndAttachesChosenTool(t *testing.T) {
 	}
 }
 
+// matrix/hardened: launch defaults reduce first-use steps without changing the
+// legacy API or allowing arbitrary executable names into a creation request.
+func TestOptionsChooseSupportedToolAndKeepLegacyShellDefault(t *testing.T) {
+	for _, tool := range []string{"shell", "codex", "powershell", "", "custom.exe", "Codex"} {
+		t.Run(tool, func(t *testing.T) {
+			s := &fakeService{autoStart: true}
+			m := NewWithOptions(s, `C:\项目\原生终端`, Options{DefaultTool: tool}).(*Model)
+			want := tool
+			if tool != "shell" && tool != "codex" && tool != "powershell" {
+				want = "shell"
+			}
+			if len(s.creates)+len(s.starts)+len(s.attaches) != 0 {
+				t.Fatal("constructing defaults started a hosted process")
+			}
+			press(m, "n")
+			result := runOperation(t, m, press(m, "enter"))
+			if result.err != nil || len(s.creates) != 1 || s.creates[0].Tool != want || len(s.attaches) != 1 || m.mode != attachMode {
+				t.Fatalf("n then Enter did not create and attach default tool %q: result=%+v creates=%+v", want, result, s.creates)
+			}
+		})
+	}
+	legacy := New(&fakeService{}, `C:\项目`).(*Model)
+	press(legacy, "n")
+	if legacy.tool != "shell" {
+		t.Fatalf("legacy constructor changed default to %q", legacy.tool)
+	}
+}
+
+// matrix/hardened: a window remembers its explicit tool choice after cancelling
+// a dialog and after returning from an attached session, without saving config.
+func TestCreateDialogRetainsChosenToolAcrossCancelAndReturn(t *testing.T) {
+	s := &fakeService{autoStart: true}
+	m := NewWithOptions(s, `C:\项目`, Options{DefaultTool: "codex"}).(*Model)
+	press(m, "n")
+	if m.tool != "codex" {
+		t.Fatal("first creation forgot launch default")
+	}
+	press(m, "tab")
+	press(m, "tab")
+	press(m, "right")
+	press(m, "esc")
+	press(m, "n")
+	if m.tool != "powershell" || m.focus != 0 || len(s.creates) != 0 {
+		t.Fatalf("cancel reset tool or created a process: tool=%q focus=%d creates=%+v", m.tool, m.focus, s.creates)
+	}
+	result := runOperation(t, m, press(m, "enter"))
+	if result.err != nil || len(s.creates) != 1 || s.creates[0].Tool != "powershell" {
+		t.Fatalf("retained choice did not reach service: result=%+v creates=%+v", result, s.creates)
+	}
+	m.Update(attachReturnedMsg{generation: m.generation})
+	press(m, "n")
+	if m.tool != "powershell" || len(s.stops)+len(s.removes) != 0 {
+		t.Fatal("return and new creation reset tool or stopped prior session")
+	}
+}
+
 func TestCreatedDescriptorSurvivesStartFailure(t *testing.T) {
 	s := &fakeService{startErr: errors.New("codex missing")}
 	m := modelWith(s)
@@ -604,9 +660,64 @@ func TestShortFormKeepsActiveFieldAndSaveCancelControlsVisible(t *testing.T) {
 				if !strings.Contains(view, "› "+label) {
 					t.Fatalf("mode=%v focus=%d height=%d hid active field: %q", currentMode, focus, height, view)
 				}
-				if height > 1 && (!strings.Contains(view, "Enter 保存") || !strings.Contains(view, "Esc 取消")) {
+				// matrix/hardened: creation enters the new terminal immediately.
+				action := "Enter 保存"
+				if currentMode == createMode {
+					action = "Enter 创建并进入"
+				}
+				if height > 1 && (!strings.Contains(view, action) || !strings.Contains(view, "Esc 取消")) {
 					t.Fatalf("mode=%v focus=%d height=%d hid save/cancel: %q", currentMode, focus, height, view)
 				}
+			}
+		}
+	}
+}
+
+// matrix/hardened: a padded input must not clip the explanatory suffix at the
+// actual 80-column default or the wider native lifecycle-test window.
+func TestCreateGroupHintAndEditableValueRemainVisibleAfterResize(t *testing.T) {
+	for _, width := range []int{80, 160} {
+		t.Run(fmt.Sprint(width), func(t *testing.T) {
+			m := modelWith(&fakeService{})
+			press(m, "n")
+			press(m, "tab")
+			press(m, "tab")
+			press(m, "tab")
+			m.Update(tea.WindowSizeMsg{Width: width, Height: 45})
+			press(m, "开发分组")
+			view := ansi.Strip(m.View())
+			if !strings.Contains(view, "› 分组：开发分组") || !strings.Contains(view, "（留空为默认分组）") {
+				t.Fatalf("width %d clipped editable group or its hint: %q", width, view)
+			}
+			m.group.SetValue(strings.Repeat("开发分组", 16))
+			view = ansi.Strip(m.View())
+			if !strings.Contains(view, "（留空为默认分组）") {
+				t.Fatalf("width %d let a long group hide its hint: %q", width, view)
+			}
+			for _, line := range strings.Split(view, "\n") {
+				if ansi.StringWidth(line) > width {
+					t.Fatalf("width %d overflowed a form line: %q", width, line)
+				}
+			}
+		})
+	}
+}
+
+// matrix/hardened: lifecycle guidance must retain the explicit confirm/cancel
+// controls in a short terminal instead of making a stop dialog look stuck.
+func TestShortConfirmationKeepsControlsAndTargetVisible(t *testing.T) {
+	for _, currentMode := range []mode{confirmStopMode, confirmRemoveMode} {
+		for height := 1; height <= 8; height++ {
+			m := modelWith(&fakeService{})
+			m.mode = currentMode
+			m.target = terminalhost.SessionInfo{Name: "待确认会话", Tool: "codex", State: "running", Dir: `C:\项目`}
+			m.Update(tea.WindowSizeMsg{Width: 100, Height: height})
+			view := ansi.Strip(m.View())
+			if !strings.Contains(view, "Enter 确认") || !strings.Contains(view, "Esc 取消") || len(strings.Split(view, "\n")) > height {
+				t.Fatalf("height %d hid confirmation controls: %q", height, view)
+			}
+			if height >= 3 && !strings.Contains(view, m.target.Name) {
+				t.Fatalf("height %d hid the target identity: %q", height, view)
 			}
 		}
 	}

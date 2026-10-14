@@ -22,6 +22,52 @@ import (
 	"github.com/google/uuid"
 )
 
+// matrix/hardened: the displayed default group must round-trip through the
+// shared store without changing its persisted group ID or process generation.
+func TestWindowsSharedUIGroupUsesOriginalDefaultGroup(t *testing.T) {
+	cli := nativeBootstrapCLI(t)
+	parent, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := options{Store: "statedb", StateDir: filepath.Join(parent, "shared-ui"), Pipe: winipc.PipePrefix + "shared-ui-" + uuid.NewString()}
+	var identity terminalhost.Response
+	nativeBootstrapCleanup(t, config, &identity)
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, cli, "manager-start", "--store", config.Store, "--state-dir", config.StateDir, "--pipe", config.Pipe, "--json").CombinedOutput()
+	if err != nil {
+		t.Fatalf("shared UI bootstrap failed: %v %s", err, output)
+	}
+	if err := json.Unmarshal(output, &identity); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateNativeManager(config, identity); err != nil {
+		t.Fatal(err)
+	}
+	service := &nativeService{pipe: config.Pipe, store: config.Store}
+	created, err := service.Create(ctx, "默认分组会话", "shell", parent)
+	if err != nil || created.Group != "" || created.ID == "" || created.RunID == "" {
+		t.Fatalf("UI create did not select its default group: %+v %v", created, err)
+	}
+	for _, group := range []string{"研发", ""} {
+		if err := service.Move(ctx, created.ID, created.RunID, group); err != nil {
+			t.Fatal(err)
+		}
+		items, err := service.List(ctx)
+		if err != nil || len(items) != 1 || items[0].Group != group || items[0].RunID != created.RunID || items[0].PID != created.PID {
+			t.Fatalf("UI group move changed process or presentation: %+v %v", items, err)
+		}
+	}
+	raw := nativeCall(t, config.Pipe, terminalhost.Request{Op: "fleet-list"})
+	if len(raw.Sessions) != 1 || raw.Sessions[0].Group != nativestatestore.DefaultGroup {
+		t.Fatalf("UI translation changed persisted default group: %+v", raw.Sessions)
+	}
+	if err := service.Stop(ctx, created.ID, created.RunID); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestWindowsSharedStoreCLIUsesOriginalSchemaAndRefusesForeignStore(t *testing.T) {
 	cli := nativeBootstrapCLI(t)
 	parent, err := filepath.EvalSymlinks(t.TempDir())
