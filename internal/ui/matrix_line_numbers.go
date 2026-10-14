@@ -5,8 +5,8 @@ package ui
 // Every list row except view-mode dividers gets a number (group headers too,
 // so ":N" can land on a group). ":" opens a one-line command prompt in place of
 // the help bar: ":12<Enter>" or ":12o" jumps to and activates row 12,
-// matrix/hardened: ":12l" only selects row 12. ":set nonu" /
-// ":set nu" hide or show the numbers for this run. Numbers are drawn only in
+// matrix/hardened: ":12l" only selects row 12; ":12h" applies h/left there.
+// ":set nonu" / ":set nu" hide or show the numbers for this run. Numbers are drawn only in
 // the classic one-line-per-row list; the embedded sidebar's card heights
 // depend on width, so it keeps its full width (":N" still works there).
 
@@ -22,6 +22,15 @@ import (
 )
 
 const matrixCmdMaxLen = 32
+
+// matrix/hardened: resolve every numeric suffix before applying its list action.
+type matrixNumericAction uint8
+
+const (
+	matrixNumericOpen matrixNumericAction = iota
+	matrixNumericSelect
+	matrixNumericCollapse
+)
 
 // matrixRowNumbers maps flatItems indices to 1-based line numbers (0 for
 // dividers) and returns the highest number.
@@ -90,15 +99,18 @@ func (h *Home) matrixJumpToLine(n int) bool {
 
 // matrixHandleCmdKey handles keys while the ":" prompt is open.
 func (h *Home) matrixHandleCmdKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	// matrix/hardened: only a complete numeric command accepts l or the
+	// matrix/hardened: only a complete numeric command accepts h/l or the
 	// configured open key; letters in textual commands remain ordinary text.
 	text := strings.TrimSpace(h.navCount.cmdBuf)
 	if matrixNumericCommand(text) {
 		if msg.String() == "l" {
-			return h.matrixSubmitCmd(true)
+			return h.matrixSubmitCmd(matrixNumericSelect)
+		}
+		if msg.String() == "h" {
+			return h.matrixSubmitCmd(matrixNumericCollapse)
 		}
 		if h.normalizeMainKey(msg.String()) == defaultHotkeyBindings[hotkeyOpenSession] {
-			return h.matrixSubmitCmd(false)
+			return h.matrixSubmitCmd(matrixNumericOpen)
 		}
 	}
 	switch msg.Type {
@@ -115,7 +127,7 @@ func (h *Home) matrixHandleCmdKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		h.navCount.cmdBuf = string(r[:len(r)-1])
 		return h, nil
 	case tea.KeyEnter:
-		return h.matrixSubmitCmd(false)
+		return h.matrixSubmitCmd(matrixNumericOpen)
 	case tea.KeySpace:
 		h.matrixCmdAppend(" ")
 		return h, nil
@@ -134,15 +146,15 @@ func (h *Home) matrixCmdAppend(s string) {
 	}
 }
 
-// matrix/hardened: clear the numeric prefix before either selecting or opening.
-func (h *Home) matrixSubmitCmd(jumpOnly bool) (tea.Model, tea.Cmd) {
+// matrix/hardened: clear the prefix before selecting, collapsing, or opening.
+func (h *Home) matrixSubmitCmd(action matrixNumericAction) (tea.Model, tea.Cmd) {
 	text, overflow := strings.TrimSpace(h.navCount.cmdBuf), h.navCount.cmdOverflow
 	h.matrixResetNav()
 	if overflow {
 		h.setError(fmt.Errorf("command is too long (maximum %d bytes)", matrixCmdMaxLen))
 		return h, nil
 	}
-	return h, h.matrixRunCmd(text, jumpOnly)
+	return h, h.matrixRunCmd(text, action)
 }
 
 func matrixNumericCommand(text string) bool {
@@ -162,9 +174,9 @@ func matrixNumericCommand(text string) bool {
 	return true
 }
 
-// matrix/hardened: numeric l refreshes the selection preview without entering
-// a session, restarting a stopped session, or changing group/window expansion.
-func (h *Home) matrixRunCmd(text string, jumpOnly bool) tea.Cmd {
+// matrix/hardened: numeric l only selects, while h uses ordinary collapse/parent
+// navigation; neither enters a session or restarts a stopped session.
+func (h *Home) matrixRunCmd(text string, action matrixNumericAction) tea.Cmd {
 	if text == "" {
 		return nil
 	}
@@ -174,7 +186,12 @@ func (h *Home) matrixRunCmd(text string, jumpOnly bool) tea.Cmd {
 			h.setError(fmt.Errorf("no line %d (list has %d)", n, total))
 			return nil
 		}
-		if jumpOnly {
+		switch action {
+		case matrixNumericSelect:
+			return h.fetchSelectedPreview()
+		case matrixNumericCollapse:
+			h.collapseOrNavUp()
+			h.syncViewport() // matrix/hardened: keep the resulting parent row visible after folding.
 			return h.fetchSelectedPreview()
 		}
 		// matrix/hardened: reuse the ordinary opening action after resolving the row.
@@ -206,7 +223,7 @@ func (h *Home) matrixNumericConfirmKeys() string {
 func (h *Home) matrixRenderCmdBar() string {
 	border := lipgloss.NewStyle().Foreground(ColorBorder).Render(strings.Repeat("─", max(0, h.width)))
 	prompt := lipgloss.NewStyle().Foreground(ColorText).Render(":" + h.navCount.cmdBuf + "█")
-	// matrix/hardened: the command bar advertises the cursor-only suffix too.
-	hint := lipgloss.NewStyle().Foreground(ColorComment).Render("   N+l goes to line · N+" + h.matrixNumericConfirmKeys() + " opens · set nu / set nonu · Esc cancel")
+	// matrix/hardened: advertise selecting and collapsing without opening.
+	hint := lipgloss.NewStyle().Foreground(ColorComment).Render("   N+l goes to line · N+h collapses · N+" + h.matrixNumericConfirmKeys() + " opens · set nu / set nonu · Esc cancel")
 	return lipgloss.JoinVertical(lipgloss.Left, border, lipgloss.NewStyle().MaxWidth(h.width).Render(prompt+hint))
 }

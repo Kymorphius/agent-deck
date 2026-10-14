@@ -45,7 +45,7 @@ import (
 )
 
 // matrix/hardened: identifies our hardened build.
-var Version = "1.16.26+matrix.70" // matrix/hardened: p toggles pinned view; overridden via -ldflags.
+var Version = "1.16.26+matrix.71" // matrix/hardened: numeric h collapses the addressed group; overridden via -ldflags.
 
 // Table column widths for list command output
 const (

@@ -320,6 +320,7 @@ func (h *HelpOverlay) View() string {
 		{"3j / 3k", "Move 3 rows (any count)"},
 		{"12 / :12 + " + openSessionKey, "Open session / toggle group at line 12 (:set nonu hides numbers)"},
 		{"12l / :12l", "Go to line 12 without opening"}, // matrix/hardened: keep a cursor-only address alongside numeric activation.
+		{"12h / :12h", "Collapse group / parent at line 12"}, // matrix/hardened: absolute address plus existing h semantics.
 		{"''", "Back to the row before the last 'N / :N jump"},
 		{"Space", "Jump mode"},
 		{altSessionKey, "Alternate session (swap with the previous one, vim-style)"},

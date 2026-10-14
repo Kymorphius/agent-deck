@@ -11891,12 +11891,19 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	raw := msg.String()
 	key := h.normalizeMainKey(raw)
 	uiLog.Info("keypress", "raw", raw, "normalized", key, "type", msg.Type, "runes", string(msg.Runes))
-	// matrix/hardened: Nl only selects numbered row N; Enter/open activates it.
+	// matrix/hardened: Nl selects row N; Nh applies collapse/parent navigation.
+	// Enter/open activates it after resolving the same absolute row number.
 	// j/k still consume the same digits as a relative movement count.
-	if h.navCount.n > 0 && !h.navCount.groupJump && (raw == "l" || raw == "enter" || key == defaultHotkeyBindings[hotkeyOpenSession]) {
+	if h.navCount.n > 0 && !h.navCount.groupJump && (raw == "h" || raw == "l" || raw == "enter" || key == defaultHotkeyBindings[hotkeyOpenSession]) {
 		text := h.navCount.digits
 		h.matrixResetNav()
-		return h, h.matrixRunCmd(text, raw == "l")
+		action := matrixNumericOpen
+		if raw == "l" {
+			action = matrixNumericSelect
+		} else if raw == "h" {
+			action = matrixNumericCollapse
+		}
+		return h, h.matrixRunCmd(text, action)
 	}
 
 	if key == "" {
