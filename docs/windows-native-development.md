@@ -142,6 +142,19 @@ Windows Terminal 窗口，并核对窗口、UI、后台、SessionID、RunID 和�
 这些结果限定于本次目标系统、Windows Terminal 和 Microsoft 拼音，不代表所有
 终端或输入法的兼容性。模型编码与历史恢复仍使用前两节各自的独立证据。
 
+本次修复提交 `6a3029d1` 在目标 Windows 的独立源码目录运行
+`scripts/windows-native-test.ps1 -Packages @('./cmd/agent-deck-native','./internal/nativeui') -NativeIntegration`：
+两个包全部通过，分别用时 35.076 秒与 1.556 秒，测试工具已清理自己创建的私有根目录。
+发行程序由同一提交的普通私有 clone 使用 Go 1.25.13、`CGO_ENABLED=0`、
+`-trimpath -buildvcs=true` 原生构建，独立读回准确提交及 `vcs.modified=false`。
+本次 worktree 构建虽然成功，却没有 Go VCS 标识；它没有作为发行产物安装。
+发布检查必须核对实际产物元数据，不能以源码 `git status` 干净代替产物身份。
+
+桌面和开始菜单的 0.6 入口已指向新的哈希目录，并在实际桌面加载该程序，继续连接
+原 0.6 后台。原快捷方式已保存经哈希验证的备份，旧版入口、已打开的 UI、后台及
+原 Codex 进程保持不变。桌面 fixture、其后台和全部临时启动记录已按准确归属清理；
+测试窗口的剪贴板及输入语言操作已收尾。
+
 ## 并行部署与程序选择
 
 使用原生安装器的 `-StateDirectoryName LiteState-0.6 -ShortcutSuffix 0.6`，可创建
