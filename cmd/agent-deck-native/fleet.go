@@ -16,6 +16,7 @@ import (
 	"github.com/asheshgoplani/agent-deck/internal/conpty"
 	"github.com/asheshgoplani/agent-deck/internal/nativefleet"
 	"github.com/asheshgoplani/agent-deck/internal/nativeregistry"
+	"github.com/asheshgoplani/agent-deck/internal/nativestatestore"
 	"github.com/asheshgoplani/agent-deck/internal/nativeui"
 	"github.com/asheshgoplani/agent-deck/internal/terminalhost"
 	"github.com/asheshgoplani/agent-deck/internal/winipc"
@@ -45,6 +46,15 @@ func runFleet(config options, stdout, stderr io.Writer) error {
 			return err
 		}
 		return nativeui.Run(&nativeService{pipe: config.Pipe}, config.Cwd)
+	}
+	// matrix/hardened: every managed command verifies its selected store and
+	// namespace before a read or mutation, including an explicitly named pipe.
+	manager, err := callHost(context.Background(), config.Pipe, terminalhost.Request{Op: "fleet-status"})
+	if err != nil {
+		return err
+	}
+	if err := validateNativeManager(config, manager); err != nil {
+		return err
 	}
 	request := terminalhost.Request{SessionID: config.SessionID, RunID: config.RunID, Name: config.Name, Tool: config.Tool, Group: config.Group}
 	switch config.Command {
@@ -106,7 +116,16 @@ func runFleetServer(config options, stdout io.Writer) (resultErr error) {
 		return err
 	}
 	defer listener.Close()
-	store, err := nativeregistry.Open(config.StateDir)
+	var store nativefleet.Registry
+	// matrix/hardened: one selected store is authoritative; never synchronize
+	// production and prototype databases or implicitly migrate either one.
+	if config.Store == "statedb" {
+		store, err = nativestatestore.Open(config.StateDir)
+	} else if config.Store == "" || config.Store == "prototype" {
+		store, err = nativeregistry.Open(config.StateDir)
+	} else {
+		return errors.New("unsupported native session store")
+	}
 	if err != nil {
 		return err
 	}
@@ -116,7 +135,7 @@ func runFleetServer(config options, stdout io.Writer) (resultErr error) {
 			return nil, err
 		}
 		return process, nil
-	}, nativefleet.Identity{StateDir: config.StateDir, Version: version})
+	}, nativefleet.Identity{StateDir: config.StateDir, Version: nativeManagerVersion(config)})
 	if err != nil {
 		_ = store.Close()
 		return err

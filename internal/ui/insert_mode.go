@@ -1,10 +1,13 @@
 package ui
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
+	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -129,6 +132,12 @@ func (h *Home) enterEmbeddedMode() bool {
 		if !ok {
 			return false
 		}
+		// matrix/hardened: the raw embedded PTY router still constructs tmux
+		// attach commands. Expose this limit without launching a native target.
+		if target.local != nil && target.local.UsesTerminalBackend() {
+			h.setError(fmt.Errorf("embedded session: native terminal attach is unavailable; use insert mode"))
+			return false
+		}
 		req, ok := h.embeddedAttachRequest(target)
 		if !ok {
 			h.setError(fmt.Errorf("embedded session: attach target is unavailable"))
@@ -218,6 +227,22 @@ func (h *Home) selectedInsertTarget() (insertTargetRef, bool) {
 			h.setError(fmt.Errorf("insert mode: select a session first"))
 			return insertTargetRef{}, false
 		}
+		// matrix/hardened: liveness permits terminal input, never an AI working
+		// verdict. Pending, stale and failed probes remain visible and do not start.
+		if item.Session.UsesTerminalBackend() {
+			ctx, cancel := h.terminalInsertContext()
+			defer cancel()
+			observation, err := item.Session.ObserveTerminal(ctx)
+			if err != nil {
+				h.setError(fmt.Errorf("insert mode: session %q: %w", item.Session.Title, err))
+				return insertTargetRef{}, false
+			}
+			if !observation.Alive {
+				h.setError(fmt.Errorf("insert mode: session %q terminal is not running", item.Session.Title))
+				return insertTargetRef{}, false
+			}
+			return insertTargetRef{local: item.Session}, true
+		}
 		if item.Session.GetTmuxSession() == nil {
 			h.setError(fmt.Errorf("insert mode: session %q has no tmux pane", item.Session.Title))
 			return insertTargetRef{}, false
@@ -225,6 +250,10 @@ func (h *Home) selectedInsertTarget() (insertTargetRef, bool) {
 		return insertTargetRef{local: item.Session}, true
 	case session.ItemTypeWindow:
 		inst := h.getInstanceByID(item.WindowSessionID)
+		if inst != nil && inst.UsesTerminalBackend() {
+			h.setError(fmt.Errorf("insert mode: %w", session.ErrTerminalWindowUnsupported))
+			return insertTargetRef{}, false
+		}
 		if inst == nil || inst.GetTmuxSession() == nil {
 			h.setError(fmt.Errorf("insert mode: session has no tmux pane"))
 			return insertTargetRef{}, false
@@ -249,10 +278,170 @@ func (h *Home) selectedInsertTarget() (insertTargetRef, bool) {
 // default or test override) for `target`. Pulled out so enterInsertMode is
 // readable and tests can stub the opener without touching production code.
 func (h *Home) openInsertKeySender(target insertTargetRef) (insertKeySender, error) {
+	// matrix/hardened: pin input to this immutable Instance binding instead of
+	// resolving its row on every key or opening a tmux client for a native run.
+	if target.local != nil && target.local.UsesTerminalBackend() {
+		ctx := h.ctx
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		return &terminalInsertKeySender{instance: target.local, ctx: ctx}, nil
+	}
 	if h.insertOpenKeySender == nil {
 		return nil, nil // legacy fallback path — flushInsertBuf will use SendKeys
 	}
 	return h.insertOpenKeySender(target)
+}
+
+// matrix/hardened: a terminal sender owns only an input binding. Closing the
+// viewer never stops its backend, and a retired run is never silently rebound.
+type terminalInsertKeySender struct {
+	instance *session.Instance
+	ctx      context.Context
+	mu       sync.Mutex
+	closed   bool
+}
+
+func (s *terminalInsertKeySender) SendKeys(text string) error {
+	return s.send([]byte(text))
+}
+
+func (s *terminalInsertKeySender) SendEnter() error {
+	return s.send([]byte{'\r'})
+}
+
+func (s *terminalInsertKeySender) SendNamedKey(key string) error {
+	data, err := terminalInsertNamedKey(key)
+	if err != nil {
+		return err
+	}
+	return s.send(data)
+}
+
+func (s *terminalInsertKeySender) send(data []byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return fmt.Errorf("native terminal input binding is closed")
+	}
+	ctx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
+	defer cancel()
+	return s.instance.SendTerminal(ctx, data)
+}
+
+func (s *terminalInsertKeySender) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.closed = true
+	return nil
+}
+
+func (h *Home) terminalInsertContext() (context.Context, context.CancelFunc) {
+	ctx := h.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithTimeout(ctx, 10*time.Second)
+}
+
+// matrix/hardened: terminal input uses a bounded, explicit VT translation.
+// Unsupported keys fail visibly instead of being guessed or sent to tmux.
+func terminalInsertNamedKey(key string) ([]byte, error) {
+	if strings.HasPrefix(key, "M-") {
+		plain := strings.TrimPrefix(key, "M-")
+		data, err := terminalInsertNamedKey(plain)
+		if err != nil && utf8.RuneCountInString(plain) == 1 {
+			data, err = []byte(plain), nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		return append([]byte{0x1b}, data...), nil
+	}
+	if len(key) == 3 && key[:2] == "C-" {
+		ch := key[2]
+		if ch >= 'A' && ch <= 'Z' {
+			ch += 'a' - 'A'
+		}
+		if ch >= 'a' && ch <= 'z' {
+			return []byte{ch - 'a' + 1}, nil
+		}
+	}
+	var data string
+	switch key {
+	case "Enter":
+		data = "\r"
+	case "Space":
+		data = " "
+	case "BSpace":
+		data = "\x7f"
+	case "Escape":
+		data = "\x1b"
+	case "Tab":
+		data = "\t"
+	case "BTab":
+		data = "\x1b[Z"
+	case "Up":
+		data = "\x1b[A"
+	case "Down":
+		data = "\x1b[B"
+	case "Right":
+		data = "\x1b[C"
+	case "Left":
+		data = "\x1b[D"
+	case "Home":
+		data = "\x1b[H"
+	case "End":
+		data = "\x1b[F"
+	case "PPage":
+		data = "\x1b[5~"
+	case "NPage":
+		data = "\x1b[6~"
+	case "IC":
+		data = "\x1b[2~"
+	case "DC":
+		data = "\x1b[3~"
+	default:
+		return nil, fmt.Errorf("native terminal input does not support key %q", key)
+	}
+	return []byte(data), nil
+}
+
+func (h *Home) handleTerminalInsertKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if msg.Type == tea.KeyEsc && !h.embeddedMode && !msg.Alt {
+		h.flushInsertBuf()
+		h.exitInsertMode()
+		return h, nil
+	}
+	if msg.Type == tea.KeyRunes || msg.Type == tea.KeySpace {
+		text := string(msg.Runes)
+		if msg.Type == tea.KeySpace {
+			text = " "
+		}
+		if msg.Alt {
+			h.flushInsertBuf()
+			h.dispatchInsertKey("\x1b"+text, false)
+			return h, nil
+		}
+		h.insertBuf.WriteString(text)
+		return h, h.scheduleInsertFlush()
+	}
+	h.flushInsertBuf()
+	key, ok := embeddedNamedKey(msg.Type)
+	if msg.Type == tea.KeyEnter {
+		key, ok = "Enter", true
+	} else if !ok && strings.HasPrefix(msg.Type.String(), "ctrl+") {
+		key, ok = "C-"+strings.TrimPrefix(msg.Type.String(), "ctrl+"), true
+	}
+	if !ok {
+		h.setError(fmt.Errorf("native terminal input does not support key %q", msg.String()))
+		return h, nil
+	}
+	if msg.Alt {
+		key = "M-" + key
+	}
+	h.dispatchInsertNamedKey(key)
+	return h, nil
 }
 
 // exitInsertMode returns the TUI to normal navigation mode. Any pending
@@ -360,6 +549,11 @@ func (h *Home) handleInsertModeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			h.dispatchInsertNamedKey(key)
 			return h, nil
 		}
+	}
+	// matrix/hardened: original local and remote dispatch stay unchanged. Only
+	// an explicitly bound terminal sender interprets keys as raw VT input.
+	if _, native := h.insertKeySender.(*terminalInsertKeySender); native {
+		return h.handleTerminalInsertKey(msg)
 	}
 	switch msg.Type {
 	case tea.KeyEsc:

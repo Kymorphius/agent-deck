@@ -58,6 +58,9 @@ func parseFleetOptions(args []string, help io.Writer) (options, error) {
 	flags.SetOutput(help)
 	flags.StringVar(&o.Pipe, "pipe", "", "manager pipe (default: current user and state directory)")
 	flags.StringVar(&o.StateDir, "state-dir", "", "dedicated private registry directory")
+	// matrix/hardened: keep the validated v0.3 registry intact while accepting
+	// the original session schema in an explicitly selected integration scope.
+	flags.StringVar(&o.Store, "store", "prototype", "session store: prototype or statedb (original session schema)")
 	if o.Command != "serve" && o.Command != "ui" {
 		flags.BoolVar(&o.JSON, "json", false, "JSON response")
 	}
@@ -102,12 +105,18 @@ func parseFleetOptions(args []string, help io.Writer) (options, error) {
 	if len(flags.Args()) != 0 {
 		return o, errors.New("unexpected positional argument")
 	}
+	if o.Store != "prototype" && o.Store != "statedb" {
+		return o, errors.New("--store must be prototype or statedb")
+	}
 	if o.StateDir == "" {
 		dir, err := defaultStateDirectory()
 		if err != nil {
 			return o, err
 		}
 		o.StateDir = dir
+		if o.Store == "statedb" {
+			o.StateDir += "Shared"
+		}
 	}
 	abs, err := filepath.Abs(o.StateDir)
 	if err != nil {
@@ -118,6 +127,9 @@ func parseFleetOptions(args []string, help io.Writer) (options, error) {
 		o.Pipe, err = fleetPipeFor(o.StateDir)
 		if err != nil {
 			return o, err
+		}
+		if o.Store == "statedb" {
+			o.Pipe += "-statedb"
 		}
 	}
 	if err := validatePipe(o.Pipe); err != nil {

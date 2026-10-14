@@ -26,9 +26,11 @@ type options struct {
 	Screen, JSON                           bool
 	Data                                   []byte
 	StateDir, SessionID, RunID, Name, Tool string
-	Group                                  string
-	Background                             bool
-	NoStart                                bool
+	// matrix/hardened: opt-in original StateDB reuse has a distinct manager identity.
+	Store      string
+	Group      string
+	Background bool
+	NoStart    bool
 }
 
 type envFlags []string
@@ -210,7 +212,7 @@ func mergedEnv(base, overrides []string) []string {
 }
 
 func printHelp(output io.Writer) {
-	fmt.Fprintln(output, `agent-deck-native 0.3.0+matrix.prototype
+	fmt.Fprintln(output, `agent-deck-native 0.4.0+matrix.prototype
 Experimental standalone Windows terminal host; this is not the complete Agent Deck port.
 
 Usage:
@@ -219,6 +221,9 @@ Usage:
   agent-deck-native ui [--state-dir DIR] [--pipe NAME] [--cwd DIR]
   agent-deck-native manager-start [--state-dir DIR] [--pipe NAME] [--json]
   agent-deck-native list [--state-dir DIR] [--pipe NAME] [--json]
+
+  Managed commands accept --store statedb to reuse the original session schema
+  in a dedicated integration directory; the prototype store remains the default.
   agent-deck-native create --name NAME [--tool shell|codex|powershell|custom] [--cwd DIR] [--group NAME] [--no-start] [--pipe NAME] [-- executable args...]
   agent-deck-native start --session UUID [--pipe NAME] [--json]
   agent-deck-native rename --session UUID --name NAME [--pipe NAME]

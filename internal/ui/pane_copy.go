@@ -1,8 +1,10 @@
 package ui
 
 import (
+	"context"
 	"fmt"
 	"strings"
+	"time"
 	"unicode"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -49,7 +51,17 @@ func normalizeVisiblePane(raw string) string {
 }
 
 func captureVisiblePane(inst *session.Instance) (string, error) {
-	if inst == nil || inst.GetTmuxSession() == nil {
+	if inst == nil {
+		return "", fmt.Errorf("session has no terminal pane")
+	}
+	// matrix/hardened: reuse the original copy action with an explicitly bound
+	// terminal backend; a pending native descriptor must not fall through to tmux.
+	if inst.UsesTerminalBackend() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		return inst.CaptureTerminal(ctx, false)
+	}
+	if inst.GetTmuxSession() == nil {
 		return "", fmt.Errorf("session has no tmux pane")
 	}
 	return inst.GetTmuxSession().CapturePaneFresh()

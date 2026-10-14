@@ -3,11 +3,59 @@
 <!-- matrix/hardened: document the isolated experiment without claiming that the complete app is ported. -->
 
 `agent-deck-native` 是独立的 Windows 原生终端实验，版本为
-`0.3.0+matrix.prototype`。它不依赖 WSL 或 tmux，使用 ConPTY 启动
+`0.4.0+matrix.prototype`。它不依赖 WSL 或 tmux，使用 ConPTY 启动
 交互式子进程，通过本机命名管道提供输入、输出、截图、缩放和停止操作。
 现已支持独立的中文多会话列表、分组、搜索、SQLite 注册库，以及自动启动的后台；
-尚未接入现有 Agent Deck 的生产数据库、Web 页面或工具状态识别。
+新增了对原 Agent Deck 数据库格式及会话运行接口的接入；完整 Windows 主程序、
+Web 页面或工具状态识别仍未完成。现有生产配置和数据库不会被原型自动打开。
 现有 macOS/Linux 程序继续沿用原来的入口。
+
+## 复用原主程序的接入阶段
+
+<!-- matrix/hardened: reuse original persistence and business interfaces rather than extend a second UI. -->
+
+后续移植以原主程序为目标。v0.4 的改动集中在共享数据库、会话运行接口与原界面的
+复制和输入动作，没有继续扩充独立列表功能。
+
+原生后台可显式使用原来的 `internal/statedb` 和 `instances` / `groups` 表：
+
+```powershell
+.\agent-deck-native.exe manager-start --store statedb --json
+.\agent-deck-native.exe ui --store statedb --cwd 'C:\Projects\demo'
+```
+
+这个接入模式使用独立目录 `%LOCALAPPDATA%\AgentDeckNativeManagerShared`，数据库为
+`state.db`。自选目录仍需是专用私有目录；命名管道和后台版本握手包含存储类型，
+显式 `--pipe` 也不能让 StateDB 命令复用另一种存储的后台。其它管理命令使用相同
+`--store statedb`、`--state-dir` 和 `--pipe`。
+
+原项目的 StateDB reader 可以直接读取这里的会话与分组。启动描述保存在既有
+`tool_data.native_backend` 扩展区，不保存继承环境、屏幕历史或易变的运行标识。
+新记录继续使用原生 UUID；已有 Agent Deck 的旧格式 ID 保持原样，未做隐式转换。
+原生管理器只操作明确声明的原生记录，采用定向事务，保留其它会话和扩展数据。
+每个目录继续只有一个原生后台所有者；独立 StateDB 读取者和写入者需在后台取得
+目录所有权后打开。Windows 上若仍有其它 SQLite 句柄占用文件，重新取得目录
+所有权可能被拒绝，需要先关闭那些读取者。
+
+未指定 `--store` 时保留 v0.3 的注册库，避免改变已有原型记录。两种存储互不
+同步，也不会自动把现有生产 profile 或 `registry.sqlite` 导入 `state.db`。
+同一目录已有另一种数据库时拒绝打开，切换接入模式需选用另一专用目录。
+
+原来的 `session.Instance` 已有终端后端接口：原生模式下，已有预览和停止入口
+调用固定运行代次的后台；原界面的 `V` 复制与 `I` 输入也复用同一接口。加载原生
+描述后必须显式绑定经过核对的运行目标；尚未绑定、损坏或未知版本的描述不能
+退回 tmux，也不能启动进程。当前只有进程事实时，AI 状态显示 `unknown`，不把
+进程在运行解释为模型在工作。
+
+这部分原会话和界面接入通过隔离测试验证，尚未作为完整 Windows TUI 运行。
+原主程序仍需适配 Unix 文件锁、进程所有权、PTY、后台 IPC 和 POSIX 启动命令。
+原生对象的原主程序启动、重启、fork、辅助 tmux 窗口和嵌入式 attach 暂时明确
+拒绝；原生后台的独立 CLI 启动仍可用于验收。输入模式支持文本、常见导航与
+控制键，函数键和带修饰键的导航暂时返回不支持。
+
+原生 `PreviewFull` 读取有界保留输出（最多 4 MiB）并清除终端控制序列，不能
+当作完整对话历史。完整主程序移植会继续复用原会话模型、列表、搜索和业务，
+把平台执行放入后端；已经验证的 ConPTY、命名管道与进程树管理继续保留。
 
 ## 构建
 
