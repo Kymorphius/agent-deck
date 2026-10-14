@@ -12325,8 +12325,8 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return h, nil
 
-	case "p":
-		// Edit multi-repo paths
+	case defaultHotkeyBindings[hotkeyEditPaths]:
+		// matrix/hardened: Ctrl+L edits multi-repo paths; p now toggles pinned view.
 		if h.cursor < len(h.flatItems) {
 			item := h.flatItems[h.cursor]
 			if item.Type == session.ItemTypeSession && item.Session != nil && item.Session.IsMultiRepo() {
@@ -13135,7 +13135,7 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		h.saveUIState()
 		return h, h.fetchSelectedPreview()
 
-	case defaultHotkeyBindings[hotkeyTogglePinnedView]: // matrix/hardened: direct toggle follows configurable Ctrl+P binding.
+	case defaultHotkeyBindings[hotkeyTogglePinnedView]: // matrix/hardened: configurable p toggle, also reached by Ctrl/Option+P aliases.
 		selectedBefore := h.captureSelectedItemIdentity()
 		if h.groupViewMode == session.GroupViewPinnedOnly {
 			h.groupViewMode = session.GroupViewNormal

@@ -201,7 +201,7 @@ var defaultHotkeyBindings = map[string]string{
 	hotkeySkillsManager:    "s",
 	hotkeyTogglePreview:    "v",
 	hotkeyCycleGroupView:   "t",
-	hotkeyTogglePinnedView: "ctrl+p", // matrix/hardened: reserve Ctrl+P for pinned sessions instead of upward navigation.
+	hotkeyTogglePinnedView: "p", // matrix/hardened: plain p opens pinned sessions; control/Option aliases remain.
 	hotkeyCycleTimeFilter:  "*",
 	hotkeyMarkUnread:       "u",
 	hotkeyQuickApprove:     "a",
@@ -218,7 +218,7 @@ var defaultHotkeyBindings = map[string]string{
 	hotkeyExecShell:        "E",
 	hotkeyOpenShellHere:    "H",
 	hotkeyEditNotes:        "e",
-	hotkeyEditPaths:        "p",
+	hotkeyEditPaths:        "ctrl+l", // matrix/hardened: keep multi-repo paths accessible after p moves to pinned view.
 	hotkeyEditSession:      "P",
 	hotkeyWorktreeSetup:    "b",
 	hotkeyWorktreeFinish:   "W",
@@ -250,7 +250,7 @@ var hotkeyActionDefaultTriggers = map[string][]string{
 	hotkeyMoveToGroup:      {"M", "shift+m"},
 	hotkeyWorktreeFinish:   {"W", "shift+w"},
 	hotkeyEditSession:      {"P", "shift+p"},
-	hotkeyTogglePinnedView: {"ctrl+p", "alt+p"}, // matrix/hardened: both default chords open pinned sessions.
+	hotkeyTogglePinnedView: {"p", "ctrl+p", "alt+p"}, // matrix/hardened: primary key and compatible default chords.
 }
 
 // renamedHotkeys maps old action names to new names for backward compatibility.

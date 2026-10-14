@@ -229,9 +229,13 @@ func (h *HelpOverlay) View() string {
 	reorderDownKeys := "- / J / Shift+↓"
 	indentKeys := "Shift+→/←"
 	pinKeys := ","
-	pinnedViewKey := h.key(hotkeyTogglePinnedView, "Ctrl+P / Alt+P") // matrix/hardened
-	if pinnedViewKey == defaultHotkeyBindings[hotkeyTogglePinnedView] && h.hotkeyLookup["alt+p"] == defaultHotkeyBindings[hotkeyTogglePinnedView] {
-		pinnedViewKey = joinHotkeyLabels(pinnedViewKey, "alt+p") // matrix/hardened: both default pinned-view entry points.
+	pinnedViewKey := h.key(hotkeyTogglePinnedView, "p / Ctrl+P / Alt+P") // matrix/hardened
+	if pinnedViewKey == defaultHotkeyBindings[hotkeyTogglePinnedView] {
+		for _, alias := range []string{"ctrl+p", "alt+p"} {
+			if h.hotkeyLookup[alias] == defaultHotkeyBindings[hotkeyTogglePinnedView] {
+				pinnedViewKey = joinHotkeyLabels(pinnedViewKey, alias) // matrix/hardened: show only aliases owned by pinned view.
+			}
+		}
 	}
 	searchKey := h.key(hotkeySearch, "/")
 	settingsKey := h.key(hotkeySettings, "S")
@@ -277,7 +281,7 @@ func (h *HelpOverlay) View() string {
 	if cfg, _ := session.LoadUserConfig(); cfg != nil && !cfg.GetShowNotes() {
 		notesKey = ""
 	}
-	editPathsKey := h.key(hotkeyEditPaths, "p")
+	editPathsKey := h.key(hotkeyEditPaths, "Ctrl+L") // matrix/hardened: p is the pinned-view primary key.
 	editSessionKey := h.key(hotkeyEditSession, "P")
 	worktreeSetupKey := h.key(hotkeyWorktreeSetup, "b")
 	worktreeKey := h.key(hotkeyWorktreeFinish, "W")

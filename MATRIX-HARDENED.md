@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.69`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.70`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -66,7 +66,7 @@
 - `internal/session/claude_hooks.go`：`isAgentDeckHookCommand` 的判断规则：先去掉开头的 `VAR=值`，再要求第二个词是 `hook-handler`、程序名的文件名部分是 `agent-deck`。`RemoveClaudeHooks` 会扫描全部事件，并做 UTC 时间戳备份（约 387–414 行）。
 - `cmd/agent-deck/main.go`（约 4845、5070 行）：`agent-deck uninstall` 会移除这些钩子。`uninstall.sh` 第 253 行附近的 jq 过滤用的是同一套规则（正则），写回时用 `cat >` 保持软链接和权限。
 
-**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.69`。
+**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.70`。
 
 **测试**：以 `_hardened_test.go` 结尾的文件、`update_check_disable_test.go`、`update_timer_wiring_test.go` 等是新增或调整过的测试；`testdata/goldens/*` 里的快照已经按加固后的输出更新。
 
@@ -629,3 +629,11 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 - **matrix/hardened:** Shift+Enter 新开的独立终端直接执行 tmux 或远端命令，未经过当前 TUI 的输入路由；其中返回键以该终端、远端的实际支持为准。
 - **matrix/hardened:** `12l` 或 `:12l` 只把光标移到当前可见列表第 12 行，不打开会话或切换分组。`12` / `:12` 后按 Enter 或配置的打开键仍定位并激活，`3j` / `3k` 仍按相对移动计数，单独 `l` 仍执行原有右移、展开操作。无效、越界或溢出的行号不会操作当前条目。
 - 验证使用第 4 节隔离入口，覆盖实际输入转发、分片与粘贴、按键兼容、数字只定位，以及真实 PTY 的打开与返回。已打开的 TUI 在列表按 `Ctrl+T` 重载新版本。
+
+## 58. 用 p 切换置顶视图
+
+`1.16.26+matrix.70` 将列表里的 `p` 作为置顶视图主入口，再按一次返回普通列表；保留 `Ctrl+P`、`Alt+P` / macOS `Option+P` 兼容入口，`Ctrl+N/P` 上下导航继续关闭。
+
+- **matrix/hardened:** `[hotkeys].toggle_pinned_view` 默认 `p`；帮助展示实际可用的三个入口，筛选栏和空列表显示主入口。重绑或禁用会释放默认入口，显式配置的备用键仍优先，布局字符继续沿用统一映射。
+- **matrix/hardened:** 原 `p` 的多仓库路径编辑移至 `Ctrl+L`，仍由 `[hotkeys].edit_paths` 重绑或禁用；所有路径提示同步读取映射。普通文本输入、模态窗口及已连接终端继续使用各自的输入路由。
+- 验证覆盖主界面实际派发、三入口及 Mac/俄语字符、选中会话保持、重绑和禁用、冲突归属、多仓库编辑仍可达、普通导航与界面提示。安装后旧 TUI 在列表按 `Ctrl+T` 重载。
