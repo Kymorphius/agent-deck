@@ -131,10 +131,12 @@ func TestWindowsNativeBootstrapSurvivesOuterConsoleJob(t *testing.T) {
 	nativeWrite(t, ui.viewer, "\x01\x0b"+name+"\t")
 	nativeFleetFrame(t, ui, "project field on native create form", name, "› 目录：")
 	nativeWrite(t, ui.viewer, "\x01\x0b"+project+"\t")
-	nativeFleetFrame(t, ui, "native Shell selection", project, "› 工具：", "[Shell]")
+	// matrix/hardened: the exact focused row proves Shell remains selected.
+	nativeFleetFrame(t, ui, "native Shell selection", project, "› 工具：[Shell]")
 	nativeWrite(t, ui.viewer, "\r")
 	shell := nativeFleetFind(t, config.Pipe, name, "running")
-	if shell.HostPID != identity.HostPID || shell.PID == 0 || shell.RunID == "" {
+	// matrix/hardened: verify the complete project path independently of form width.
+	if shell.HostPID != identity.HostPID || shell.PID == 0 || shell.RunID == "" || shell.Tool != "shell" || !strings.EqualFold(shell.Dir, project) {
 		t.Fatalf("UI-created Shell does not belong to verified background manager: %+v", shell)
 	}
 	shellHandle := nativeProcessHandle(t, shell.PID)

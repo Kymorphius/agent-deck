@@ -22,6 +22,7 @@ import (
 	"github.com/asheshgoplani/agent-deck/internal/nativeregistry"
 	"github.com/asheshgoplani/agent-deck/internal/terminalhost"
 	"github.com/asheshgoplani/agent-deck/internal/winipc"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/google/uuid"
 )
 
@@ -74,14 +75,18 @@ type nativeFleetUI struct {
 
 func nativeStartFleetUI(t *testing.T, cli, pipe, stateDir, cwd string) *nativeFleetUI {
 	t.Helper()
+	// matrix/hardened: the native runner's GUID-private TEMP adds a long prefix.
+	// Keep full-path assertions observable, with room for named child projects,
+	// the input label and cursor; production UI sizing remains unchanged.
+	cols := max(160, ansi.StringWidth(cwd)+80)
 	process, err := conpty.Start(conpty.Options{
 		Executable: cli, Args: []string{"ui", "--pipe", pipe, "--state-dir", stateDir, "--cwd", cwd},
-		Dir: cwd, Cols: 160, Rows: 45,
+		Dir: cwd, Cols: cols, Rows: 45,
 	})
 	if err != nil {
 		t.Fatalf("start actual native UI: %v", err)
 	}
-	frame, err := terminalhost.New(process, 160, 45)
+	frame, err := terminalhost.New(process, cols, 45)
 	if err != nil {
 		_ = process.Close()
 		t.Fatalf("decode current UI console screen: %v", err)
@@ -135,11 +140,12 @@ func nativeFleetCreateFromUI(t *testing.T, ui *nativeFleetUI, fixture *nativeFle
 	nativeWrite(t, ui.viewer, "\x01\x0b"+name+"\t")
 	nativeFleetFrame(t, ui, "directory field focus", name, "› 目录：")
 	nativeWrite(t, ui.viewer, "\x01\x0b"+cwd+"\t")
-	nativeFleetFrame(t, ui, "tool field focus", cwd, "› 工具：", "[Shell]")
+	// matrix/hardened: focus and chosen tool must belong to the same rendered row.
+	nativeFleetFrame(t, ui, "tool field focus", cwd, "› 工具：[Shell]")
 	nativeWrite(t, ui.viewer, "\x1b[C")
-	nativeFleetFrame(t, ui, "select Codex without starting it", "[Codex]")
+	nativeFleetFrame(t, ui, "select Codex without starting it", "› 工具：Shell   [Codex]")
 	nativeWrite(t, ui.viewer, "\x1b[D")
-	nativeFleetFrame(t, ui, "return tool selection to Shell", "[Shell]")
+	nativeFleetFrame(t, ui, "return tool selection to Shell", "› 工具：[Shell]")
 	nativeWrite(t, ui.viewer, "\r")
 	info := nativeFleetFind(t, fixture.pipe, name, "running")
 	if info.ID == "" || info.RunID == "" || info.PID == 0 || info.HostPID != os.Getpid() || info.Tool != "shell" || !strings.EqualFold(info.Dir, cwd) {
