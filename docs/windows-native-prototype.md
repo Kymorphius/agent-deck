@@ -113,6 +113,12 @@ go build -trimpath -o .\agent-deck-native.exe .\cmd\agent-deck-native
 
 非 Windows 平台可以编译和测试参数解析，但运行命名管道或 ConPTY 会明确报错。
 
+<!-- matrix/hardened: native development has a Windows-specific isolated runner. -->
+Windows 原生测试使用 `scripts/windows-native-test.ps1`；默认离线，
+`-NativeIntegration` 显式开启私有 ConPTY 和后台 fixture。
+工具路径、包选择、隔离与失败现场处理见
+[Windows 原生开发与验证](windows-native-development.md)。
+
 ## 多会话列表
 
 在 Windows Terminal 中直接运行：
