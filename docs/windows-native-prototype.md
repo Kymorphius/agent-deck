@@ -73,7 +73,9 @@ powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\window
 同一历史验证，包括关闭 UI 后保活、相同 PID 重连、停止后 `h` 选择原对话、新运行
 拒绝旧 RunID 输入及停止请求，以及最终停止和目录所有权释放。详见
 [Windows 原生开发与验证](windows-native-development.md)。这是实际 ConPTY 链路的
-自动化证据，可见 Windows Terminal、输入法和桌面剪贴板仍需独立验收。
+自动化证据。随后同日完成独立的可见 Windows Terminal 桌面交互，验证 Microsoft
+拼音组合与候选提交、中文和 emoji 剪贴板、列表/表单/会话缩放，以及返回后接回
+同一子进程；并修复三处桌面输入问题。具体范围与证据见上述开发文档的桌面验证节。
 
 原生后台可显式使用原来的 `internal/statedb` 和 `instances` / `groups` 表：
 

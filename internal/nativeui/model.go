@@ -74,6 +74,9 @@ type Model struct {
 	listInFlight bool
 	pollToken    uint64
 	quitting     bool
+	// matrix/hardened: only RunWithOptions pairs private frame metadata with
+	// its filtering output; public New/View callers keep plain terminal views.
+	cursorFrames bool
 
 	target      terminalhost.SessionInfo
 	name        textinput.Model
@@ -156,7 +159,19 @@ func Run(service Service, defaultCwd string) error {
 
 // matrix/hardened: tool defaults belong to this window, not the shared manager.
 func RunWithOptions(service Service, defaultCwd string, options Options) error {
-	_, err := tea.NewProgram(NewWithOptions(service, defaultCwd, options), tea.WithAltScreen()).Run()
+	// matrix/hardened: Windows resize observation shares this window's cancellation,
+	// so a Send paused by an attached process also ends when the program exits.
+	ctx, cancel := context.WithCancel(context.Background())
+	model := NewWithOptions(service, defaultCwd, options).(*Model)
+	output, filtersCursorFrames := nativeUIOutput()
+	model.cursorFrames = filtersCursorFrames
+	program := tea.NewProgram(model, tea.WithAltScreen(), tea.WithContext(ctx), tea.WithOutput(output), consoleKeyProgramOption())
+	waitResize := observeProgramWindowSize(ctx, program)
+	defer func() {
+		cancel()
+		waitResize()
+	}()
+	_, err := program.Run()
 	return err
 }
 
@@ -491,12 +506,32 @@ func (m *Model) openCreate() tea.Cmd {
 }
 
 func (m *Model) resizeInputs() {
-	width := max(1, m.width-8)
-	m.name.Width, m.dir.Width, m.group.Width, m.search.Width = width, width, width, width
+	// matrix/hardened: textinput's rendered cursor uses one extra cell. Size
+	// each field from its actual prefix, including the current search group.
+	width := max(1, m.width-ansi.StringWidth("› 名称：")-1)
+	groupWidth := width
 	if m.mode == createMode {
 		// matrix/hardened: textinput pads its field and adds a cursor cell;
 		// reserve both that cell and the default-group hint after resizing.
-		m.group.Width = max(1, width-ansi.StringWidth(createGroupHint)-1)
+		groupWidth = max(1, width-ansi.StringWidth(createGroupHint))
+	}
+	for _, field := range []struct {
+		input *textinput.Model
+		width int
+	}{
+		{&m.name, width}, {&m.dir, width}, {&m.group, groupWidth},
+		{&m.search, max(1, m.width-ansi.StringWidth(m.searchPrefix())-1)},
+	} {
+		if field.input.Width == field.width {
+			continue
+		}
+		field.input.Width = field.width
+		// matrix/hardened: changing Width alone leaves textinput's old scroll
+		// offsets. Its public cursor API recomputes the viewport immediately,
+		// keeping the focused cursor visible before the next IME composition.
+		position := field.input.Position()
+		field.input.CursorEnd()
+		field.input.SetCursor(position)
 	}
 }
 
