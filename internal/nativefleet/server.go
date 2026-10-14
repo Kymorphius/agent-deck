@@ -176,7 +176,7 @@ func (s *Server) Dispatch(request terminalhost.Request) terminalhost.Response {
 		return s.list(request.Op == "fleet-status")
 	case "fleet-create":
 		return s.create(request)
-	case "fleet-start", "fleet-stop", "fleet-rename", "fleet-move", "fleet-remove", "status", "capture", "send", "resize", "stop":
+	case "fleet-start", "fleet-resume", "fleet-stop", "fleet-rename", "fleet-move", "fleet-remove", "status", "capture", "send", "resize", "stop":
 		return s.route(request)
 	default:
 		return failed(fmt.Errorf("unknown native manager operation %q", request.Op))
@@ -337,9 +337,16 @@ func (s *Server) route(request terminalhost.Request) terminalhost.Response {
 		r.OK, r.Error = false, err.Error()
 		return r
 	}
+	// matrix/hardened: selecting history is bound to exactly the displayed old
+	// generation, including an empty generation after a manager restart.
+	if request.Op == "fleet-resume" && request.RunID != e.runID {
+		return failed(ErrStaleRun)
+	}
 	switch request.Op {
 	case "fleet-start":
 		err = s.start(e)
+	case "fleet-resume":
+		err = s.startWithHistory(e, true)
 	case "fleet-stop", "stop":
 		err = e.stop()
 	case "fleet-rename":
@@ -383,6 +390,12 @@ func (s *Server) route(request terminalhost.Request) terminalhost.Response {
 }
 
 func (s *Server) start(e *entry) error {
+	return s.startWithHistory(e, false)
+}
+
+// matrix/hardened: Codex owns its cwd-filtered history picker. Resume adds only
+// a temporary subcommand, never model, account, approval or saved-launch flags.
+func (s *Server) startWithHistory(e *entry, resume bool) error {
 	// matrix/hardened: validate registry ownership immediately before launch;
 	// caller-closing or replacing the owned store cannot launch stale metadata.
 	record, err := s.store.Get(e.record.ID)
@@ -390,6 +403,22 @@ func (s *Server) start(e *entry) error {
 		return err
 	}
 	e.record = record
+	launch := record.Launch
+	if resume {
+		state := e.info().State
+		if state != "stopped" && state != "exited" {
+			return errors.New("Codex history can only be selected after the current run stops or exits")
+		}
+		executable := filepath.Base(record.Launch.Executable)
+		nativeCodex := executable == "codex"
+		if runtime.GOOS == "windows" {
+			nativeCodex = strings.EqualFold(executable, "codex.exe")
+		}
+		if record.Tool != "codex" || !nativeCodex || len(record.Launch.Args) != 0 {
+			return errors.New("Codex history requires a native Codex executable with no saved custom arguments")
+		}
+		launch.Args = []string{"resume"}
+	}
 	if e.host != nil && e.host.Dispatch(terminalhost.Request{Op: "status"}).Running {
 		return nil // Concurrent explicit starts observe the same owned run.
 	}
@@ -398,7 +427,7 @@ func (s *Server) start(e *entry) error {
 	}
 	e.host, e.orphan, e.runID, e.startupError = nil, nil, "", ""
 	runID := uuid.NewString()
-	process, err := s.launch(record.Launch)
+	process, err := s.launch(launch)
 	// matrix/hardened: Go adapters may return a typed nil pointer through the
 	// Process interface on startup failure; never invoke its native methods.
 	if nilProcess(process) {

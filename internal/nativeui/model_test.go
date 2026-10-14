@@ -27,6 +27,7 @@ type fakeService struct {
 	lists     int
 	creates   []terminalhost.SessionInfo
 	starts    []string
+	resumes   []mutation
 	stops     []mutation
 	removes   []mutation
 	moves     []struct{ id, runID, group string }
@@ -34,6 +35,7 @@ type fakeService struct {
 	attaches  []terminalhost.SessionInfo
 	createErr error
 	startErr  error
+	resumeErr error
 	listErr   error
 	autoStart bool
 	attach    func() *exec.Cmd
@@ -111,6 +113,23 @@ func (s *fakeService) Start(_ context.Context, id string) (terminalhost.SessionI
 		}
 	}
 	return terminalhost.SessionInfo{}, errors.New("missing session")
+}
+
+// matrix/hardened: the history route requires the old run displayed by the UI.
+func (s *fakeService) Resume(_ context.Context, id, runID string) (terminalhost.SessionInfo, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.resumes = append(s.resumes, mutation{id, runID})
+	if s.resumeErr != nil {
+		return terminalhost.SessionInfo{}, s.resumeErr
+	}
+	for i := range s.items {
+		if s.items[i].ID == id && s.items[i].RunID == runID && s.items[i].Tool == "codex" && (s.items[i].State == "stopped" || s.items[i].State == "exited") {
+			s.items[i].State, s.items[i].RunID = "running", "resumed-run"
+			return s.items[i], nil
+		}
+	}
+	return terminalhost.SessionInfo{}, errors.New("stale or unsupported resume")
 }
 
 func (s *fakeService) Stop(_ context.Context, id, runID string) error {
@@ -431,6 +450,155 @@ func TestOpenStartsStoppedOrExitedAndPreservesRunning(t *testing.T) {
 				t.Fatal("stopped process was not explicitly started")
 			}
 		})
+	}
+}
+
+// matrix/hardened: h selects history explicitly; Enter retains the previous
+// bare-start behavior, and neither route follows similarly named rows.
+func TestCodexHistoryUsesDisplayedIdentityAndAttachesNewRun(t *testing.T) {
+	for _, state := range []string{"stopped", "exited"} {
+		t.Run(state, func(t *testing.T) {
+			a, b := info("a", "同名", state, "old-a"), info("b", "同名", state, "old-b")
+			a.Tool, b.Tool = "codex", "codex"
+			s := &fakeService{items: []terminalhost.SessionInfo{a, b}}
+			m := modelWith(s)
+			press(m, "down")
+			result := runOperation(t, m, press(m, "h"))
+			if result.err != nil || len(s.resumes) != 1 || s.resumes[0] != (mutation{b.ID, b.RunID}) || len(s.starts) != 0 || len(s.attaches) != 1 || s.attaches[0].ID != b.ID || s.attaches[0].RunID != "resumed-run" || m.mode != attachMode {
+				t.Fatalf("history lost exact identity or started a fresh dialog: result=%+v resumes=%+v attaches=%+v", result, s.resumes, s.attaches)
+			}
+			if s.items[0] != a {
+				t.Fatal("history affected another similarly named row")
+			}
+		})
+	}
+	for _, openKey := range []string{"enter", "o"} {
+		a := info("target", "Codex", "stopped", "old")
+		a.Tool = "codex"
+		s := &fakeService{items: []terminalhost.SessionInfo{a}}
+		m := modelWith(s)
+		result := runOperation(t, m, press(m, openKey))
+		if result.err != nil || len(s.starts) != 1 || len(s.resumes) != 0 || s.attaches[0].RunID != "new-run" {
+			t.Fatalf("ordinary %s changed stopped Codex into history selection", openKey)
+		}
+	}
+}
+
+func TestCodexHistoryRejectsUnsupportedRowsBeforeServiceCall(t *testing.T) {
+	for _, current := range []terminalhost.SessionInfo{
+		{ID: "live", RunID: "live-run", Tool: "codex", State: "running"},
+		{ID: "error", RunID: "error-run", Tool: "codex", State: "error"},
+		{ID: "unknown", Tool: "codex", State: "unknown"},
+		{ID: "shell", Tool: "shell", State: "stopped"},
+		{ID: "custom", Tool: "custom", State: "exited"},
+	} {
+		s := &fakeService{items: []terminalhost.SessionInfo{current}}
+		m := modelWith(s)
+		if cmd := press(m, "h"); cmd != nil || m.mode != listMode || len(s.resumes)+len(s.starts)+len(s.attaches) != 0 || !strings.Contains(m.notice, "已停止或退出") {
+			t.Fatalf("unsupported history row reached service: %+v mode=%d notice=%s", current, m.mode, m.notice)
+		}
+	}
+}
+
+func TestCodexHistoryRechecksStateAndRunWithoutAdoptingReplacement(t *testing.T) {
+	for _, change := range []string{"restart", "running same run", "changed tool", "removed"} {
+		t.Run(change, func(t *testing.T) {
+			a := info("target", "原 Codex", "stopped", "old")
+			a.Tool = "codex"
+			s := &fakeService{items: []terminalhost.SessionInfo{a}}
+			m := modelWith(s)
+			cmd := press(m, "h")
+			replacement := a
+			switch change {
+			case "restart":
+				replacement.RunID = "replacement"
+			case "running same run":
+				replacement.State = "running"
+			case "changed tool":
+				replacement.Tool = "custom"
+			}
+			if change == "removed" {
+				s.replace()
+			} else {
+				s.replace(replacement)
+			}
+			result := runOperation(t, m, cmd)
+			if result.err == nil || len(s.resumes)+len(s.starts)+len(s.attaches) != 0 {
+				t.Fatalf("history followed replacement after %s: %+v", change, result)
+			}
+		})
+	}
+}
+
+// matrix/hardened: cover the remaining race between the List precheck and the
+// manager's locked request; the selected old run must reach Resume unchanged.
+type restartBeforeResumeService struct {
+	*fakeService
+}
+
+func (s *restartBeforeResumeService) Resume(ctx context.Context, id, runID string) (terminalhost.SessionInfo, error) {
+	s.mu.Lock()
+	for i := range s.items {
+		if s.items[i].ID == id {
+			s.items[i].RunID = "replacement-after-check"
+		}
+	}
+	s.mu.Unlock()
+	return s.fakeService.Resume(ctx, id, runID)
+}
+
+func TestCodexHistoryServiceRaceAndFailureNeverFallBackOrRetry(t *testing.T) {
+	for _, test := range []string{"backend race", "launch error", "attach error"} {
+		t.Run(test, func(t *testing.T) {
+			a := info("target", "Codex", "stopped", "old")
+			a.Tool = "codex"
+			s := &fakeService{items: []terminalhost.SessionInfo{a}}
+			var service Service = s
+			if test == "backend race" {
+				service = &restartBeforeResumeService{fakeService: s}
+			}
+			if test == "launch error" {
+				s.resumeErr = errors.New("resume unavailable")
+			}
+			if test == "attach error" {
+				s.attach = func() *exec.Cmd { return nil }
+			}
+			m := New(service, a.Dir).(*Model)
+			m.Update(m.refresh()())
+			result := runOperation(t, m, press(m, "h"))
+			if result.err == nil || len(s.resumes) != 1 || s.resumes[0] != (mutation{a.ID, a.RunID}) || len(s.starts) != 0 || m.mode != listMode || m.selectedID != a.ID {
+				t.Fatalf("history failure retried or switched routes: result=%+v resumes=%+v starts=%+v", result, s.resumes, s.starts)
+			}
+			wantAttaches := 0
+			if test == "attach error" {
+				wantAttaches = 1
+			}
+			if len(s.attaches) != wantAttaches {
+				t.Fatal("history failure retried attachment")
+			}
+		})
+	}
+}
+
+func TestCodexHistoryGuidanceAndSearchKeyOwnership(t *testing.T) {
+	a := info("target", "Codex", "stopped", "old")
+	a.Tool = "codex"
+	s := &fakeService{items: []terminalhost.SessionInfo{a}}
+	m := modelWith(s)
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 24})
+	view := ansi.Strip(m.View())
+	if !strings.Contains(view, "h 历史") || !strings.Contains(view, "Enter 新对话 · h 选择历史") {
+		t.Fatalf("stopped Codex hides separate launch choices: %q", view)
+	}
+	press(m, "/")
+	press(m, "h")
+	if m.search.Value() != "h" || len(s.resumes) != 0 {
+		t.Fatal("history key stole search text")
+	}
+	m.mode, m.target = confirmStopMode, a
+	view = ansi.Strip(m.View())
+	if !strings.Contains(view, "停止后 Enter 新对话；h 选择此目录的 Codex 历史") {
+		t.Fatalf("stop confirmation does not explain history restoration: %q", view)
 	}
 }
 

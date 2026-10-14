@@ -45,7 +45,7 @@ func runFleet(config options, stdout, stderr io.Writer) error {
 			_, err := fmt.Fprintf(stdout, "管理后台已就绪：PID %d，注册库 %s\n", manager.HostPID, manager.ManagerStateDir)
 			return err
 		}
-		return nativeui.RunWithOptions(&nativeService{pipe: config.Pipe, store: config.Store}, config.Cwd, nativeui.Options{DefaultTool: config.Tool})
+		return nativeui.RunWithOptions(&nativeService{pipe: config.Pipe, store: config.Store, codexExecutable: config.Executable}, config.Cwd, nativeui.Options{DefaultTool: config.Tool})
 	}
 	// matrix/hardened: every managed command verifies its selected store and
 	// namespace before a read or mutation, including an explicitly named pipe.
@@ -66,7 +66,7 @@ func runFleet(config options, stdout, stderr io.Writer) error {
 			return err
 		}
 		request.Op, request.Launch, request.AutoStart = "fleet-create", &launch, !config.NoStart
-	case "start", "rename", "move", "remove":
+	case "start", "resume", "rename", "move", "remove":
 		request.Op = "fleet-" + config.Command
 		if request.RunID == "" {
 			info, err := lookupSession(context.Background(), config.Pipe, config.SessionID)
@@ -221,7 +221,9 @@ func lookupSession(ctx context.Context, pipe, id string) (terminalhost.SessionIn
 	return terminalhost.SessionInfo{}, errors.New("找不到所选会话")
 }
 
-type nativeService struct{ pipe, store string }
+// matrix/hardened: executable preferences are per window and affect new Codex
+// records only; reconnect/start/resume keep each existing launch description.
+type nativeService struct{ pipe, store, codexExecutable string }
 
 // matrix/hardened: translate the original schema's default group at the UI
 // boundary only; persisted records and CLI responses retain their original ID.
@@ -243,7 +245,11 @@ func (s *nativeService) Create(ctx context.Context, name, tool, cwd string) (ter
 	return s.CreateInGroup(ctx, name, tool, cwd, "")
 }
 func (s *nativeService) CreateInGroup(ctx context.Context, name, tool, cwd, group string) (terminalhost.SessionInfo, error) {
-	launch, err := launchSpec(tool, cwd, "", nil, nil, 120, 30)
+	executable := ""
+	if tool == "codex" {
+		executable = s.codexExecutable
+	}
+	launch, err := launchSpec(tool, cwd, executable, nil, nil, 120, 30)
 	if err != nil {
 		return terminalhost.SessionInfo{}, err
 	}
@@ -268,6 +274,17 @@ func (s *nativeService) Start(ctx context.Context, id string) (terminalhost.Sess
 	}
 	started, err := oneSession(r)
 	return s.uiSession(started), err
+}
+
+// matrix/hardened: never replace a stale viewer's selected generation with a
+// fresh lookup; fleet-resume must reject a run started by another window.
+func (s *nativeService) Resume(ctx context.Context, id, runID string) (terminalhost.SessionInfo, error) {
+	r, err := callHost(ctx, s.pipe, terminalhost.Request{Op: "fleet-resume", SessionID: id, RunID: runID})
+	if err != nil {
+		return terminalhost.SessionInfo{}, err
+	}
+	resumed, err := oneSession(r)
+	return s.uiSession(resumed), err
 }
 func (s *nativeService) Stop(ctx context.Context, id, runID string) error {
 	_, err := callHost(ctx, s.pipe, terminalhost.Request{Op: "fleet-stop", SessionID: id, RunID: runID})

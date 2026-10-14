@@ -3,7 +3,7 @@
 <!-- matrix/hardened: document the isolated experiment without claiming that the complete app is ported. -->
 
 `agent-deck-native` 是独立的 Windows 原生精简版，当前实验版本为
-`0.5.0+matrix.lite`。它不依赖 WSL 或 tmux，使用 ConPTY 启动
+`0.6.0+matrix.lite`。它不依赖 WSL 或 tmux，使用 ConPTY 启动
 交互式子进程，通过本机命名管道提供输入、输出、截图、缩放和停止操作。
 现已支持独立的中文多会话列表、分组、搜索、SQLite 注册库，以及自动启动的后台；
 新增了对原 Agent Deck 数据库格式及会话运行接口的接入；完整 Windows 主程序、
@@ -21,8 +21,15 @@ Terminal，不可用时使用普通控制台。列表默认新建 Codex，名称
 
 在 Codex 内按 Ctrl+Q 返回列表；按 Enter 可接回同一个仍在运行的会话。关闭列表
 或整个终端窗口后，后台和正在运行的会话继续保留。按 `s` 确认停止会结束这次运行，
-保留列表记录和项目文件。精简版尚未接入 Codex 的历史会话恢复；停止后再次打开
-会启动新对话，因此需要继续当前对话时使用返回和重连。
+保留列表记录和项目文件。仍在运行的会话通过 Enter 或 `o` 接回同一进程与对话；
+已停止或退出的 Codex 记录通过 Enter 或 `o` 启动新对话。需要恢复历史时，选择
+该记录并按 `h`，在 Codex 自己的历史选择界面中选择原项目下的对话。
+
+`h` 仅用于已停止或退出、直接运行原生 Codex 且没有自定义启动参数的记录；
+运行中的会话需先显式停止。它临时执行保存的程序加 `resume`，保持已保存的
+程序路径、目录、环境覆盖、分组和原始参数不变，不自动选择最近一条历史。
+历史恢复启动失败时显示错误，不改为新对话。每次恢复产生新的 RunID；
+旧窗口的输入、停止或恢复请求不能作用于新一代进程。
 
 入口使用原来的 StateDB 格式，专用状态目录为
 `%LOCALAPPDATA%\AgentDeckNativeLite\LiteState`，默认项目目录为同级 `Workspace`。
@@ -33,14 +40,26 @@ Terminal，不可用时使用普通控制台。列表默认新建 Codex，名称
 
 ```powershell
 powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows-native-install.ps1 `
-  -BinaryPath .\agent-deck-native.exe -ExpectedSHA256 '<已核对的 SHA256>' -InstallVersion lite-0.5.0
+  -BinaryPath .\agent-deck-native.exe -ExpectedSHA256 '<已核对的 Agent Deck SHA256>' -InstallVersion lite-0.6.0 `
+  -CodexExecutable 'C:\Tools\Codex\codex.exe' -ExpectedCodexSHA256 '<已核对的 Codex SHA256>' `
+  -StateDirectoryName LiteState-0.6 -ShortcutSuffix 0.6
 ```
 
 安装器在专用的 `AgentDeckNativeLite` 根目录创建版本和哈希命名的私有目录，
 并独立读回桌面及开始菜单的快捷方式；启动入口同时固定程序和启动脚本的哈希。
-相同内容可重复安装，已有不同二进制或快捷方式时拒绝覆盖。安装器不替换运行中的
-旧版本、不结束会话，不安装服务、计划任务或登录启动项。若已有其它版本入口，
-先将其改名保留，再显式安装新入口。
+相同内容可重复安装，已有不同二进制、运行配置或快捷方式时拒绝覆盖。安装器
+不替换运行中的旧版本、不结束会话，不安装服务、计划任务或登录启动项。
+
+`CodexExecutable` 和 `ExpectedCodexSHA256` 可省略；提供时必须成对，使用核对过
+内容的绝对 `codex.exe` 路径。安装器将路径和哈希保存在版本目录内受保护的
+`codex-runtime.json`，快捷方式固定该清单的哈希；每次启动入口先验证清单和
+外部 Codex 文件，再传给 UI。它不复制或替换外部程序、不调整 PATH、不复制登录
+凭据。外部 Codex 更新后哈希不匹配会拒绝启动，需要核对后显式安装新的版本目录。
+
+上例使用独立状态目录 `LiteState-0.6` 和 **Agent Deck 原生版 0.6** 快捷方式，
+可与使用 `LiteState` 的旧版并行，保留旧入口及正在运行的后台。省略这两个参数时
+仍使用 `LiteState` 和 **Agent Deck 原生版**；同一状态目录的后台版本握手不能
+跨版本复用。项目目录仍是同级 `Workspace`，不会复制旧列表或自动迁移会话。
 
 ## 复用原主程序的接入阶段
 
@@ -48,7 +67,9 @@ powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\window
 
 当前以现有精简原生版为交付目标，完整原主程序移植暂缓。v0.4 已接通共享数据库、
 会话运行接口与原界面的复制和输入动作；v0.5 已在 Windows 实机完成实际 Codex
-的创建、两次模型回复、返回、保活、同一对话重连和停止验证。
+的创建、两次模型回复、返回、保活、同一对话重连和停止验证。v0.6 增加停止后的
+显式历史选择、创建新 Codex 时的程序路径选择和并行安装入口；这些新增行为的
+单元及原生接口验证，与真实模型恢复和可见桌面验收分别记录。
 
 原生后台可显式使用原来的 `internal/statedb` 和 `instances` / `groups` 表：
 
@@ -125,6 +146,8 @@ Windows 原生测试使用 `scripts/windows-native-test.ps1`；默认离线，
 
 ```powershell
 .\agent-deck-native.exe ui --cwd 'C:\Projects\demo' --tool codex
+# 可选：只为此 UI 后续创建的新 Codex 记录选择程序。
+.\agent-deck-native.exe ui --cwd 'C:\Projects\demo' --tool codex --codex-executable 'C:\Tools\Codex\codex.exe'
 # 不带参数也会打开同一列表。
 .\agent-deck-native.exe
 ```
@@ -153,7 +176,8 @@ SSH 或脚本环境可以先启动后台，再管理会话：
 |---|---|
 | 上/下或 j/k | 选择会话 |
 | n | 输入名称、目录、分组，选择 Shell、Codex 或 PowerShell 后创建并进入 |
-| Enter 或 o | 打开；已停止或退出的会话会显式启动 |
+| Enter 或 o | 接回运行中的会话；已停止或退出的会话显式启动，Codex 开始新对话 |
+| h | 已停止或退出的原生 Codex 记录打开当前项目的历史选择界面 |
 | Ctrl+Q | 从会话终端返回列表，后台进程继续运行 |
 | s | 确认后停止所选进程树，保留记录 |
 | r | 修改名称 |
@@ -170,7 +194,9 @@ SSH 或脚本环境可以先启动后台，再管理会话：
 等待授权或已完成任务。列表每秒刷新一次，进入会话终端后暂停列表轮询。带运行标识
 的异常实例仍可按 s 精确清理；部分启动后的清理失败不会被报告成已停止或已移除。
 Codex 使用真实的原生 `codex.exe`；当前 Windows x64 查找也包含 npm 安装的
-`@openai/codex-win32-x64` 路径。其他安装布局可通过 `create` 指定实际程序。
+`@openai/codex-win32-x64` 路径。其他安装布局可通过 `create` 指定实际程序，或通过
+`ui --codex-executable` 为后续创建的新 Codex 记录选取绝对程序路径；已有记录
+继续使用自己的启动描述，重连、重新启动和历史恢复不会因此换用另一程序。
 
 也可以用命令管理注册记录：
 
@@ -180,6 +206,8 @@ Codex 使用真实的原生 `codex.exe`；当前 Windows x64 查找也包含 npm
 .\agent-deck-native.exe list --json
 .\agent-deck-native.exe create --name '指定程序' --tool custom --cwd 'C:\Projects\demo' --no-start -- 'C:\Tools\agent.exe' '--model' 'two words'
 .\agent-deck-native.exe start --session '<session UUID>' --json
+# 仅恢复已停止/退出的原生 Codex；省略 run-id 时单次命令先读取当前代次。
+.\agent-deck-native.exe resume --session '<session UUID>' --run-id '<run UUID>' --json
 .\agent-deck-native.exe rename --session '<session UUID>' --name '新名称'
 .\agent-deck-native.exe move --session '<session UUID>' --run-id '<run UUID>' --group '另组'
 .\agent-deck-native.exe remove --session '<session UUID>'

@@ -17,7 +17,7 @@ import (
 )
 
 // matrix/hardened: the lightweight native release remains separate from the original TUI.
-const version = "0.5.0+matrix.lite"
+const version = "0.6.0+matrix.lite"
 
 func main() {
 	if err := run(os.Args[1:], os.Stdout, os.Stderr); err != nil {

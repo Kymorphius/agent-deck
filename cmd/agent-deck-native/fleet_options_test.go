@@ -4,9 +4,11 @@ package main
 
 import (
 	"io"
+	"os"
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/asheshgoplani/agent-deck/internal/nativeregistry"
@@ -118,14 +120,54 @@ func TestManagedCommandsRequireIdentityAndUnambiguousLaunch(t *testing.T) {
 		{"create", "--name", "test", "--tool", "custom"},
 		{"create", "--name", "test", "--cols", "501"},
 		{"create", "--name", "test", "--env", "NO_EQUALS"},
-		{"start"}, {"rename", "--name", "new"}, {"remove"},
+		{"start"}, {"resume"}, {"rename", "--name", "new"}, {"remove"},
 		{"start", "--session", "not-an-id"},
+		{"resume", "--session", "not-an-id"},
+		{"resume", "--session", uuid.NewString(), "--run-id", "not-a-run"},
 		{"remove", "--session", uuid.NewString(), "--run-id", "not-a-run"},
 		{"serve", "--", "extra"},
 	} {
 		if _, err := parseOptions(args, io.Discard); err == nil {
 			t.Fatalf("accepted incomplete or ambiguous command %q", args)
 		}
+	}
+}
+
+// matrix/hardened: CLI history selection is explicit and accepts the caller's
+// old generation; omitting it is the CLI's separate current-generation lookup.
+func TestManagedResumeParserKeepsExactIdentity(t *testing.T) {
+	id, runID := uuid.NewString(), uuid.NewString()
+	for _, run := range []string{"", runID} {
+		args := []string{"resume", "--state-dir", t.TempDir(), "--store", "statedb", "--session", id, "--json"}
+		if run != "" {
+			args = append(args, "--run-id", run)
+		}
+		config, err := parseOptions(args, io.Discard)
+		if err != nil || config.Command != "resume" || config.SessionID != id || config.RunID != run || config.Store != "statedb" || !config.JSON || !isFleetCommand(config.Command) {
+			t.Fatalf("history parser lost identity or store: %+v %v", config, err)
+		}
+	}
+}
+
+func TestUIExplicitCodexExecutableUsesValidatedFixture(t *testing.T) {
+	root := t.TempDir()
+	executable := filepath.Join(root, "codex.exe")
+	if err := os.WriteFile(executable, []byte("fixture native program"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	config, err := parseOptions([]string{"ui", "--state-dir", root, "--tool", "codex", "--codex-executable", executable}, io.Discard)
+	if err != nil || config.Executable != executable || config.Tool != "codex" || len(config.Args)+len(config.Env) != 0 {
+		t.Fatalf("explicit native program was lost or added flags: %+v %v", config, err)
+	}
+	for _, invalid := range []string{"relative/codex.exe", filepath.Join(root, "missing", "codex.exe"), root} {
+		if _, err := parseOptions([]string{"ui", "--codex-executable", invalid}, io.Discard); err == nil {
+			t.Fatalf("UI accepted invalid explicit executable: %q", invalid)
+		}
+	}
+	var help strings.Builder
+	printHelp(&help)
+	if !strings.Contains(help.String(), "resume --session UUID [--run-id UUID]") || !strings.Contains(help.String(), "--codex-executable PATH") || !strings.Contains(help.String(), "Enter starts a new dialog") {
+		t.Fatalf("native help omitted history or explicit executable: %s", help.String())
 	}
 }
 

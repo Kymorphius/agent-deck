@@ -27,6 +27,8 @@ type Service interface {
 	Create(context.Context, string, string, string) (terminalhost.SessionInfo, error)
 	CreateInGroup(context.Context, string, string, string, string) (terminalhost.SessionInfo, error)
 	Start(context.Context, string) (terminalhost.SessionInfo, error)
+	// matrix/hardened: history selection carries the displayed old generation.
+	Resume(context.Context, string, string) (terminalhost.SessionInfo, error)
 	Stop(context.Context, string, string) error
 	Rename(context.Context, string, string) error
 	Remove(context.Context, string, string) error
@@ -423,6 +425,16 @@ func (m *Model) updateListKey(msg tea.KeyMsg) tea.Cmd {
 		if info, ok := m.selected(); ok {
 			return m.openSession(info)
 		}
+	case "h":
+		// matrix/hardened: Enter remains a new dialog after stop; history is an
+		// explicit Codex-only action and never replaces a live process.
+		if info, ok := m.selected(); ok {
+			if info.Tool != "codex" || info.State != "stopped" && info.State != "exited" {
+				m.setNotice("只有已停止或退出的 Codex 会话可按 h 选择历史。", false)
+				return nil
+			}
+			return m.resumeSession(info)
+		}
 	case "s", "d", "r", "g":
 		info, ok := m.selected()
 		if !ok {
@@ -667,6 +679,26 @@ func (m *Model) openSession(target terminalhost.SessionInfo) tea.Cmd {
 		case "running":
 		default:
 			return operationResultMsg{err: errors.New("当前进程状态未知，请稍后刷新再打开。")}
+		}
+		return attachResult(service, info)
+	})
+}
+
+// matrix/hardened: do not silently start a fresh dialog if history launch or
+// attachment fails. The backend rechecks this exact generation under its lock.
+func (m *Model) resumeSession(target terminalhost.SessionInfo) tea.Cmd {
+	service := m.service
+	return m.beginOperation("正在打开 Codex 历史选择…", func(ctx context.Context) operationResultMsg {
+		info, err := currentInstance(ctx, service, target)
+		if err != nil {
+			return operationResultMsg{err: err}
+		}
+		if info.Tool != "codex" || info.State != "stopped" && info.State != "exited" {
+			return operationResultMsg{err: errors.New("Codex 当前状态已改变，请刷新后选择历史。")}
+		}
+		info, err = service.Resume(ctx, target.ID, target.RunID)
+		if err != nil {
+			return operationResultMsg{selectedID: target.ID, err: fmt.Errorf("打开历史失败：%w", err)}
 		}
 		return attachResult(service, info)
 	})
