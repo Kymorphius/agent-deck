@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.67`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.68`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -66,7 +66,7 @@
 - `internal/session/claude_hooks.go`：`isAgentDeckHookCommand` 的判断规则：先去掉开头的 `VAR=值`，再要求第二个词是 `hook-handler`、程序名的文件名部分是 `agent-deck`。`RemoveClaudeHooks` 会扫描全部事件，并做 UTC 时间戳备份（约 387–414 行）。
 - `cmd/agent-deck/main.go`（约 4845、5070 行）：`agent-deck uninstall` 会移除这些钩子。`uninstall.sh` 第 253 行附近的 jq 过滤用的是同一套规则（正则），写回时用 `cat >` 保持软链接和权限。
 
-**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.67`。
+**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.68`。
 
 **测试**：以 `_hardened_test.go` 结尾的文件、`update_check_disable_test.go`、`update_timer_wiring_test.go` 等是新增或调整过的测试；`testdata/goldens/*` 里的快照已经按加固后的输出更新。
 
@@ -609,3 +609,13 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 
 - **matrix/hardened:** 快捷键先解析用户显式绑定，再为未重绑的动作加入未被占用的默认别名，最后解析布局字符别名。其它动作显式绑定 `alt+p` 时优先；重绑或禁用 `toggle_pinned_view` 会释放两个默认入口。帮助页缓存按键归属，仅显示实际可用的别名；紧凑筛选栏继续显示主入口。
 - 不改变已关闭的 `Ctrl+N/P` 导航、弹窗输入或已连接终端的按键透传，不增加后台任务或渲染时映射重建。验证覆盖真实按键派发、选中条目保持、Mac Option 字符、重绑、禁用及显式冲突。
+
+
+## 56. 数字跳转后直接激活条目
+
+`1.16.26+matrix.68` 支持输入 `12` 或 `:12` 后按 Enter / `o`，跳到当前可见列表的第 12 行并打开会话或展开、折叠分组。
+
+- **matrix/hardened:** 数字配合 `j/k` 或方向键仍是相对移动计数；配合打开键才是绝对行号。行号跳过视图分隔线，并沿用已有跳回标记。普通 `0` 仍清除筛选，`:0` 和负数不是有效行号。
+- **matrix/hardened:** 使用 `[hotkeys].open_session` 的实际绑定；重绑或禁用后不会让原 `o` 继续激活。`:set nu` / `:set nonu` 仍作为文字命令输入。无效、越界、溢出及被截断的命令不会激活当前停留的条目。
+- **matrix/hardened:** 新入口和普通打开键共用本地、远程、窗口行、内嵌终端和停止会话恢复流程。帮助页及待输入提示同步说明数字激活方式。
+- 验证使用第 4 节隔离入口，覆盖数字确认、分组折叠与展开、分隔线、真实激活目标、重绑与禁用、长行号、无效输入及现有计数、行号显示、跳回和文本输入回归。已打开的 TUI 仍在列表按 `Ctrl+T` 重载。

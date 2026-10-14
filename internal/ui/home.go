@@ -1491,6 +1491,73 @@ type deletedSessionEntry struct {
 	cleanupDone <-chan struct{}
 }
 
+// matrix/hardened: numeric jumps and ordinary opening keys share one action,
+// independent of how Enter or o is rebound in the shortcut map.
+func (h *Home) activateSelectedItem() (tea.Model, tea.Cmd) {
+	if h.cursor < len(h.flatItems) {
+		item := h.flatItems[h.cursor]
+		if !h.embeddedLayout && (item.Type == session.ItemTypeSession || item.Type == session.ItemTypeWindow || item.Type == session.ItemTypeRemoteSession) {
+			return h, h.attachSelectedLegacy()
+		}
+		if item.Type == session.ItemTypeSession && item.Session != nil {
+			if h.sessionExistsForUI(item.Session) {
+				// Pane dead (process exited) — restart instead of attaching to dead pane.
+				tmuxSess := item.Session.GetTmuxSession()
+				if tmuxSess != nil && tmuxSess.IsPaneDead() {
+					if !h.hasActiveAnimation(item.Session.ID) {
+						h.resumingSessions[item.Session.ID] = time.Now()
+						return h, h.restartSession(item.Session)
+					}
+					return h, nil
+				}
+				if h.enterEmbeddedMode() {
+					return h, h.startEmbeddedModeCmd()
+				}
+				return h, nil
+			}
+			// Session exited (tmux session gone) — auto-restart it.
+			if !h.hasActiveAnimation(item.Session.ID) {
+				h.resumingSessions[item.Session.ID] = time.Now()
+				return h, h.restartSession(item.Session)
+			}
+		} else if item.Type == session.ItemTypeGroup {
+			// Toggle group on enter
+			groupPath := item.Path
+			h.groupTree.ToggleGroup(groupPath)
+			h.rebuildFlatItems()
+			for i, fi := range h.flatItems {
+				if fi.Type == session.ItemTypeGroup && fi.Path == groupPath {
+					h.cursor = i
+					break
+				}
+			}
+			h.saveGroupState()
+			h.noteGroupToggled(groupPath)
+		} else if item.Type == session.ItemTypeRemoteGroup {
+			// Enter on a remote header folds it, mirroring local groups.
+			// There is nothing to attach to on a header row.
+			h.toggleRemoteGroup(item.RemoteName, item.Path)
+		} else if item.Type == session.ItemTypeWindow {
+			parentInst := h.getInstanceByID(item.WindowSessionID)
+			if parentInst != nil && h.sessionExistsForUI(parentInst) && h.enterEmbeddedMode() {
+				return h, h.startEmbeddedModeCmd()
+			}
+		} else if item.Type == session.ItemTypeRemoteSession && item.RemoteSession != nil {
+			// A stopped remote session is restarted first, as Enter on a
+			// dead local session restarts it; the row refreshes when the
+			// remote confirms. Otherwise attach (embedded or over SSH).
+			if strings.EqualFold(item.RemoteSession.Status, string(session.StatusStopped)) {
+				return h, h.restartRemoteSession(item.RemoteName, item.RemoteSession.ID, item.RemoteSession.Title)
+			}
+			if h.enterEmbeddedMode() {
+				return h, h.startEmbeddedModeCmd()
+			}
+			return h, h.attachRemoteSession(item.RemoteName, item.RemoteSession.ID)
+		}
+	}
+	return h, nil
+}
+
 // getLayoutMode returns the current layout mode based on terminal width
 // and the user's preview-orientation preference. On wide terminals the
 // user can opt into the stacked (PREVIEW-below) layout via
@@ -11824,6 +11891,14 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	raw := msg.String()
 	key := h.normalizeMainKey(raw)
 	uiLog.Info("keypress", "raw", raw, "normalized", key, "type", msg.Type, "runes", string(msg.Runes))
+	// matrix/hardened: N followed by an opening key activates numbered row N;
+	// j/k still consume the same digits as a relative movement count.
+	if h.navCount.n > 0 && !h.navCount.groupJump && (raw == "enter" || key == defaultHotkeyBindings[hotkeyOpenSession]) {
+		text := h.navCount.digits
+		h.matrixResetNav()
+		return h, h.matrixRunCmd(text)
+	}
+
 	if key == "" {
 		return h, nil
 	}
@@ -12084,68 +12159,7 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// matrix/hardened: o opens the selected row; Enter remains compatible.
 	case "enter", defaultHotkeyBindings[hotkeyOpenSession]:
-		if h.cursor < len(h.flatItems) {
-			item := h.flatItems[h.cursor]
-			if !h.embeddedLayout && (item.Type == session.ItemTypeSession || item.Type == session.ItemTypeWindow || item.Type == session.ItemTypeRemoteSession) {
-				return h, h.attachSelectedLegacy()
-			}
-			if item.Type == session.ItemTypeSession && item.Session != nil {
-				if h.sessionExistsForUI(item.Session) {
-					// Pane dead (process exited) — restart instead of attaching to dead pane.
-					tmuxSess := item.Session.GetTmuxSession()
-					if tmuxSess != nil && tmuxSess.IsPaneDead() {
-						if !h.hasActiveAnimation(item.Session.ID) {
-							h.resumingSessions[item.Session.ID] = time.Now()
-							return h, h.restartSession(item.Session)
-						}
-						return h, nil
-					}
-					if h.enterEmbeddedMode() {
-						return h, h.startEmbeddedModeCmd()
-					}
-					return h, nil
-				}
-				// Session exited (tmux session gone) — auto-restart it.
-				if !h.hasActiveAnimation(item.Session.ID) {
-					h.resumingSessions[item.Session.ID] = time.Now()
-					return h, h.restartSession(item.Session)
-				}
-			} else if item.Type == session.ItemTypeGroup {
-				// Toggle group on enter
-				groupPath := item.Path
-				h.groupTree.ToggleGroup(groupPath)
-				h.rebuildFlatItems()
-				for i, fi := range h.flatItems {
-					if fi.Type == session.ItemTypeGroup && fi.Path == groupPath {
-						h.cursor = i
-						break
-					}
-				}
-				h.saveGroupState()
-				h.noteGroupToggled(groupPath)
-			} else if item.Type == session.ItemTypeRemoteGroup {
-				// Enter on a remote header folds it, mirroring local groups.
-				// There is nothing to attach to on a header row.
-				h.toggleRemoteGroup(item.RemoteName, item.Path)
-			} else if item.Type == session.ItemTypeWindow {
-				parentInst := h.getInstanceByID(item.WindowSessionID)
-				if parentInst != nil && h.sessionExistsForUI(parentInst) && h.enterEmbeddedMode() {
-					return h, h.startEmbeddedModeCmd()
-				}
-			} else if item.Type == session.ItemTypeRemoteSession && item.RemoteSession != nil {
-				// A stopped remote session is restarted first, as Enter on a
-				// dead local session restarts it; the row refreshes when the
-				// remote confirms. Otherwise attach (embedded or over SSH).
-				if strings.EqualFold(item.RemoteSession.Status, string(session.StatusStopped)) {
-					return h, h.restartRemoteSession(item.RemoteName, item.RemoteSession.ID, item.RemoteSession.Title)
-				}
-				if h.enterEmbeddedMode() {
-					return h, h.startEmbeddedModeCmd()
-				}
-				return h, h.attachRemoteSession(item.RemoteName, item.RemoteSession.ID)
-			}
-		}
-		return h, nil
+		return h.activateSelectedItem()
 
 	case "tab", "l", "right":
 		// Expand/collapse group, or toggle session windows
