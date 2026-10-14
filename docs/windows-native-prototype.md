@@ -68,8 +68,12 @@ powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\window
 当前以现有精简原生版为交付目标，完整原主程序移植暂缓。v0.4 已接通共享数据库、
 会话运行接口与原界面的复制和输入动作；v0.5 已在 Windows 实机完成实际 Codex
 的创建、两次模型回复、返回、保活、同一对话重连和停止验证。v0.6 增加停止后的
-显式历史选择、创建新 Codex 时的程序路径选择和并行安装入口；这些新增行为的
-单元及原生接口验证，与真实模型恢复和可见桌面验收分别记录。
+显式历史选择、创建新 Codex 时的程序路径选择和并行安装入口。2026-10-14，v0.6
+候选程序与官方 Codex `0.163.0-alpha.11` 已在目标 Windows 完成三次真实提示/回复的
+同一历史验证，包括关闭 UI 后保活、相同 PID 重连、停止后 `h` 选择原对话、新运行
+拒绝旧 RunID 输入及停止请求，以及最终停止和目录所有权释放。详见
+[Windows 原生开发与验证](windows-native-development.md)。这是实际 ConPTY 链路的
+自动化证据，可见 Windows Terminal、输入法和桌面剪贴板仍需独立验收。
 
 原生后台可显式使用原来的 `internal/statedb` 和 `instances` / `groups` 表：
 
