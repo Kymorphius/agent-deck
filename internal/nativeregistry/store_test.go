@@ -52,6 +52,23 @@ func openTest(t *testing.T, root string) *Store {
 	return store
 }
 
+func TestDirectoryReturnsVerifiedOwnedRootUntilClosed(t *testing.T) {
+	root := privateRoot(t)
+	store := openTest(t, root)
+	if actual, err := store.Directory(); err != nil || actual != root {
+		t.Fatalf("owned directory: %q, %v", actual, err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if actual, err := store.Directory(); actual != "" || !errors.Is(err, ErrClosed) {
+		t.Fatalf("closed store still advertised its ownership: %q, %v", actual, err)
+	}
+	if actual, err := (*Store)(nil).Directory(); actual != "" || !errors.Is(err, ErrClosed) {
+		t.Fatalf("nil store directory: %q, %v", actual, err)
+	}
+}
+
 func TestPersistenceImmutableLaunchAndDescriptionOnlyDelete(t *testing.T) {
 	root := privateRoot(t)
 	project := filepath.Join(filepath.Dir(root), "project")
@@ -245,10 +262,12 @@ func TestNamesIDsAndToolValidation(t *testing.T) {
 
 func TestBadMetadataAndFutureSchemaFailClosedAndReleaseOwner(t *testing.T) {
 	for _, mutation := range []string{
-		"PRAGMA user_version=2",
+		"PRAGMA user_version=3",
 		"UPDATE native_sessions SET launch_json='{} trailing'",
 		"UPDATE native_sessions SET name=char(10)",
 		"UPDATE native_sessions SET id='../../project'",
+		"UPDATE native_sessions SET group_name=char(10)",
+		"UPDATE native_sessions SET group_name=' padded '",
 		"ALTER TABLE native_sessions ADD COLUMN future TEXT",
 	} {
 		t.Run(mutation, func(t *testing.T) {

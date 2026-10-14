@@ -12,6 +12,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode"
 
 	"github.com/asheshgoplani/agent-deck/internal/terminalhost"
 	tea "github.com/charmbracelet/bubbletea"
@@ -28,6 +29,7 @@ type fakeService struct {
 	starts    []string
 	stops     []mutation
 	removes   []mutation
+	moves     []struct{ id, runID, group string }
 	renames   []struct{ id, name string }
 	attaches  []terminalhost.SessionInfo
 	createErr error
@@ -45,15 +47,54 @@ func (s *fakeService) List(context.Context) ([]terminalhost.SessionInfo, error) 
 }
 
 func (s *fakeService) Create(_ context.Context, name, tool, dir string) (terminalhost.SessionInfo, error) {
+	return s.create(name, tool, dir, "")
+}
+
+func (s *fakeService) CreateInGroup(_ context.Context, name, tool, dir, group string) (terminalhost.SessionInfo, error) {
+	return s.create(name, tool, dir, group)
+}
+
+func (s *fakeService) create(name, tool, dir, group string) (terminalhost.SessionInfo, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	info := terminalhost.SessionInfo{ID: fmt.Sprintf("new-%d", len(s.creates)), Name: name, Tool: tool, Dir: dir, State: "stopped"}
+	info := terminalhost.SessionInfo{ID: fmt.Sprintf("new-%d", len(s.creates)), Name: name, Tool: tool, Dir: dir, Group: group, State: "stopped"}
 	if s.autoStart {
 		info.State, info.RunID = "running", "created-run"
 	}
 	s.creates = append(s.creates, info)
 	s.items = append(s.items, info)
 	return info, s.createErr
+}
+
+func (s *fakeService) Move(_ context.Context, id, runID, group string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.items {
+		if s.items[i].ID == id && s.items[i].RunID == runID {
+			s.moves = append(s.moves, struct{ id, runID, group string }{id, runID, group})
+			s.items[i].Group = group
+			return nil
+		}
+	}
+	return errors.New("stale instance")
+}
+
+// matrix/hardened: model the service-side fence after the UI's List check.
+type restartBeforeMoveService struct {
+	*fakeService
+	attempts []mutation
+}
+
+func (s *restartBeforeMoveService) Move(ctx context.Context, id, runID, group string) error {
+	s.attempts = append(s.attempts, mutation{id, runID})
+	s.mu.Lock()
+	for i := range s.items {
+		if s.items[i].ID == id {
+			s.items[i].RunID = "restarted-after-check"
+		}
+	}
+	s.mu.Unlock()
+	return s.fakeService.Move(ctx, id, runID, group)
 }
 
 func (s *fakeService) Start(_ context.Context, id string) (terminalhost.SessionInfo, error) {
@@ -153,6 +194,8 @@ func key(value string) tea.KeyMsg {
 		return tea.KeyMsg{Type: tea.KeyDown}
 	case "right":
 		return tea.KeyMsg{Type: tea.KeyRight}
+	case "left":
+		return tea.KeyMsg{Type: tea.KeyLeft}
 	case "ctrl+c":
 		return tea.KeyMsg{Type: tea.KeyCtrlC}
 	default:
@@ -490,7 +533,7 @@ func TestSeparateModelsHaveIndependentSelectionAndForms(t *testing.T) {
 }
 
 func TestQuitNeverStopsOrRemovesHostedProcesses(t *testing.T) {
-	for _, currentMode := range []mode{listMode, createMode, renameMode, confirmStopMode, confirmRemoveMode, workingMode, attachMode} {
+	for _, currentMode := range []mode{listMode, createMode, renameMode, moveMode, confirmStopMode, confirmRemoveMode, workingMode, attachMode} {
 		t.Run(fmt.Sprint(currentMode), func(t *testing.T) {
 			s := &fakeService{items: []terminalhost.SessionInfo{info("a", "一", "running", "a1")}}
 			m := modelWith(s)
@@ -510,11 +553,16 @@ func TestViewBoundsChineseNamesAndAllModalSizes(t *testing.T) {
 	s := &fakeService{items: []terminalhost.SessionInfo{info("a", strings.Repeat("中文会话🐱", 30)+"\x1b[31m\rInjected", "running", "a1")}}
 	m := modelWith(s)
 	m.target = s.items[0]
-	m.name.SetValue(strings.Repeat("名称", 100))
-	m.dir.SetValue(strings.Repeat("路径", 100))
-	for _, currentMode := range []mode{listMode, createMode, renameMode, confirmStopMode, confirmRemoveMode, workingMode, attachMode} {
+	m.name.SetValue("\x1b[31m\r\n\t名称\x00\a\u0085" + strings.Repeat("名称", 100))
+	m.dir.SetValue("\x1b]52;c;clipboard\a\r\n\t路径\x00\u009b" + strings.Repeat("路径", 100))
+	m.group.SetValue("\x1b[31m\r\n\t分组\x00\a\u0085" + strings.Repeat("分组🐱", 30))
+	m.search.SetValue("\x1b[31m\r\n\t搜索\x00\a\u0085" + strings.Repeat("搜索🐱", 30))
+	s.items[0].Group = strings.Repeat("分组🐱", 30) + "\x1b[31m\rInjected"
+	m.setItems(s.items)
+	for _, currentMode := range []mode{listMode, createMode, renameMode, moveMode, confirmStopMode, confirmRemoveMode, workingMode, attachMode} {
 		for _, size := range [][2]int{{80, 24}, {40, 12}, {20, 6}, {5, 3}, {1, 1}} {
 			m.mode = currentMode
+			m.searching = currentMode == listMode
 			m.Update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
 			view := m.View()
 			lines := strings.Split(view, "\n")
@@ -525,11 +573,364 @@ func TestViewBoundsChineseNamesAndAllModalSizes(t *testing.T) {
 				if ansi.StringWidth(line) > size[0] {
 					t.Fatalf("mode=%d size=%v width=%d line=%q", currentMode, size, ansi.StringWidth(line), line)
 				}
-				if strings.ContainsAny(ansi.Strip(line), "\r\x1b") {
-					t.Fatalf("unsafe control character rendered: %q", line)
+				for _, r := range ansi.Strip(line) {
+					if unicode.IsControl(r) {
+						t.Fatalf("unsafe control character rendered: %q", line)
+					}
 				}
 			}
 		}
+	}
+}
+
+func TestShortFormKeepsActiveFieldAndSaveCancelControlsVisible(t *testing.T) {
+	for _, currentMode := range []mode{createMode, renameMode, moveMode} {
+		fields := []string{"名称："}
+		if currentMode == createMode {
+			fields = []string{"名称：", "目录：", "工具：", "分组："}
+		}
+		if currentMode == moveMode {
+			fields = []string{"分组："}
+		}
+		for focus, label := range fields {
+			for _, height := range []int{1, 2, 3, 4} {
+				m := modelWith(&fakeService{})
+				m.mode, m.focus = currentMode, focus
+				if currentMode == moveMode {
+					m.focus = 3
+				}
+				m.Update(tea.WindowSizeMsg{Width: 80, Height: height})
+				view := ansi.Strip(m.View())
+				if !strings.Contains(view, "› "+label) {
+					t.Fatalf("mode=%v focus=%d height=%d hid active field: %q", currentMode, focus, height, view)
+				}
+				if height > 1 && (!strings.Contains(view, "Enter 保存") || !strings.Contains(view, "Esc 取消")) {
+					t.Fatalf("mode=%v focus=%d height=%d hid save/cancel: %q", currentMode, focus, height, view)
+				}
+			}
+		}
+	}
+}
+
+func TestCreateInGroupKeepsToolThirdAndUsesGroupFourth(t *testing.T) {
+	s := &fakeService{autoStart: true}
+	m := modelWith(s)
+	press(m, "n")
+	m.name.SetValue("开发会话")
+	press(m, "tab")
+	press(m, "tab")
+	if m.focus != 2 {
+		t.Fatal("tool no longer occupies original third field")
+	}
+	press(m, "right")
+	press(m, "tab")
+	if m.focus != 3 || !m.group.Focused() {
+		t.Fatal("fourth field is not editable group")
+	}
+	press(m, " 开发 / 原生 🐱 ")
+	result := runOperation(t, m, press(m, "enter"))
+	if result.err != nil || len(s.creates) != 1 || s.creates[0].Group != "开发 / 原生 🐱" || s.creates[0].Tool != "codex" {
+		t.Fatalf("group/tool creation lost fields: result=%+v creates=%+v", result, s.creates)
+	}
+	if len(s.starts)+len(s.stops)+len(s.moves) != 0 || len(s.attaches) != 1 || s.attaches[0].RunID != "created-run" {
+		t.Fatal("group creation changed the auto-started process")
+	}
+}
+
+func TestCreateNativePowerShellChoicePreservesExistingToolOrder(t *testing.T) {
+	s := &fakeService{autoStart: true}
+	m := modelWith(s)
+	press(m, "n")
+	press(m, "tab")
+	press(m, "tab")
+	press(m, "right")
+	if m.tool != "codex" {
+		t.Fatal("first right key no longer selects Codex")
+	}
+	press(m, "left")
+	if m.tool != "shell" {
+		t.Fatal("left from Codex no longer selects Shell")
+	}
+	press(m, "right")
+	press(m, "right")
+	if m.tool != "powershell" || !strings.Contains(ansi.Strip(m.View()), "[PowerShell]") {
+		t.Fatal("third tool did not select and label PowerShell")
+	}
+	press(m, "right")
+	if m.tool != "shell" {
+		t.Fatal("third tool did not wrap to Shell")
+	}
+	press(m, "left")
+	result := runOperation(t, m, press(m, "enter"))
+	if result.err != nil || len(s.creates) != 1 || s.creates[0].Tool != "powershell" || len(s.attaches) != 1 || s.attaches[0].Tool != "powershell" || len(s.starts) != 0 {
+		t.Fatalf("PowerShell creation changed tool or restarted auto-started host: result=%+v creates=%+v attaches=%+v", result, s.creates, s.attaches)
+	}
+}
+
+func TestCreatePrefillsCurrentFilteredGroupAndDefaultsWhenAll(t *testing.T) {
+	a := info("a", "终端", "running", "run")
+	a.Group = "研发"
+	m := modelWith(&fakeService{items: []terminalhost.SessionInfo{a}})
+	press(m, "tab") // default
+	press(m, "tab") // named
+	press(m, "n")
+	if m.group.Value() != "研发" || m.focus != 0 {
+		t.Fatal("new session forgot selected group or initial name focus")
+	}
+	press(m, "esc")
+	press(m, "esc") // clear filters
+	press(m, "n")
+	if m.group.Value() != "" {
+		t.Fatal("all groups inherited unrelated group from prior form")
+	}
+}
+
+func TestGroupedCreatePartialErrorRetainsDescriptorWithoutAutomaticRetry(t *testing.T) {
+	a := info("old", "现有", "running", "old-run")
+	a.Group = "研发"
+	createErr := errors.New("auto-start failed after descriptor write")
+	s := &fakeService{items: []terminalhost.SessionInfo{a}, createErr: createErr}
+	m := modelWith(s)
+	press(m, "tab")
+	press(m, "tab")
+	press(m, "/")
+	press(m, "不匹配")
+	press(m, "enter")
+	press(m, "n")
+	m.name.SetValue("新增原生会话")
+	m.group.SetValue("新分组")
+	result := runOperation(t, m, press(m, "enter"))
+	if !errors.Is(result.err, createErr) || result.selectedID != "new-0" || len(s.creates) != 1 || s.creates[0].Group != "新分组" {
+		t.Fatalf("grouped partial creation lost descriptor: result=%+v creates=%+v", result, s.creates)
+	}
+	m.Update(listResultMsg{generation: m.generation, request: m.listRequest, items: s.items})
+	if m.mode != listMode || m.selectedID != "new-0" || !m.allGroups || m.search.Value() != "" || len(m.items) != 2 {
+		t.Fatalf("partial creation remained hidden by old filters: mode=%v selected=%q items=%+v", m.mode, m.selectedID, m.items)
+	}
+	if len(s.starts)+len(s.stops)+len(s.moves)+len(s.removes)+len(s.attaches) != 0 || s.items[0].RunID != "old-run" {
+		t.Fatal("partial creation retried a start or changed another process")
+	}
+}
+
+func TestMoveGroupPersistsOnlyDescriptorAndKeepsExactRun(t *testing.T) {
+	a := info("a", "同名", "running", "a-run")
+	b := info("b", "同名", "running", "b-run")
+	a.Group, b.Group = "旧组", "旧组"
+	s := &fakeService{items: []terminalhost.SessionInfo{a, b}}
+	m := modelWith(s)
+	press(m, "j")
+	press(m, "g")
+	if m.mode != moveMode || m.target.ID != "b" || m.target.RunID != "b-run" || m.group.Value() != "旧组" {
+		t.Fatal("move dialog lost displayed target")
+	}
+	m.group.SetValue(" 新分组 ")
+	result := runOperation(t, m, press(m, "enter"))
+	if result.err != nil || len(s.moves) != 1 || s.moves[0].id != "b" || s.moves[0].runID != "b-run" || s.moves[0].group != "新分组" {
+		t.Fatalf("incorrect move boundary: result=%+v moves=%+v", result, s.moves)
+	}
+	if s.items[1].RunID != "b-run" || s.items[1].State != "running" || s.items[0].Group != "旧组" || len(s.starts)+len(s.stops)+len(s.attaches)+len(s.removes) != 0 {
+		t.Fatal("group move changed current or another process")
+	}
+	m.Update(listResultMsg{generation: m.generation, request: m.listRequest, items: s.items})
+	if m.selectedID != "b" || !m.allGroups || m.items[m.cursor].Group != "新分组" {
+		t.Fatal("refresh lost moved descriptor selection")
+	}
+}
+
+func TestMoveGroupRejectsStaleRunAndChangedLocalTarget(t *testing.T) {
+	for _, local := range []bool{false, true} {
+		t.Run(fmt.Sprint(local), func(t *testing.T) {
+			a := info("a", "会话", "running", "old-run")
+			s := &fakeService{items: []terminalhost.SessionInfo{a}}
+			m := modelWith(s)
+			press(m, "g")
+			m.group.SetValue("新组")
+			a.RunID = "new-run"
+			s.replace(a)
+			if local {
+				m.setItems([]terminalhost.SessionInfo{a})
+				press(m, "enter")
+			} else {
+				result := runOperation(t, m, press(m, "enter"))
+				if result.err == nil {
+					t.Fatal("remote restarted run was not rejected")
+				}
+			}
+			if m.mode != listMode || len(s.moves)+len(s.starts)+len(s.stops)+len(s.removes) != 0 {
+				t.Fatal("stale group dialog mutated a process or descriptor")
+			}
+		})
+	}
+}
+
+func TestMoveToDefaultAndCancelAreExplicit(t *testing.T) {
+	a := info("a", "会话", "running", "run")
+	a.Group = "研发"
+	s := &fakeService{items: []terminalhost.SessionInfo{a}}
+	m := modelWith(s)
+	press(m, "g")
+	m.group.SetValue("未保存")
+	press(m, "esc")
+	if len(s.moves) != 0 || s.items[0].Group != "研发" {
+		t.Fatal("cancel saved group")
+	}
+	m.Update(listResultMsg{generation: m.generation, request: m.listRequest, items: s.items})
+	press(m, "g")
+	m.group.SetValue("")
+	result := runOperation(t, m, press(m, "enter"))
+	if result.err != nil || len(s.moves) != 1 || s.moves[0].group != "" || s.items[0].Group != "" {
+		t.Fatal("empty group did not move to default group")
+	}
+}
+
+func TestMovePassesDisplayedRunEvenWhenRestartOccursAfterListCheck(t *testing.T) {
+	a := info("a", "同名", "running", "displayed-run")
+	a.Group = "旧分组"
+	s := &restartBeforeMoveService{fakeService: &fakeService{items: []terminalhost.SessionInfo{a}}}
+	m := New(s, a.Dir).(*Model)
+	m.Update(m.refresh()())
+	press(m, "g")
+	m.group.SetValue("新分组")
+	result := runOperation(t, m, press(m, "enter"))
+	if result.err == nil || len(s.attempts) != 1 || s.attempts[0] != (mutation{"a", "displayed-run"}) {
+		t.Fatalf("move did not retain displayed instance through service race: result=%+v attempts=%+v", result, s.attempts)
+	}
+	if m.mode != listMode || len(s.moves)+len(s.starts)+len(s.stops)+len(s.removes)+len(s.attaches) != 0 || s.items[0].Group != "旧分组" {
+		t.Fatal("rejected stale move changed group or process lifecycle")
+	}
+}
+
+func TestSearchFindsNameDirectoryToolAndGroupWithoutMutating(t *testing.T) {
+	for _, query := range []string{"中文名称", "开发路径", "CODEX", "研发 🐱"} {
+		t.Run(query, func(t *testing.T) {
+			a := info("target", "中文名称", "running", "run")
+			a.Dir, a.Tool, a.Group = `C:\开发路径\repo`, "codex", "研发 🐱"
+			s := &fakeService{items: []terminalhost.SessionInfo{info("other", "别的", "stopped", ""), a}}
+			m := modelWith(s)
+			press(m, "/")
+			press(m, query)
+			if len(m.items) != 1 || m.selectedID != "target" || !m.searching || !strings.Contains(m.View(), "1/2 个") {
+				t.Fatalf("search failed: items=%+v selected=%q searching=%v view=%q", m.items, m.selectedID, m.searching, m.View())
+			}
+			press(m, "enter")
+			if m.searching || len(m.items) != 1 {
+				t.Fatal("Enter did not preserve query and return list shortcuts")
+			}
+			press(m, "esc")
+			if len(m.items) != 2 || m.search.Value() != "" || len(s.creates)+len(s.starts)+len(s.stops)+len(s.moves)+len(s.attaches) != 0 {
+				t.Fatal("clearing search modified descriptors or processes")
+			}
+		})
+	}
+}
+
+func TestGroupFilteringCombinesSearchAndRetainsUUIDOnRefresh(t *testing.T) {
+	a, b, c := info("a", "重复", "running", "a1"), info("b", "重复", "running", "b1"), info("c", "默认", "stopped", "")
+	a.Group, b.Group = "研发", "研发"
+	s := &fakeService{items: []terminalhost.SessionInfo{c, a, b}}
+	m := modelWith(s)
+	press(m, "tab")
+	if m.allGroups || m.filterGroup != "" || len(m.items) != 1 || m.selectedID != "c" {
+		t.Fatal("first group filter did not select default")
+	}
+	press(m, "tab")
+	press(m, "j")
+	press(m, "/")
+	press(m, "重复")
+	press(m, "enter")
+	if m.filterGroup != "研发" || m.selectedID != "b" || len(m.items) != 2 {
+		t.Fatal("combined filters lost selected UUID")
+	}
+	s.replace(b, c, a)
+	m.Update(m.refresh()())
+	if m.selectedID != "b" || m.cursor != 0 || len(m.items) != 2 || len(m.allItems) != 3 {
+		t.Fatal("filtered refresh followed row position instead of UUID")
+	}
+	press(m, "shift+tab")
+	if m.filterGroup != "" || len(m.items) != 0 || !strings.Contains(m.View(), "没有匹配") {
+		t.Fatal("search did not combine with default-group filter")
+	}
+	press(m, "esc")
+	if !m.allGroups || len(m.items) != 3 || m.search.Value() != "" {
+		t.Fatal("Esc did not clear both list filters")
+	}
+}
+
+func TestInputShortcutsRemainTextInSearchAndGroupForms(t *testing.T) {
+	a := info("a", "会话", "running", "run")
+	s := &fakeService{items: []terminalhost.SessionInfo{a}}
+	m := modelWith(s)
+	press(m, "/")
+	for _, value := range []string{"n", "g", "q", "r", "s", "d", "/"} {
+		press(m, value)
+	}
+	press(m, "tab")
+	if m.search.Value() != "ngqrsd/" || !m.searching || m.quitting || !m.allGroups || m.mode != listMode {
+		t.Fatal("search text was handled as global action")
+	}
+	press(m, "esc")
+	press(m, "g")
+	for _, value := range []string{"n", "g", "q", "r", "s", "d", "/"} {
+		press(m, value)
+	}
+	if m.group.Value() != "ngqrsd/" || m.mode != moveMode || m.quitting || len(s.moves)+len(s.creates)+len(s.stops)+len(s.removes) != 0 {
+		t.Fatal("group input was handled as list action")
+	}
+}
+
+func TestActiveSearchRefreshKeepsTextAndSelectedUUID(t *testing.T) {
+	a, b := info("a", "同名", "running", "a1"), info("b", "同名", "running", "b1")
+	s := &fakeService{items: []terminalhost.SessionInfo{a, b}}
+	m := modelWith(s)
+	press(m, "j")
+	press(m, "/")
+	press(m, "同名")
+	s.replace(b, a)
+	m.Update(m.refresh()())
+	if !m.searching || m.search.Value() != "同名" || m.selectedID != "b" || m.cursor != 0 {
+		t.Fatal("live refresh replaced search text or selection")
+	}
+	press(m, "ctrl+c")
+	if !m.quitting || len(s.stops)+len(s.removes) != 0 {
+		t.Fatal("leaving active search stopped sessions")
+	}
+}
+
+func TestSearchKeyboardHintsRemainVisibleWithPaddedInput(t *testing.T) {
+	for _, height := range []int{1, 6, 24} {
+		t.Run(fmt.Sprint(height), func(t *testing.T) {
+			s := &fakeService{items: []terminalhost.SessionInfo{info("a", "中文维护", "running", "run")}}
+			m := modelWith(s)
+			m.width, m.height = 80, height
+			press(m, "/")
+			press(m, "中文维护")
+			view := ansi.Strip(m.View())
+			if !strings.Contains(view, "Enter 保留") || !strings.Contains(view, "Esc 清除") || strings.Contains(view, "q/Ctrl+C 退出") || strings.Contains(view, "q 退出") {
+				t.Fatalf("search field hid or misreported active keyboard controls: %s", view)
+			}
+			press(m, "不匹配")
+			if strings.Contains(m.View(), "按 n 新建") {
+				t.Fatal("empty search advertised a shortcut consumed as text")
+			}
+			press(m, "esc")
+			if strings.Contains(m.View(), "Enter 保留") || !strings.Contains(m.View(), "q") {
+				t.Fatal("leaving search did not restore list controls")
+			}
+		})
+	}
+}
+
+func TestEmptyRegistrySearchConsumesCreateShortcutAsText(t *testing.T) {
+	s := &fakeService{}
+	m := modelWith(s)
+	press(m, "/")
+	press(m, "nq")
+	if strings.Contains(m.View(), "按 n 新建") || strings.Contains(m.View(), "q/Ctrl+C 退出") || len(s.creates) != 0 || m.quitting || m.search.Value() != "nq" {
+		t.Fatalf("empty search misreported or invoked text keys: %s", m.View())
+	}
+	press(m, "esc")
+	if !strings.Contains(m.View(), "按 n 新建") {
+		t.Fatal("empty list did not restore creation after clearing search")
 	}
 }
 

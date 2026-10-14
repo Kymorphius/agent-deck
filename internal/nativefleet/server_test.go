@@ -197,14 +197,14 @@ func TestConcurrentStartOnceAndGenerationFenceAfterRestart(t *testing.T) {
 	if second.RunID == first.RunID || second.PID == first.PID || l.count() != 2 {
 		t.Fatalf("restart did not create a fresh fenced run: %+v -> %+v", first, second)
 	}
-	for _, op := range []string{"send", "resize", "stop", "fleet-stop", "fleet-remove", "fleet-rename", "fleet-start", "status", "capture"} {
+	for _, op := range []string{"send", "resize", "stop", "fleet-stop", "fleet-remove", "fleet-rename", "fleet-move", "fleet-start", "status", "capture"} {
 		request := forRun(op, first)
-		request.Data, request.Name, request.Cols, request.Rows = []byte("stale\r"), "stale-name", 90, 30
+		request.Data, request.Name, request.Group, request.Cols, request.Rows = []byte("stale\r"), "stale-name", "stale-group", 90, 30
 		if r := s.Dispatch(request); r.OK || !strings.Contains(r.Error, "run changed") {
 			t.Fatalf("%s accepted stale generation: %+v", op, r)
 		}
 	}
-	for _, op := range []string{"send", "resize", "stop", "fleet-stop", "fleet-remove", "fleet-rename", "fleet-start"} {
+	for _, op := range []string{"send", "resize", "stop", "fleet-stop", "fleet-remove", "fleet-rename", "fleet-move", "fleet-start"} {
 		if r := s.Dispatch(terminalhost.Request{Op: op, SessionID: second.SessionID}); r.OK {
 			t.Fatalf("%s accepted missing expected run", op)
 		}
@@ -319,7 +319,7 @@ func TestPartialLaunchErrorRetainsUncertainOwnershipUntilSuccessfulCleanup(t *te
 	if r.OK || r.Running || r.RunID == "" || len(r.Sessions) != 1 || r.Sessions[0].State != "error" || r.Sessions[0].Error == "" {
 		t.Fatalf("partial cleanup error invented liveness or lost ownership: %+v", r)
 	}
-	for _, op := range []string{"fleet-stop", "fleet-remove", "fleet-start", "fleet-rename"} {
+	for _, op := range []string{"fleet-stop", "fleet-remove", "fleet-start", "fleet-rename", "fleet-move"} {
 		if response := s.Dispatch(terminalhost.Request{Op: op, SessionID: r.SessionID}); response.OK || !strings.Contains(response.Error, "run changed") {
 			t.Fatalf("partial resource %s accepted missing ownership generation: %+v", op, response)
 		}

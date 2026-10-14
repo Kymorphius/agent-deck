@@ -25,9 +25,30 @@ import (
 const (
 	DatabaseFilename = "registry.sqlite"
 	OwnerFilename    = "owner.lock"
-	schemaVersion    = 1
+	schemaVersion    = 2
 	maxLaunchBytes   = 64 * 1024
 )
+
+// matrix/hardened: only the known v1 table may be migrated; SQL constraints and
+// defaults are validated as well as column metadata before any schema change.
+const schemaV1SQL = `CREATE TABLE native_sessions (
+	id TEXT PRIMARY KEY NOT NULL,
+	name TEXT NOT NULL CHECK(length(name) BETWEEN 1 AND 128),
+	tool TEXT NOT NULL CHECK(length(tool) BETWEEN 1 AND 64),
+	launch_json TEXT NOT NULL CHECK(length(launch_json) <= 65536),
+	created_at INTEGER NOT NULL CHECK(created_at > 0),
+	updated_at INTEGER NOT NULL CHECK(updated_at >= created_at)
+)`
+
+const schemaV2SQL = `CREATE TABLE native_sessions (
+	id TEXT PRIMARY KEY NOT NULL,
+	name TEXT NOT NULL CHECK(length(name) BETWEEN 1 AND 128),
+	tool TEXT NOT NULL CHECK(length(tool) BETWEEN 1 AND 64),
+	launch_json TEXT NOT NULL CHECK(length(launch_json) <= 65536),
+	created_at INTEGER NOT NULL CHECK(created_at > 0),
+	updated_at INTEGER NOT NULL CHECK(updated_at >= created_at),
+	group_name TEXT NOT NULL DEFAULT ''
+)`
 
 var (
 	ErrOwned       = errors.New("native registry already has an owner")
@@ -41,6 +62,7 @@ type Record struct {
 	ID        string                  `json:"id"`
 	Name      string                  `json:"name"`
 	Tool      string                  `json:"tool"`
+	Group     string                  `json:"group"`
 	Launch    terminalhost.LaunchSpec `json:"launch"`
 	CreatedAt time.Time               `json:"created_at"`
 	UpdatedAt time.Time               `json:"updated_at"`
@@ -119,43 +141,52 @@ func (s *Store) initialize() error {
 	if err := s.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 		return fmt.Errorf("read native registry version: %w", err)
 	}
-	if version != 0 && version != schemaVersion {
+	if version < 0 || version > schemaVersion {
 		return fmt.Errorf("%w: unsupported schema version %d", ErrInvalidData, version)
 	}
 	if version == 0 {
-		var tables int
-		if err := s.db.QueryRow("SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").Scan(&tables); err != nil {
+		var objects int
+		if err := s.db.QueryRow("SELECT count(*) FROM sqlite_master WHERE name NOT GLOB 'sqlite_*'").Scan(&objects); err != nil {
 			return err
 		}
-		if tables != 0 {
-			return fmt.Errorf("%w: unversioned database already contains tables", ErrInvalidData)
+		if objects != 0 {
+			return fmt.Errorf("%w: unversioned database already contains schema objects", ErrInvalidData)
 		}
-		if err := s.transaction(func(tx *sql.Tx) error {
-			_, err := tx.Exec(`CREATE TABLE native_sessions (
-				id TEXT PRIMARY KEY NOT NULL,
-				name TEXT NOT NULL CHECK(length(name) BETWEEN 1 AND 128),
-				tool TEXT NOT NULL CHECK(length(tool) BETWEEN 1 AND 64),
-				launch_json TEXT NOT NULL CHECK(length(launch_json) <= 65536),
-				created_at INTEGER NOT NULL CHECK(created_at > 0),
-				updated_at INTEGER NOT NULL CHECK(updated_at >= created_at)
-			)`)
-			if err != nil {
-				return err
-			}
-			_, err = tx.Exec("PRAGMA user_version=1")
+	} else {
+		// matrix/hardened: validate old schema and descriptions before even
+		// changing a persistent journal setting, and before migration begins.
+		if err := checkSchema(s.db, version); err != nil {
 			return err
-		}); err != nil {
-			return fmt.Errorf("initialize native registry: %w", err)
+		}
+		if _, err := listRecords(s.db, version); err != nil {
+			return err
 		}
 	}
-	// matrix/hardened: rollback journals inherit the protected directory/DB;
-	// persistent WAL/SHM files are not needed for a single exclusive manager.
+	// matrix/hardened: migration writes use the same durable private rollback
+	// journal as ordinary metadata transactions.
 	var journal string
 	if err := s.db.QueryRow("PRAGMA journal_mode=DELETE").Scan(&journal); err != nil || journal != "delete" {
 		return fmt.Errorf("configure native registry journal: %v", err)
 	}
 	if _, err := s.db.Exec("PRAGMA synchronous=FULL"); err != nil {
 		return err
+	}
+	if version == 0 {
+		if err := s.transaction(func(tx *sql.Tx) error {
+			_, err := tx.Exec(schemaV2SQL)
+			if err != nil {
+				return err
+			}
+			_, err = tx.Exec("PRAGMA user_version=2")
+			return err
+		}); err != nil {
+			return fmt.Errorf("initialize native registry: %w", err)
+		}
+	}
+	if version == 1 {
+		if err := s.transaction(migrateV1); err != nil {
+			return fmt.Errorf("migrate native registry: %w", err)
+		}
 	}
 	if err := s.checkSchema(); err != nil {
 		return err
@@ -167,37 +198,77 @@ func (s *Store) initialize() error {
 }
 
 func (s *Store) checkSchema() error {
+	return checkSchema(s.db, schemaVersion)
+}
+
+type queryer interface {
+	Query(string, ...any) (*sql.Rows, error)
+	QueryRow(string, ...any) *sql.Row
+}
+
+func migrateV1(tx *sql.Tx) error {
+	if _, err := tx.Exec("ALTER TABLE native_sessions ADD COLUMN group_name TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if _, err := tx.Exec("PRAGMA user_version=2"); err != nil {
+		return err
+	}
+	if err := checkSchema(tx, 2); err != nil {
+		return err
+	}
+	_, err := listRecords(tx, 2)
+	return err
+}
+
+func checkSchema(db queryer, version int) error {
 	var objects int
-	if err := s.db.QueryRow("SELECT count(*) FROM sqlite_master WHERE type IN ('table','view','trigger') AND name NOT LIKE 'sqlite_%'").Scan(&objects); err != nil {
+	// matrix/hardened: '_' is a LIKE wildcard; GLOB keeps the literal SQLite
+	// prefix so user objects named sqliteX... cannot evade schema validation.
+	if err := db.QueryRow("SELECT count(*) FROM sqlite_master WHERE type IN ('table','view','trigger','index') AND name NOT GLOB 'sqlite_*'").Scan(&objects); err != nil {
 		return err
 	}
 	if objects != 1 {
 		return fmt.Errorf("%w: unexpected schema objects", ErrInvalidData)
 	}
-	var kind string
-	if err := s.db.QueryRow("SELECT type FROM sqlite_master WHERE name='native_sessions'").Scan(&kind); err != nil || kind != "table" {
+	var kind, definition string
+	if err := db.QueryRow("SELECT type,sql FROM sqlite_master WHERE name='native_sessions'").Scan(&kind, &definition); err != nil || kind != "table" {
 		return fmt.Errorf("%w: session table missing", ErrInvalidData)
 	}
-	rows, err := s.db.Query("PRAGMA table_info(native_sessions)")
+	wantSQL := schemaV1SQL
+	if version == 2 {
+		wantSQL = schemaV2SQL
+	}
+	if normalizeSchemaSQL(definition) != normalizeSchemaSQL(wantSQL) {
+		return fmt.Errorf("%w: incompatible session constraints or defaults", ErrInvalidData)
+	}
+	rows, err := db.Query("PRAGMA table_xinfo(native_sessions)")
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
 	wantNames := []string{"id", "name", "tool", "launch_json", "created_at", "updated_at"}
 	wantTypes := []string{"TEXT", "TEXT", "TEXT", "TEXT", "INTEGER", "INTEGER"}
+	if version == 2 {
+		wantNames = append(wantNames, "group_name")
+		wantTypes = append(wantTypes, "TEXT")
+	}
 	index := 0
 	for rows.Next() {
-		var column, notNull, pk int
+		var column, notNull, pk, hidden int
 		var name, kind string
-		var defaultValue any
-		if err := rows.Scan(&column, &name, &kind, &notNull, &defaultValue, &pk); err != nil {
+		var defaultValue sql.NullString
+		if err := rows.Scan(&column, &name, &kind, &notNull, &defaultValue, &pk, &hidden); err != nil {
 			return err
 		}
 		wantPK := 0
 		if index == 0 {
 			wantPK = 1
 		}
-		if index >= len(wantNames) || column != index || name != wantNames[index] || kind != wantTypes[index] || notNull != 1 || pk != wantPK || defaultValue != nil {
+		wantDefault := sql.NullString{}
+		if version == 2 && index == len(wantNames)-1 {
+			wantDefault = sql.NullString{String: "''", Valid: true}
+		}
+		if index >= len(wantNames) || column != index || name != wantNames[index] || kind != wantTypes[index] || notNull != 1 || pk != wantPK || defaultValue != wantDefault || hidden != 0 {
 			return fmt.Errorf("%w: incompatible session table", ErrInvalidData)
 		}
 		index++
@@ -209,6 +280,31 @@ func (s *Store) checkSchema() error {
 		return fmt.Errorf("%w: incompatible session columns", ErrInvalidData)
 	}
 	return nil
+}
+
+// normalizeSchemaSQL tolerates formatting and SQL keyword case while retaining
+// literal values, so a different CHECK or group default cannot look compatible.
+func normalizeSchemaSQL(value string) string {
+	var normalized strings.Builder
+	var quote rune
+	for _, r := range value {
+		if quote != 0 {
+			normalized.WriteRune(r)
+			if r == quote {
+				quote = 0
+			}
+			continue
+		}
+		if r == '\'' || r == '"' || r == '`' {
+			quote = r
+			normalized.WriteRune(r)
+			continue
+		}
+		if !unicode.IsSpace(r) {
+			normalized.WriteRune(unicode.ToLower(r))
+		}
+	}
+	return normalized.String()
 }
 
 func (s *Store) transaction(fn func(*sql.Tx) error) error {
@@ -240,6 +336,21 @@ func (s *Store) verifyPaths() error {
 		}
 	}
 	return nil
+}
+
+// Directory returns the canonical root accepted by Open while ownership still
+// holds. It exposes no database handle and never creates or resolves new paths.
+// matrix/hardened: manager handshakes must advertise the actual owned registry.
+func (s *Store) Directory() (string, error) {
+	if s == nil {
+		return "", ErrClosed
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.checkOpen(); err != nil {
+		return "", err
+	}
+	return s.dir, nil
 }
 
 // Close never removes the directory, lock file, metadata or any session data.
@@ -280,7 +391,15 @@ func (s *Store) List() ([]Record, error) {
 }
 
 func (s *Store) list() ([]Record, error) {
-	rows, err := s.db.Query("SELECT id,name,tool,launch_json,created_at,updated_at FROM native_sessions ORDER BY created_at,id")
+	return listRecords(s.db, schemaVersion)
+}
+
+func listRecords(db queryer, version int) ([]Record, error) {
+	group := "group_name"
+	if version == 1 {
+		group = "''"
+	}
+	rows, err := db.Query("SELECT id,name,tool," + group + ",launch_json,created_at,updated_at FROM native_sessions ORDER BY created_at,id")
 	if err != nil {
 		return nil, err
 	}
@@ -305,16 +424,26 @@ func (s *Store) Get(id string) (Record, error) {
 	if err := s.checkOpen(); err != nil {
 		return Record{}, err
 	}
-	return scanRecord(s.db.QueryRow("SELECT id,name,tool,launch_json,created_at,updated_at FROM native_sessions WHERE id=?", id))
+	return scanRecord(s.db.QueryRow("SELECT id,name,tool,group_name,launch_json,created_at,updated_at FROM native_sessions WHERE id=?", id))
 }
 
 func (s *Store) Create(name, tool string, launch terminalhost.LaunchSpec) (Record, error) {
+	return s.CreateInGroup(name, tool, "", launch)
+}
+
+// CreateInGroup saves an independent launch description in a canonical group.
+// matrix/hardened: groups organize metadata only and do not change job ownership.
+func (s *Store) CreateInGroup(name, tool, group string, launch terminalhost.LaunchSpec) (Record, error) {
 	if err := ValidateName(name); err != nil {
 		return Record{}, err
 	}
 	if err := validateTool(tool); err != nil {
 		return Record{}, err
 	}
+	if err := ValidateGroup(group); err != nil {
+		return Record{}, err
+	}
+	group = strings.TrimSpace(group)
 	data, err := encodeLaunch(launch)
 	if err != nil {
 		return Record{}, err
@@ -329,15 +458,39 @@ func (s *Store) Create(name, tool string, launch terminalhost.LaunchSpec) (Recor
 		return Record{}, err
 	}
 	now := time.Now().UTC()
-	record := Record{ID: uuid.NewString(), Name: name, Tool: tool, Launch: cloned, CreatedAt: now, UpdatedAt: now}
+	record := Record{ID: uuid.NewString(), Name: name, Tool: tool, Group: group, Launch: cloned, CreatedAt: now, UpdatedAt: now}
 	err = s.transaction(func(tx *sql.Tx) error {
-		_, err := tx.Exec("INSERT INTO native_sessions(id,name,tool,launch_json,created_at,updated_at) VALUES(?,?,?,?,?,?)", record.ID, name, tool, string(data), now.UnixNano(), now.UnixNano())
+		_, err := tx.Exec("INSERT INTO native_sessions(id,name,tool,group_name,launch_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?)", record.ID, name, tool, group, string(data), now.UnixNano(), now.UnixNano())
 		return err
 	})
 	if err != nil {
 		return Record{}, err
 	}
 	return record, nil
+}
+
+// Move updates only group metadata and the last-edit timestamp; the UUID,
+// creation time, launch parameters and working directory remain unchanged.
+func (s *Store) Move(id, group string) error {
+	if err := ValidateID(id); err != nil {
+		return err
+	}
+	if err := ValidateGroup(group); err != nil {
+		return err
+	}
+	group = strings.TrimSpace(group)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.checkOpen(); err != nil {
+		return err
+	}
+	return s.transaction(func(tx *sql.Tx) error {
+		result, err := tx.Exec("UPDATE native_sessions SET group_name=?,updated_at=max(updated_at,?) WHERE id=?", group, time.Now().UTC().UnixNano(), id)
+		if err != nil {
+			return err
+		}
+		return found(result)
+	})
 }
 
 func (s *Store) Rename(id, name string) error {
@@ -398,7 +551,7 @@ func scanRecord(row scanner) (Record, error) {
 	var record Record
 	var raw string
 	var created, updated int64
-	if err := row.Scan(&record.ID, &record.Name, &record.Tool, &raw, &created, &updated); err != nil {
+	if err := row.Scan(&record.ID, &record.Name, &record.Tool, &record.Group, &raw, &created, &updated); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Record{}, ErrNotFound
 		}
@@ -412,6 +565,12 @@ func scanRecord(row scanner) (Record, error) {
 	}
 	if err := validateTool(record.Tool); err != nil {
 		return Record{}, err
+	}
+	if err := ValidateGroup(record.Group); err != nil {
+		return Record{}, err
+	}
+	if record.Group != strings.TrimSpace(record.Group) {
+		return Record{}, fmt.Errorf("%w: noncanonical group name", ErrInvalidData)
 	}
 	if len(raw) > maxLaunchBytes || !utf8.ValidString(raw) {
 		return Record{}, fmt.Errorf("%w: oversized or invalid UTF-8 launch description", ErrInvalidData)
@@ -452,6 +611,28 @@ func ValidateName(name string) error {
 		if unicode.IsControl(r) {
 			return fmt.Errorf("%w: name contains a control character", ErrInvalidData)
 		}
+	}
+	return nil
+}
+
+// ValidateGroup accepts the empty default group, or a printable Unicode name.
+// Surrounding spaces are trimmed by writes; controls and whitespace-only names
+// cannot silently alias the default group.
+func ValidateGroup(group string) error {
+	if group == "" {
+		return nil
+	}
+	if !utf8.ValidString(group) {
+		return fmt.Errorf("%w: group contains invalid UTF-8", ErrInvalidData)
+	}
+	for _, r := range group {
+		if unicode.IsControl(r) {
+			return fmt.Errorf("%w: group contains a control character", ErrInvalidData)
+		}
+	}
+	group = strings.TrimSpace(group)
+	if group == "" || len(group) > 256 || utf8.RuneCountInString(group) > 64 {
+		return fmt.Errorf("%w: group must contain 1-64 Unicode characters or be empty", ErrInvalidData)
 	}
 	return nil
 }

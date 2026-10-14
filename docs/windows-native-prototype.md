@@ -3,10 +3,10 @@
 <!-- matrix/hardened: document the isolated experiment without claiming that the complete app is ported. -->
 
 `agent-deck-native` 是独立的 Windows 原生终端实验，版本为
-`0.2.0+matrix.prototype`。它不依赖 WSL 或 tmux，使用 ConPTY 启动
+`0.3.0+matrix.prototype`。它不依赖 WSL 或 tmux，使用 ConPTY 启动
 交互式子进程，通过本机命名管道提供输入、输出、截图、缩放和停止操作。
-第二阶段增加了独立的中文多会话列表、SQLite 注册库和管理进程；
-尚未接入现有 Agent Deck 的分组、生产数据库、Web 页面或工具状态识别。
+现已支持独立的中文多会话列表、分组、搜索、SQLite 注册库，以及自动启动的后台；
+尚未接入现有 Agent Deck 的生产数据库、Web 页面或工具状态识别。
 现有 macOS/Linux 程序继续沿用原来的入口。
 
 ## 构建
@@ -34,10 +34,12 @@ go build -trimpath -o .\agent-deck-native.exe .\cmd\agent-deck-native
 
 ## 多会话列表
 
-在第一个 PowerShell 终端运行管理进程：
+在 Windows Terminal 中直接运行：
 
 ```powershell
-.\agent-deck-native.exe serve
+.\agent-deck-native.exe ui --cwd 'C:\Projects\demo'
+# 不带参数也会打开同一列表。
+.\agent-deck-native.exe
 ```
 
 默认注册目录为 `%LOCALAPPDATA%\AgentDeckNativeManager`，仅当前用户和 SYSTEM
@@ -45,24 +47,37 @@ go build -trimpath -o .\agent-deck-native.exe .\cmd\agent-deck-native
 生成。测试或独立实例可显式指定 `--state-dir` 和 `--pipe`，所有客户端需使用同样的值。
 自选目录必须是已有可信父目录下的专用目录。
 
-在第二个 Windows Terminal 窗口进入列表：
+首次打开列表会启动独立后台，再通过本机命名管道核对版本、运行标识和注册目录。
+以后打开的窗口复用通过核对的后台，关闭窗口或其控制台进程树不会结束会话。
+若已有旧版本或另一注册目录占用管道，程序明确报错；需要由用户显式关闭原后台。
+后台通过 Windows 自带的本机 WMI 进程创建接口启动，不安装任务、服务或登录启动项。
+启动参数与继承环境通过固定代理脚本的 stdin 传递，环境不会进入启动命令行或注册库。
+[Microsoft Win32_Process.Create](https://learn.microsoft.com/en-us/windows/win32/cimwin32prov/create-method-in-class-win32-process)
+说明了 WMI 创建进程与调用者 Job 的关系。
+
+SSH 或脚本环境可以先启动后台，再管理会话：
 
 ```powershell
-.\agent-deck-native.exe ui --cwd 'C:\Projects\demo'
-# 不带参数也会进入同一列表。
-.\agent-deck-native.exe
+.\agent-deck-native.exe manager-start --json
+.\agent-deck-native.exe list --json
 ```
 
 | 按键 | 操作 |
 |---|---|
 | 上/下或 j/k | 选择会话 |
-| n | 输入名称、目录，选择 Shell 或 Codex 后创建并进入 |
+| n | 输入名称、目录、分组，选择 Shell、Codex 或 PowerShell 后创建并进入 |
 | Enter 或 o | 打开；已停止或退出的会话会显式启动 |
 | Ctrl+Q | 从会话终端返回列表，后台进程继续运行 |
 | s | 确认后停止所选进程树，保留记录 |
 | r | 修改名称 |
+| g | 移动所选会话到另一分组，空名称表示默认分组 |
+| / | 按名称、目录、工具或分组实时搜索；Enter 保留、Esc 清除 |
+| Tab / Shift+Tab | 切换全部、默认及已有分组 |
 | d | 确认后停止所选进程树并移除列表记录，保留项目文件 |
 | q 或 Ctrl+C | 退出列表，管理进程和会话继续运行 |
+
+分组只是注册记录的组织方式，移动不会改变运行中的 PID、RunID 或启动参数。
+搜索时列表快捷键作为文字输入，提示会切换为搜索的 Enter/Esc 操作。
 
 列表显示进程观测状态：正在运行、已退出、已停止或异常；不会把进程运行解释为模型忙碌、
 等待授权或已完成任务。列表每秒刷新一次，进入会话终端后暂停列表轮询。带运行标识
@@ -73,28 +88,35 @@ Codex 使用真实的原生 `codex.exe`；当前 Windows x64 查找也包含 npm
 也可以用命令管理注册记录：
 
 ```powershell
-.\agent-deck-native.exe create --name '工作 Shell' --cwd 'C:\Projects\demo' --tool shell --json
+.\agent-deck-native.exe create --name '工作 Shell' --cwd 'C:\Projects\demo' --tool shell --group '研发' --json
+.\agent-deck-native.exe create --name '系统控制' --cwd 'C:\Projects\demo' --tool powershell --group '运维' --json
 .\agent-deck-native.exe list --json
 .\agent-deck-native.exe create --name '指定程序' --tool custom --cwd 'C:\Projects\demo' --no-start -- 'C:\Tools\agent.exe' '--model' 'two words'
 .\agent-deck-native.exe start --session '<session UUID>' --json
 .\agent-deck-native.exe rename --session '<session UUID>' --name '新名称'
+.\agent-deck-native.exe move --session '<session UUID>' --run-id '<run UUID>' --group '另组'
 .\agent-deck-native.exe remove --session '<session UUID>'
 .\agent-deck-native.exe shutdown
 ```
 
 `create` 先保存描述再启动。启动失败时仍返回保存的 ID，退出码为失败；列表提示
 “会话已创建，启动失败”，选择同一记录重试，不需要再次创建。
-注册库只保存名称、工具、目录、独立 argv 和显式 `--env` 覆盖；不保存继承环境、
+注册库只保存名称、分组、工具、目录、独立 argv 和显式 `--env` 覆盖；不保存继承环境、
 账户配置或屏幕历史。管理进程重启后记录仍在，所有记录处于已停止状态，
 程序不会自动重启 Agent。
+
+v0.3 会在同一事务内把 v0.2 的 schema 1 升级为 schema 2，原有 UUID、启动描述、工具
+和时间保留，已有记录进入默认分组。校验失败时拒绝迁移，事务失败时回滚列和版本。
+需要回退 v0.2 时，应使用升级前备份的专用注册目录；v0.2 会拒绝读取 schema 2。
 
 管理进程中的 `attach`、`send`、`capture`、`resize` 和 `stop` 使用同一管道，
 并增加 `--session UUID`。每次启动分配新的 `--run-id UUID`，旧查看者的输入和
 缩放请求无法送到后来启动的进程。交互查看者绑定该标识；脚本可明确指定它，
 未指定的单次操作先读取当前标识再提交。
 
-`serve` 持有所有会话。关闭它的终端、系统退出或它意外退出会结束所属进程树。
-要在 SSH 登出后保活，需要由独立启动器持有管理进程；程序没有自动安装系统服务。
+`serve` 仍可显式在前台运行，用于诊断；关闭该前台终端会结束其所属会话。
+默认 UI 或 `manager-start` 创建的是独立后台，可跨客户端和 SSH 连接运行。
+系统退出或管理进程意外退出仍会结束所属进程树；程序没有自动安装系统服务。
 `shutdown` 清理所属进程树并关闭管理进程，保留注册库和项目文件。
 
 ## 手动运行一个 Shell 会话
@@ -288,3 +310,30 @@ scripts/run-isolated.py go test ./cmd/agent-deck-native ./internal/conpty ./inte
   Windows amd64 vet 通过。
 
 上述 UI 流程是实际 Windows 控制台链路的自动化证据，仍不代表可见桌面的人工验收。
+
+## 2026-10-14 第三阶段原生验证记录
+
+目标仍为 Windows Server 2025 Standard x64，Build 26100。
+
+- 真实 CLI 自动创建 WMI 后台并进入列表；关闭整个外层 ConPTY 的
+  kill-on-close Job 后，管理进程和 Shell 保留相同 PID/RunID，另一个窗口接回原屏幕。
+  包含中文、引号、美元符号的继承环境通过 stdin 传递，并由实际 Shell 执行验证。
+- 两个同时启动的客户端取得同一个后台和独占注册库；另一目录复用同名管道时被拒绝，
+  原后台保持运行。缺失父目录的启动在十五秒内明确失败。
+- 真实键盘创建第四字段中的分组，操作全部/默认/命名分组筛选，搜索中文名称、目录和
+  分组，Esc 清除、Enter 保留，移动分组后同一进程继续运行。独立 PowerShell 使用
+  原生程序和 `-NoProfile`，执行编码命令；选择性停止与移除保留另一进程及项目哨兵文件。
+- 真实 80×6 控制台的搜索界面保留 Enter/Esc 提示，n/q 作为查询文本，不会创建会话
+  或退出窗口；Esc 返回列表后原快捷键恢复。
+- Windows 注册库测试覆盖 v1 到 v2 原子迁移、多个工具的启动原始 JSON/UUID/时间保持、
+  回滚、只读失败、损坏和未来 schema 拒绝、额外 `sqliteX...` 对象拒绝以及目录身份。
+- 把第二阶段实际生成的 v1 QA 注册库复制到独立目录升级，两个原记录的 UUID、名称、
+  工具、目录和时间均保留，初始无自动子进程。原 QA 注册库前后 SHA256 相同。
+- 一条 SSH 连接结束后，另一条连接确认同一 WMI 后台、Shell 和 PowerShell 的 PID/RunID，
+  在两个原会话执行新编码命令。默认原生 Codex 的启动画面也验证通过，使用独立
+  CODEX_HOME，不提交模型消息；停止它后另两个进程继续运行，最后精确关闭本次后台。
+- 完整 Windows CLI、注册库、管理器和 UI 测试通过；七个相关包的隔离 race、
+  Windows amd64 vet 和交叉编译通过。测试后台和所属进程清理完成，未安装任务或服务。
+
+本阶段增加了自动后台、分组、搜索和 PowerShell，仍未验收可见 Windows Terminal 桌面、
+真实模型回合、Claude、MCP、Web 或现有完整主程序的所有功能。

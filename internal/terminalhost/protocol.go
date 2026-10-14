@@ -41,6 +41,7 @@ type Request struct {
 	RunID     string      `json:"run_id,omitempty"`
 	Name      string      `json:"name,omitempty"`
 	Tool      string      `json:"tool,omitempty"`
+	Group     string      `json:"group,omitempty"`
 	Launch    *LaunchSpec `json:"launch,omitempty"`
 	AutoStart bool        `json:"auto_start,omitempty"`
 }
@@ -68,6 +69,7 @@ type SessionInfo struct {
 	ID        string    `json:"id"`
 	Name      string    `json:"name"`
 	Tool      string    `json:"tool"`
+	Group     string    `json:"group,omitempty"`
 	Dir       string    `json:"dir"`
 	State     string    `json:"state"`
 	PID       uint32    `json:"pid,omitempty"`
@@ -80,26 +82,29 @@ type SessionInfo struct {
 }
 
 type Response struct {
-	OK          bool          `json:"ok"`
-	Error       string        `json:"error,omitempty"`
-	PID         uint32        `json:"pid"`
-	HostPID     int           `json:"host_pid"`
-	Running     bool          `json:"running"`
-	ExitCode    *uint32       `json:"exit_code,omitempty"`
-	Cols        int           `json:"cols"`
-	Rows        int           `json:"rows"`
-	StartOffset uint64        `json:"start_offset"`
-	EndOffset   uint64        `json:"end_offset"`
-	HeadOffset  uint64        `json:"head_offset"`
-	Truncated   bool          `json:"truncated,omitempty"`
-	Output      []byte        `json:"output,omitempty"`
-	Screen      string        `json:"screen,omitempty"`
-	Render      string        `json:"render,omitempty"`
-	CursorX     int           `json:"cursor_x"`
-	CursorY     int           `json:"cursor_y"`
-	SessionID   string        `json:"session_id,omitempty"`
-	RunID       string        `json:"run_id,omitempty"`
-	Sessions    []SessionInfo `json:"sessions,omitempty"`
+	OK              bool          `json:"ok"`
+	Error           string        `json:"error,omitempty"`
+	PID             uint32        `json:"pid"`
+	HostPID         int           `json:"host_pid"`
+	Running         bool          `json:"running"`
+	ExitCode        *uint32       `json:"exit_code,omitempty"`
+	Cols            int           `json:"cols"`
+	Rows            int           `json:"rows"`
+	StartOffset     uint64        `json:"start_offset"`
+	EndOffset       uint64        `json:"end_offset"`
+	HeadOffset      uint64        `json:"head_offset"`
+	Truncated       bool          `json:"truncated,omitempty"`
+	Output          []byte        `json:"output,omitempty"`
+	Screen          string        `json:"screen,omitempty"`
+	Render          string        `json:"render,omitempty"`
+	CursorX         int           `json:"cursor_x"`
+	CursorY         int           `json:"cursor_y"`
+	SessionID       string        `json:"session_id,omitempty"`
+	RunID           string        `json:"run_id,omitempty"`
+	Sessions        []SessionInfo `json:"sessions,omitempty"`
+	ManagerStateDir string        `json:"manager_state_dir,omitempty"`
+	ManagerVersion  string        `json:"manager_version,omitempty"`
+	ProtocolVersion int           `json:"protocol_version,omitempty"`
 }
 
 // Call performs one request; the caller retains ownership of the connection.

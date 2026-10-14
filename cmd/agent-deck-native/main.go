@@ -16,7 +16,7 @@ import (
 	"github.com/asheshgoplani/agent-deck/internal/winipc"
 )
 
-const version = "0.2.0+matrix.prototype"
+const version = "0.3.0+matrix.prototype"
 
 func main() {
 	if err := run(os.Args[1:], os.Stdout, os.Stderr); err != nil {
