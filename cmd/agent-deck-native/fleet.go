@@ -314,7 +314,12 @@ func (s *nativeService) AttachCommand(info terminalhost.SessionInfo) (*exec.Cmd,
 	if err != nil {
 		return nil, err
 	}
-	return exec.Command(exe, "attach", "--pipe", s.pipe, "--session", info.ID, "--run-id", info.RunID), nil
+	command := exec.Command(exe, "attach", "--pipe", s.pipe, "--session", info.ID, "--run-id", info.RunID)
+	// matrix/hardened: Bubble Tea's cursor-aware output is a writer wrapper.
+	// The attach child must inherit real console files rather than exec pipes,
+	// so terminal detection and raw input remain available after UI release.
+	command.Stdin, command.Stdout, command.Stderr = os.Stdin, os.Stdout, os.Stderr
+	return command, nil
 }
 func oneSession(response terminalhost.Response) (terminalhost.SessionInfo, error) {
 	if len(response.Sessions) != 1 {

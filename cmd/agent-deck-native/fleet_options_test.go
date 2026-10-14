@@ -182,6 +182,9 @@ func TestUIAttachCommandBindsExactSessionAndRun(t *testing.T) {
 	if !reflect.DeepEqual(command.Args[1:], want) {
 		t.Fatalf("attach lost selected runtime identity: %q", command.Args)
 	}
+	if command.Stdin != os.Stdin || command.Stdout != os.Stdout || command.Stderr != os.Stderr {
+		t.Fatal("attach must inherit console files even when the UI output is wrapped")
+	}
 	if _, err := service.AttachCommand(terminalhost.SessionInfo{ID: info.ID}); err == nil {
 		t.Fatal("attach accepted an unstarted descriptor")
 	}

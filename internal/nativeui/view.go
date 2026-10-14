@@ -62,8 +62,16 @@ func groupLabel(group string) string {
 }
 
 func (m *Model) View() string {
+	view, frame := m.viewFrame()
+	if !m.cursorFrames {
+		return view
+	}
+	return nativeCursorFrameView(view, frame)
+}
+
+func (m *Model) viewFrame() (string, cursorFrame) {
 	if m.quitting {
-		return ""
+		return "", cursorFrame{width: m.width, height: m.height, rows: 1}
 	}
 	var lines []string
 	switch m.mode {
@@ -79,10 +87,18 @@ func (m *Model) View() string {
 	if len(lines) > m.height {
 		lines = lines[:m.height]
 	}
-	for i := range lines {
-		lines[i] = clipped(lines[i], m.width)
+	lines, anchor := clipCursorLines(lines, m.width, m.height)
+	return strings.Join(lines, "\n"), cursorFrame{anchor: anchor, width: m.width, height: m.height, rows: len(lines)}
+}
+
+func (m *Model) searchPrefix() string {
+	group := "全部分组"
+	if !m.allGroups {
+		group = groupLabel(m.filterGroup)
 	}
-	return strings.Join(lines, "\n")
+	// Keep some editable space when a long group name fills the filter line.
+	group = clipped(group, max(1, m.width-ansi.StringWidth("分组： · 搜索：")-2))
+	return "分组：" + group + " · 搜索："
 }
 
 func (m *Model) listLines() []string {
@@ -95,17 +111,13 @@ func (m *Model) listLines() []string {
 	if selected, ok := m.selected(); ok && selected.Tool == "codex" && (selected.State == "stopped" || selected.State == "exited") {
 		lifetime = "Codex：Enter 新对话 · h 选择历史 · q 退出列表"
 	}
-	group := "全部分组"
-	if !m.allGroups {
-		group = groupLabel(m.filterGroup)
-	}
-	filter := "分组：" + group + " · 搜索：" + plain(m.search.Value())
+	filter := m.searchPrefix() + plain(m.search.Value())
 	if m.searching {
 		// matrix/hardened: field padding must not push active keyboard hints
 		// beyond the terminal edge; search consumes list shortcuts as text.
 		toolbar = "Enter 保留 · Esc 清除 · Ctrl+C 退出"
 		footer = toolbar + "（会话继续运行）"
-		filter = "分组：" + group + " · 搜索：" + m.search.View()
+		filter = m.searchPrefix() + cursorInputView(m.search)
 		lifetime = "会话内 Ctrl+Q 返回列表 · 会话继续运行"
 	}
 	// matrix/hardened: the launcher's project stays visible before first create.
@@ -189,7 +201,7 @@ func (m *Model) formLines() []string {
 		title = "修改会话名称"
 	}
 	if m.mode == moveMode {
-		return formViewport([]string{"移动会话分组", plain(m.target.Name) + " · " + stateLabel(m.target.State), "› 分组：" + m.group.View(), "留空使用默认分组；当前进程继续运行。", plain(m.notice), "Enter 保存 · Esc 取消"}, 2, m.height)
+		return formViewport([]string{"移动会话分组", plain(m.target.Name) + " · " + stateLabel(m.target.State), "› 分组：" + cursorInputView(m.group), "留空使用默认分组；当前进程继续运行。", plain(m.notice), "Enter 保存 · Esc 取消"}, 2, m.height)
 	}
 	namePrefix, dirPrefix, toolPrefix, groupPrefix := "  ", "  ", "  ", "  "
 	switch m.focus {
@@ -202,7 +214,7 @@ func (m *Model) formLines() []string {
 	case 3:
 		groupPrefix = "› "
 	}
-	lines := []string{title, namePrefix + "名称：" + m.name.View()}
+	lines := []string{title, namePrefix + "名称：" + cursorInputView(m.name)}
 	if m.mode == createMode {
 		choices := []string{"Shell", "Codex", "PowerShell"}
 		for i, tool := range [...]string{"shell", "codex", "powershell"} {
@@ -210,7 +222,7 @@ func (m *Model) formLines() []string {
 				choices[i] = "[" + choices[i] + "]"
 			}
 		}
-		lines = append(lines, dirPrefix+"目录："+m.dir.View(), toolPrefix+"工具："+strings.Join(choices, "   "), groupPrefix+"分组："+m.group.View()+createGroupHint)
+		lines = append(lines, dirPrefix+"目录："+cursorInputView(m.dir), toolPrefix+"工具："+strings.Join(choices, "   "), groupPrefix+"分组："+cursorInputView(m.group)+createGroupHint)
 	}
 	footer := "Enter 保存 · Esc 取消"
 	if m.mode == createMode {
