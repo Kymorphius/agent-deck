@@ -7,7 +7,22 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/sysctl.h>
 #include "native_darwin.h"
+
+// matrix/hardened: proc_pidinfo(PROC_PIDTBSDINFO) denies access to a root-owned
+// login process in an ordinary terminal's ancestry. sysctl exposes the parent
+// identity without requesting its protected BSD process details.
+int deck_parent_pid(int pid) {
+    if (pid <= 0) return 0;
+    int mib[] = { CTL_KERN, KERN_PROC, KERN_PROC_PID, pid };
+    struct kinfo_proc info = {0};
+    size_t size = sizeof(info);
+    if (sysctl(mib, 4, &info, &size, NULL, 0) != 0 || size != sizeof(info)) {
+        return 0;
+    }
+    return info.kp_eproc.e_ppid;
+}
 
 int deck_terminal_owner(void) {
     pid_t pid = getppid();
@@ -17,12 +32,11 @@ int deck_terminal_owner(void) {
             strstr(path, ".app/Contents/MacOS/")) {
             return pid;
         }
-        struct proc_bsdinfo info;
-        if (proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, sizeof(info)) != sizeof(info) ||
-            info.pbi_ppid == pid) {
+        pid_t parent = deck_parent_pid(pid);
+        if (parent <= 0 || parent == pid) {
             break;
         }
-        pid = info.pbi_ppid;
+        pid = parent;
     }
     return 0;
 }

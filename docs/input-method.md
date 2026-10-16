@@ -28,7 +28,7 @@ agent-deck config set ui.auto_input_method false
 
 ## 支持范围与验证
 
-需要启用 CGO 的 macOS 构建、可以确认父进程所属的原生终端应用，以及终端焦点报告。Teft/iTerm2 这一类原生终端可识别所属应用；后台标签页须等待焦点事件或实际按键/点击才取得控制权。通过 SSH 启动的 TUI、无原生终端祖先进程的 TUI、无界面 Web 服务、Linux 以及禁用 CGO 的构建不会控制 Mac 桌面的输入源。
+需要启用 CGO 的 macOS 构建、可以确认父进程所属的原生终端应用，以及终端焦点报告。Teft/iTerm2 这一类原生终端可识别所属应用。启动/重载时按所属终端应用的前台状态初始化，随后按终端焦点报告跟踪；收到失焦报告后，后台刷新和退出不切换输入源。通过 SSH 启动的 TUI、无原生终端祖先进程的 TUI、无界面 Web 服务、Linux 以及禁用 CGO 的构建不会控制 Mac 桌面的输入源。
 
 常规测试使用替身，不改变真实输入源：
 
@@ -45,3 +45,5 @@ scripts/run-isolated.py go test ./internal/inputmethod -run '^TestInputMethodNat
 ```
 
 最终交互验收：鼠须管中文状态进入列表，检查 `j/k` 不弹拼音候选；按 `/` 搜索中文；Esc 返回列表，再打开重命名和消息输入；进入 AI 会话后正常输入中文；切换窗口和退出列表时检查输入法状态。
+
+`matrix.74` 修复普通终端经过 root 所有的 `login` 进程时归属识别失败，以及 Teft 重载不发送首次焦点事件时一直等待的问题。升级前仍在运行的旧版可能在保存配置时丢弃新增字段，升级后应读回 `agent-deck config get ui.auto_input_method` 确认开启。

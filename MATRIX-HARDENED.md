@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.73`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.74`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -662,3 +662,11 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 - **matrix/hardened:** 原生切换核对所属终端的前台应用及终端标签页焦点；SSH、后台 Web 和不支持的平台不取得桌面控制权。手动选择的输入源优先，失败保留恢复机会，正常/错误/信号退出共用清理入口。
 - 改动集中在 `internal/inputmethod/`、`internal/ui/matrix_input_method.go`；Home 更新后同步模式，CLI 仅在交互启动时配置控制器；配置入口支持 `config get/set/schema`。
 - 验证：隔离的模式/焦点和输入源归属测试；真实候选窗口体验需按 [输入法适配说明](docs/input-method.md) 的前台交互步骤验收。
+
+## 62. 真实终端中的输入法归属与启动焦点
+
+`1.16.26+matrix.74` 修复列表仍触发鼠须管的两个原因。
+
+- **matrix/hardened:** 使用 `sysctl(KERN_PROC_PID)` 读取父进程身份，保留终端应用路径和前台应用核对；不再因普通终端链中的 root `login` 拒绝 `PROC_PIDTBSDINFO` 就放弃识别。
+- **matrix/hardened:** 终端可能只报告焦点变化而不报告初始状态；交互启动先按已聚焦初始化，由原生前台应用检查约束实际切换，随后失焦报告仍撤销输入法控制。
+- 验证：以 `ps` 对照完整真实父进程链，覆盖其他用户所有的祖先进程；配置启动无首次 FocusMsg 的回归测试，以及既有模式/失焦/恢复 race 测试。实际列表需核对重载后为 ABC、搜索恢复鼠须管、Esc 回列表再切 ABC。

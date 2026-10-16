@@ -4,6 +4,7 @@ package ui
 import (
 	"testing"
 
+	"github.com/asheshgoplani/agent-deck/internal/session"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -129,5 +130,35 @@ func TestInputMethodFormFields(t *testing.T) {
 	h.groupDialog.focusIndex = 0
 	if h.inputMethodNavigation() {
 		t.Fatal("group name was treated as navigation")
+	}
+}
+
+func TestInputMethodConfiguredStartupWithoutFocusReport(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("HOME", root)
+	t.Setenv("XDG_CONFIG_HOME", root)
+	session.ClearUserConfigCache()
+	t.Cleanup(session.ClearUserConfigCache)
+	if err := session.SaveUserConfig(&session.UserConfig{UI: session.UISettings{AutoInputMethod: true}}); err != nil {
+		t.Fatal(err)
+	}
+	f := &fakeInputMethod{}
+	previous := createInputMethodController
+	createInputMethodController = func() inputMethodController { return f }
+	t.Cleanup(func() { createInputMethodController = previous })
+	h := &Home{}
+	if !h.ConfigureInputMethod() {
+		t.Fatal("explicitly enabled input method was not configured")
+	}
+	// Teft sends no initial FocusMsg when the foreground TUI re-execs.
+	h.syncInputMethod(tea.WindowSizeMsg{})
+	if len(f.modes) != 1 || !f.modes[0] {
+		t.Fatal("startup waited for a focus report before bypassing the IME")
+	}
+	h.syncInputMethod(tea.BlurMsg{})
+	h.notesEditing = true
+	h.syncInputMethod(tea.WindowSizeMsg{})
+	if len(f.modes) != 1 {
+		t.Fatal("startup focus assumption overrode an actual blur report")
 	}
 }

@@ -14,19 +14,30 @@ type inputMethodController interface {
 	Blur()
 }
 
+// matrix/hardened: injectable without touching the desktop in startup tests.
+var createInputMethodController = func() inputMethodController {
+	c := inputmethod.New()
+	if c == nil {
+		return nil
+	}
+	return c
+}
+
 // ConfigureInputMethod is called only on the interactive CLI startup path.
-// Focus reporting must confirm that this terminal tab has keyboard focus before
-// any native switch; background tabs and headless web processes do not own it.
+// Terminals report focus changes, not necessarily their initial focus state.
+// Start with keyboard focus; the native backend still requires the owning app
+// to be foreground, and subsequent terminal blur reports revoke this focus.
 func (h *Home) ConfigureInputMethod() bool {
 	config, err := session.LoadUserConfig()
 	if err != nil || !config.UI.AutoInputMethod {
 		return false
 	}
-	controller := inputmethod.New()
+	controller := createInputMethodController()
 	if controller == nil {
 		return false
 	}
 	h.inputMethod = controller
+	h.inputMethodFocused = true
 	return true
 }
 
