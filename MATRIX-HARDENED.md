@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.79`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.80`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -139,8 +139,8 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 - **只看交给 AI 的任务**：`任务｜分类` 是单值的场景分类（上班、生活），所以另有独立属性 `任务｜执行分类` 表示由谁来做，两者互不影响。看板默认只显示执行分类为 `AI`（取值 AI、我、世界；默认值可配置）或已关联 agent-deck 会话的任务；`a` 切到全部任务，`e` 把选中任务归入/移出（`task.update` 带原值基线）。CLI：`tasks list` 同样默认过滤，`--all` 显示全部，`--done` 显示已完成栏；`tasks mark|unmark <task>`。
 - **一次性初始化**：`agent-deck tasks init --yes`（`init-links` 是别名），依次建 `任务｜执行分类` 和 `任务｜agent-deck 会话关联` 两个属性（改 World Store 结构，所以必须显式 `--yes`；每个都取空间独占租约）。没建执行分类时不能归入看板，没建关联属性时不能关联会话。
 - **踩过的坑（2026-10-10）**：独立服务的引擎未实现 `ObjectTypeRelationAdd`（协议目录却标可用），搜索索引也滞后于写入。第一次建关联属性时属性建出但没附加，回执未确认，把空间独占租约固定成 uncertain，挡住该空间所有写入约 5 分钟。处理：只读核对后按既有流程把保护记录移到 `~/Library/Application Support/World Store/write-reconciliation/`；personal-panel 改为写任务类型的 `recommendedRelations` 附加、用 `ObjectShow` 读回。以后再遇到 `UNCONFIRMED`，先只读核对（`native.script` 的 inspect 模式），不要重试。
-- **读取**：用 `snapshot`（任务加执行记录）。栏由任务状态和执行记录一起决定：已完成、已取消优先；有“进行中”的执行记录就在进行中栏，有“暂停”的就在暂停栏；否则按任务状态（待办/待处理→待办，进行中，暂停）；其他状态（已调整、周期进行中等）放待核对栏。日期都是 Unix 秒。
-- **状态改动跟随 World Store 流程**（和它自己的终端界面同一套按键）：`s` 开始做（新建一条进行中的执行记录，任务状态本身不变；每次确认生成一个固定的 operationId），`p` 暂停、`c` 继续（作用在该任务的执行记录上），`x` 完成（记完成时间，并结束它的执行记录）。改回待办、取消不在看板里做。同一时间只允许一条执行在进行中，看板会先拦下。World Store 要求先核对红线时返回 `REDLINE_REVIEW_REQUIRED`，看板提示到 World Store 里开始；agent-deck 不做红线核对。
+- **读取**：用 `snapshot`（任务、执行记录、卡点）。自 `matrix.80` 起分七列，与 World Store TUI 看板、Multica 一致（见第 68 节）：待规划、待办（含待处理）、进行中（含暂停、周期进行中及有未结束执行的任务，暂停的卡片标 `‖`）、待验收、卡住（由未解除卡点推出）、完成、待核（未知状态，只在有任务时显示）；已取消不显示。日期都是 Unix 秒。
+- **状态改动跟随 World Store 流程**（和它自己的终端界面同一套按键）：`s` 开始做（新建一条进行中的执行记录，任务状态本身不变；每次确认生成一个固定的 operationId），`p` 暂停、`c` 继续（作用在该任务的执行记录上），`x` 完成（记完成时间，并结束它的执行记录）；验收相关的 `v` / `x` / `b` 见第 68 节。改回待规划、取消不在看板里做。同一时间只允许一条执行在进行中，看板会先拦下。World Store 要求先核对红线时返回 `REDLINE_REVIEW_REQUIRED`，看板提示到 World Store 里开始；agent-deck 不做红线核对。
 - **其它按键**：`alt+t` 打开（打开时光标所在的会话就是“当前会话”），`h/l j/k` 移动，`L/U` 关联/解除当前会话，`n` 在当前会话的目录和分组里新建 claude 会话、把任务作为首条消息并自动关联，`Enter` 跳到已关联会话，`/` 筛选，`r` 重新读取。CLI：`agent-deck tasks [list|show|start|pause|resume|done|link|unlink|launch|init-links] --help`。
 - **写入安全**：每次写都带读取时的 owner 和基线（行动带预期状态，关联带该属性读到的原值），不符就不写。`UNCONFIRMED` / `WRITE_UNCERTAIN`（超时、中断、回读不符）表示可能已写入，看板锁住所有写操作直到重新读取，绝不自动重试；进程在写入途中被杀也按“可能已写入”处理。`BUSY` 表示同一记录正在别处保存，什么也没写。导入对象只读。
 - **改动地图**：`internal/worldstore/`（客户端、分栏、launch）、`internal/ui/kanban_panel.go`、`internal/ui/kanban_home.go`、`cmd/agent-deck/tasks_cmd.go`、`internal/session/userconfig_worldstore.go`（新文件）；对上游文件只加了钩子行：`internal/session/userconfig.go`（`WorldStore` 字段，必须在结构体里，否则 SaveUserConfig 重写 config.toml 时会丢掉这一节）、`internal/ui/home.go`（字段、SetSize、按键路由、View、hasModalVisible、热键分支、updateInner 开头的消息分发，共 7 处）、`internal/ui/hotkeys.go`（`task_board` = `alt+t`）、`cmd/agent-deck/main.go`（`tasks` 分发和 commandRegistry）。合并上游时这些钩子行都带 `matrix/hardened` 注释。
@@ -710,3 +710,16 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 - **matrix/hardened:** 默认裸命令 `codex` 仅在 PATH 返回 `exec.ErrNotFound` 时，尝试可执行的 `~/.local/bin/codex`。PATH 中的版本、显式路径和自定义 wrapper 保持优先；`exec.ErrDot` 等拒绝不被掩盖，不修改进程 PATH 或用户启动配置。
 - 回退命中后继续使用原有真实可执行文件缓存键，精简 PATH 的请求能够复用此前成功的模型探测缓存。二进制仍缺失时记录具体原因。
 - 验证覆盖精简 PATH 下实际探测、跨 PATH 复用缓存、PATH/自定义命令优先、缺失/不可执行/目录/断链回退拒绝以及 ErrDot；并在目标端保留原 SSH PATH、使用隔离空缓存验证真实自动探测。
+
+## 68. World Store 看板七列与验收
+
+`1.16.26+matrix.80` 把 World Store 任务看板（第 8 节）改成三方统一的七列，并加上验收动作。设计见 personal-panel 仓库的 `docs/specs/2026-10-16-three-way-board.md`（P2）。
+
+- **matrix/hardened:** 列：待规划、待办、进行中、待验收、卡住、完成、待核。原来的「暂停」栏并入进行中，卡片前标 `‖`。卡住由快照里未解除的卡点（`卡点｜卡住对象`）推出，不改任务状态；快照没给出卡点时标题提示“blockers not read (卡住 unknown)”，不把任务当成没卡住。打开看板时光标优先落在进行中，其次待验收。
+- **`v` 交付验收**：有未结束的执行时先 `finish` 结束本轮，再用 `task.update` 把状态改为 `待验收`（带原状态基线）。两次写入不是事务，第二步失败时本轮已结束，重新读取即可看到。
+- **`x` 验收通过**：待验收卡片上的 `x` 即完成任务，确认文字为 “Accept …”。
+- **`b` 退回**：只对待验收且没有未结束执行的任务。确认行可以输入原因（此时 `q` 是文字，不是取消；Esc 取消），确认后状态改回 `待办`；原因非空且任务在本机有关联会话时，用 `agent-deck session send --queue --message-file -` 排队发进这些会话（正文走 stdin，不进 argv）。状态已改但原因没排上队时报错并说明，不重试。
+- **CLI**：`tasks review|accept|reject <task>`；`accept` 等同 `done`；CLI 的 `reject` 只改状态，不发原因。
+- **World Store 侧**：`task.update` 可直接写 `任务｜状态`，但只接受 `待规划`、`待办`、`待验收`、`已取消`；`worldstore.Client.SetStatus` 在本地先拒绝其他值、已关闭任务和有未结束执行的任务。
+- 验证：`internal/worldstore` 与 `internal/ui -run Kanban` 全部通过；`internal/ui`、`cmd/agent-deck` 全量里的失败均与基线相同或单独复跑通过（满负载偶发）；真实空间只读 `tasks list --all` 的七列分布与 World Store TUI 看板一致。真实空间未做写入。
+

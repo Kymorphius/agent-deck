@@ -102,7 +102,7 @@ func selectTask(t *testing.T, p *KanbanPanel, id string) {
 func TestKanbanBoardRendersColumnsWithinTerminal(t *testing.T) {
 	p := openKanban(t, kanbanEntry(), nil)
 	view := p.View()
-	for _, want := range []string{"进行中 (1)", "待办 (2)", "暂停 (1)", "修复登录", "写周报", "login-fix (waiting)", "执行进行中"} {
+	for _, want := range []string{"进行中 (2)", "待办 (2)", "待验收 (0)", "卡住 (0)", "‖ 整理行李", "修复登录", "写周报", "login-fix (waiting)", "执行进行中"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("view missing %q:\n%s", want, view)
 		}
@@ -117,7 +117,7 @@ func TestKanbanBoardRendersColumnsWithinTerminal(t *testing.T) {
 		}
 	}
 	p.SetSize(60, 20)
-	if v := p.View(); !strings.Contains(v, "[进行中 1]") || strings.Count(v, "\n") != 19 {
+	if v := p.View(); !strings.Contains(v, "[进行中 2]") || strings.Count(v, "\n") != 19 {
 		t.Fatalf("narrow view:\n%s", v)
 	}
 }
@@ -371,5 +371,64 @@ func TestKanbanMarkNeedsTheField(t *testing.T) {
 	p.Update(kanbanKey("e"))
 	if p.confirm != nil || !strings.Contains(p.notice, "tasks init --yes") {
 		t.Fatalf("mark without the field allowed: %q", p.notice)
+	}
+}
+
+// matrix/hardened: v hands over for review, x accepts, b sends back with a
+// reason that is queued for the linked session.
+func TestKanbanReviewAcceptAndSendBack(t *testing.T) {
+	f := kanbanEntry()
+	review := strings.Replace(kanbanSnapshot, `"name":"修复登录","fields":{"任务｜状态":"待办"`, `"name":"修复登录","fields":{"任务｜状态":"待验收"`, 1)
+	review = strings.Replace(review, `"执行｜状态":"进行中"`, `"执行｜状态":"已完成"`, 1)
+	f.answer = func(req map[string]any) string {
+		if req["op"] == "snapshot" {
+			return review
+		}
+		return `{"ok":true,"result":{"verified":true}}`
+	}
+	p := openKanban(t, f, nil)
+	var sent []string
+	p.env.send = func(_ context.Context, id, text string) error { sent = append(sent, id+"|"+text); return nil }
+	if col := p.cols[p.col]; col.Lane != "doing" {
+		t.Fatalf("the board opens on 进行中 when it has tasks, got %s", col.Lane)
+	}
+
+	selectTask(t, p, "t2")
+	if p.cols[p.col].Lane != "review" {
+		t.Fatalf("待验收 task in lane %s", p.cols[p.col].Lane)
+	}
+	p.Update(kanbanKey("x"))
+	if p.confirm == nil || !strings.Contains(p.confirmText(), "Accept") {
+		t.Fatalf("x on a review card accepts: %+v", p.confirm)
+	}
+	p.Update(kanbanKey("esc"))
+
+	p.Update(kanbanKey("b"))
+	for _, r := range "缺 q 测试" {
+		p.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	if p.confirm == nil || p.confirm.reason != "缺 q 测试" {
+		t.Fatalf("q must type into the reason, not cancel: %+v", p.confirm)
+	}
+	_, cmd := p.Update(kanbanKey("enter"))
+	written := cmd().(kanbanWrittenMsg)
+	if written.err != nil || f.last()["op"] != "task.update" || f.last()["patch"].(map[string]any)["任务｜状态"] != "待办" {
+		t.Fatalf("send back: %+v %v", written, f.last())
+	}
+	if len(sent) != 1 || !strings.HasPrefix(sent[0], "sess-1|验收未通过") || !strings.Contains(sent[0], "缺 q 测试") {
+		t.Fatalf("reason must be queued for the linked session: %v", sent)
+	}
+	p.handleWritten(written)
+
+	p.loading = false
+	selectTask(t, p, "t1")
+	p.Update(kanbanKey("b"))
+	if p.confirm != nil {
+		t.Fatal("only 待验收 tasks can be sent back")
+	}
+	p.Update(kanbanKey("v"))
+	_, cmd = p.Update(kanbanKey("enter"))
+	if w := cmd().(kanbanWrittenMsg); w.err != nil || f.last()["patch"].(map[string]any)["任务｜状态"] != "待验收" {
+		t.Fatalf("v: %+v %v", w, f.last())
 	}
 }

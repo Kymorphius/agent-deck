@@ -38,11 +38,15 @@ type kanbanEnv struct {
 	profile string
 	// execCategory is the 任务｜执行分类 value the default view shows.
 	execCategory string
+	// send queues a message for a session; nil means `agent-deck session send`.
+	send func(ctx context.Context, sessionID, text string) error
 }
 
 type kanbanConfirm struct {
-	kind string // start, pause, resume, done, link, unlink, launch
+	kind string // start, pause, resume, done, link, unlink, launch, review, reject
 	task worldstore.Task
+	// reason is the text typed for a rejected review (matrix/hardened).
+	reason string
 	// operationID is fixed when the confirmation opens, so a start the user
 	// confirms is one World Store operation however it ends.
 	operationID string
@@ -224,10 +228,18 @@ func (p *KanbanPanel) rebuild(selectedID string) {
 		}
 	}
 	// A filter can empty the current column; land on the first one with tasks.
-	if len(p.cols[p.col].Tasks) == 0 {
-		for c := range p.cols {
-			if len(p.cols[c].Tasks) > 0 {
-				p.col = c
+	// matrix/hardened: with nothing selected yet, start where the agents are:
+	// 进行中, then 待验收, before the leftmost lanes.
+	if selectedID == "" || len(p.cols[p.col].Tasks) == 0 {
+		for _, lane := range []string{"doing", "review", ""} {
+			found := false
+			for c := range p.cols {
+				if len(p.cols[c].Tasks) > 0 && (lane == "" || p.cols[c].Lane == lane) {
+					p.col, found = c, true
+					break
+				}
+			}
+			if found {
 				break
 			}
 		}
@@ -264,6 +276,28 @@ func (p *KanbanPanel) Update(msg tea.Msg) (*KanbanPanel, tea.Cmd) {
 	k := key.String()
 
 	if p.confirm != nil {
+		// matrix/hardened: a rejection asks for its reason; q types into it.
+		if p.confirm.kind == "reject" {
+			switch {
+			case k == "esc":
+				p.confirm, p.notice = nil, "Cancelled; nothing written."
+			case k == "enter":
+				return p, p.execute()
+			case k == "backspace":
+				if r := []rune(p.confirm.reason); len(r) > 0 {
+					p.confirm.reason = string(r[:len(r)-1])
+				}
+			case key.Type == tea.KeyRunes || key.Type == tea.KeySpace:
+				text := string(key.Runes)
+				if key.Type == tea.KeySpace {
+					text = " "
+				}
+				if len([]rune(p.confirm.reason)) < 400 {
+					p.confirm.reason += kanbanClean(text)
+				}
+			}
+			return p, nil
+		}
 		switch k {
 		case "esc", "q":
 			p.confirm, p.notice = nil, "Cancelled; nothing written."
@@ -334,7 +368,7 @@ func (p *KanbanPanel) Update(msg tea.Msg) (*KanbanPanel, tea.Cmd) {
 		selected := p.selectedID()
 		p.showAll = !p.showAll
 		p.rebuild(selected)
-	case "s", "p", "c", "x", "e", "L", "U", "n":
+	case "s", "p", "c", "x", "e", "L", "U", "n", "v", "b":
 		p.startConfirm(k)
 	case "enter":
 		return p, p.jump()
@@ -428,6 +462,22 @@ func (p *KanbanPanel) startConfirm(k string) {
 			return
 		}
 		c.kind = "done"
+	case "v":
+		switch {
+		case closed || t.Status == worldstore.StatusCycle:
+			fail("Only open, non-recurring tasks go to review.")
+			return
+		case t.Status == worldstore.StatusReview && t.Execution == nil:
+			fail("Task is already waiting for review.")
+			return
+		}
+		c.kind = "review"
+	case "b":
+		if t.Status != worldstore.StatusReview || t.Execution != nil {
+			fail("Only tasks waiting for review (待验收) can be sent back.")
+			return
+		}
+		c.kind = "reject"
 	case "L", "U":
 		if !p.board.LinksReady {
 			fail("agent-deck link field not set up in World Store: run `agent-deck tasks init --yes` once.")
@@ -479,7 +529,21 @@ func (p *KanbanPanel) confirmText() string {
 	case "resume":
 		return fmt.Sprintf("Resume the paused execution of %q", name)
 	case "done":
+		if c.task.Status == worldstore.StatusReview {
+			return fmt.Sprintf("Accept %q: mark it complete (records completion time)", name)
+		}
 		return fmt.Sprintf("Mark %q complete (records completion time, closes its executions)", name)
+	case "review":
+		if c.task.Execution != nil {
+			return fmt.Sprintf("Hand %q over for review: finish its execution round, then set 待验收", name)
+		}
+		return fmt.Sprintf("Hand %q over for review (set 待验收)", name)
+	case "reject":
+		to := "linked sessions in this deck"
+		if len(p.liveLinks(c.task)) == 0 {
+			to = "no linked session here"
+		}
+		return fmt.Sprintf("Send %q back to 待办 · reason (to %s): %s▏", name, to, c.reason)
 	case "link":
 		return fmt.Sprintf("Link session %q to %q", p.context.Title, name)
 	case "unlink":
@@ -503,7 +567,7 @@ func (p *KanbanPanel) execute() tea.Cmd {
 	}
 	p.busy, p.err = true, ""
 	// Captured here: the closure runs off the UI goroutine and must not touch p.
-	env, owner, task, linksReady := *p.env, p.board.Owner, c.task, p.board.LinksReady
+	env, owner, task, linksReady, sessions := *p.env, p.board.Owner, c.task, p.board.LinksReady, p.liveLinks(c.task)
 	var ctxSession kanbanSession
 	if p.context != nil {
 		ctxSession = *p.context
@@ -530,6 +594,31 @@ func (p *KanbanPanel) execute() tea.Cmd {
 			return done(env.client.Resume(bg, owner, task), "Resumed "+name)
 		case "done":
 			return done(env.client.Complete(bg, owner, task, ""), name+" → "+worldstore.StatusDone)
+		case "review":
+			return done(env.client.SubmitForReview(bg, owner, task), name+" → "+worldstore.StatusReview)
+		case "reject":
+			if err := env.client.SetStatus(bg, owner, task, worldstore.StatusTodo); err != nil {
+				return kanbanWrittenMsg{err: err}
+			}
+			reason := strings.TrimSpace(c.reason)
+			if reason == "" || len(sessions) == 0 {
+				return kanbanWrittenMsg{notice: name + " sent back to " + worldstore.StatusTodo}
+			}
+			ctx, cancel := context.WithTimeout(bg, time.Minute)
+			defer cancel()
+			text := "验收未通过，请继续修改：" + name + "\n原因：" + reason
+			send := env.send
+			if send == nil {
+				send = func(ctx context.Context, id, text string) error {
+					return worldstore.SendToSession(ctx, env.exe, env.profile, id, text)
+				}
+			}
+			for _, id := range sessions {
+				if err := send(ctx, id, text); err != nil {
+					return kanbanWrittenMsg{err: fmt.Errorf("sent back to %s, but the reason was not queued: %w", worldstore.StatusTodo, err)}
+				}
+			}
+			return kanbanWrittenMsg{notice: fmt.Sprintf("%s sent back; reason queued for %d session(s)", name, len(sessions))}
 		case "link":
 			if _, err := env.client.Link(bg, owner, task, env.device, ctxSession.ID); err != nil {
 				return kanbanWrittenMsg{err: err}
@@ -564,6 +653,23 @@ func (p *KanbanPanel) execute() tea.Cmd {
 		}
 		return kanbanWrittenMsg{}
 	}
+}
+
+// liveLinks are the task's linked sessions that exist in this deck.
+func (p *KanbanPanel) liveLinks(t worldstore.Task) []string {
+	var ids []string
+	if p.env == nil || p.lookup == nil {
+		return nil
+	}
+	for _, l := range t.AgentDeckLinks {
+		if l.DeviceID != p.env.device {
+			continue
+		}
+		if s, ok := p.lookup(l.SessionID); ok {
+			ids = append(ids, s.ID)
+		}
+	}
+	return ids
 }
 
 // jump returns to the first linked session that exists in this deck.
@@ -675,6 +781,9 @@ func (p *KanbanPanel) View() string {
 		} else if p.env != nil {
 			head += fmt.Sprintf(" · %s (%d of %d)", p.env.execCategory, shown, len(p.board.Tasks))
 		}
+	}
+	if p.board != nil && !p.board.BlockersKnown {
+		head += " · blockers not read (卡住 unknown)"
 	}
 	if p.context != nil {
 		head += " · session: " + kanbanClean(p.context.Title)
@@ -788,7 +897,11 @@ func (p *KanbanPanel) renderColumns(inner, bodyH int) string {
 			case i < len(col.Tasks):
 				t := col.Tasks[i]
 				mark, color := p.linkMarker(t)
-				text := kanbanFit(t.Name, colW-2)
+				label := t.Name
+				if t.Execution != nil && t.Execution.Status == worldstore.ExecPaused {
+					label = "‖ " + label
+				}
+				text := kanbanFit(label, colW-2)
 				style, cursor := normal, " "
 				if c == p.col && i == p.rows[c] {
 					// The glyph keeps the cursor visible without colors.
@@ -882,8 +995,10 @@ func (p *KanbanPanel) renderFooter(inner int) string {
 	default:
 		status = ""
 	}
-	keys := "[a] All/AI  [e] On/off board  [s] Start  [p] Pause  [c] Resume  [x] Done  [L/U] Link  [n] New session  [Enter] Go to session  [/] Filter  [r] Reload  [Esc] Close"
-	if p.confirm != nil {
+	keys := "[a] All/AI  [e] On/off board  [s] Start  [p] Pause  [c] Resume  [v] To review  [x] Done/Accept  [b] Send back  [L/U] Link  [n] New session  [Enter] Go to session  [/] Filter  [r] Reload  [Esc] Close"
+	if p.confirm != nil && p.confirm.kind == "reject" {
+		keys = "Type the reason (optional)  [Enter] Send back  [Esc] Cancel"
+	} else if p.confirm != nil {
 		keys = "[Enter] Confirm  [Esc] Cancel"
 	} else if p.filterEditing {
 		keys = "[Enter] Keep filter  [Esc] Clear"
