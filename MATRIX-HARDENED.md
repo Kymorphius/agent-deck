@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.74`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.75`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -670,3 +670,13 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 - **matrix/hardened:** 使用 `sysctl(KERN_PROC_PID)` 读取父进程身份，保留终端应用路径和前台应用核对；不再因普通终端链中的 root `login` 拒绝 `PROC_PIDTBSDINFO` 就放弃识别。
 - **matrix/hardened:** 终端可能只报告焦点变化而不报告初始状态；交互启动先按已聚焦初始化，由原生前台应用检查约束实际切换，随后失焦报告仍撤销输入法控制。
 - 验证：以 `ps` 对照完整真实父进程链，覆盖其他用户所有的祖先进程；配置启动无首次 FocusMsg 的回归测试，以及既有模式/失焦/恢复 race 测试。实际列表需核对重载后为 ABC、搜索恢复鼠须管、Esc 回列表再切 ABC。
+
+## 63. Path 直接编辑与逐级目录补全
+
+`1.16.26+matrix.75` 将新建会话的 Path 焦点改为直接编辑，保留预填路径，左右移动光标和 Backspace 不再进入候选浏览或整段删除。
+
+- **matrix/hardened:** Tab 仅补全当前层目录并留在 Path，历史项目不会被普通 Tab 隐式接受；唯一目录补全加 `/`，下一次 Tab 才进入下一层。Enter 在可用路径上进入下一项，Shift+Tab 返回上一项。
+- 远程 Path 的 Tab 异步请求目标设备 `__complete-path` 只读 JSON 目录列表，使用现有 SSHRunner 的参数引用、连接和超时；不读取控制端文件系统。目标端也需安装此构建；旧版本或断连显示补全不可用，仍保留输入。
+- 远程结果按对话框实例、打开代次、输入修订、设备与当前焦点核对，防止慢响应覆盖后续输入。
+- 验证覆盖项目历史不抢占目录前缀、逐级补全、无匹配仍留在编辑器、直接编辑与重新聚焦、远程成功/失败/过期响应和既有创建流程。
+- **matrix/hardened:** 安装脚本支持交叉构建到隔离暂存目录，跳过在构建机执行异平台程序，版本及目录接口由目标机器读回验证。

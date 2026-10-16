@@ -2434,7 +2434,8 @@ func remoteVerbReadOnly(args []string) bool {
 	switch args[0] {
 	case "add":
 		return len(args) == 3 && args[1] == "--capabilities" && args[2] == "--json"
-	case "list", "ls", "accounts", "version", "status":
+	// matrix/hardened: directory listing is safe to retry on SSH channel failure.
+	case "list", "ls", "accounts", "version", "status", "__complete-path":
 		return true
 	case "group":
 		return second == "list"

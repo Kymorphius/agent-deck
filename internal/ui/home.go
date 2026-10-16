@@ -7613,6 +7613,12 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	switch msg := msg.(type) {
+	case pathDirectoryResult: // matrix/hardened: async remote Path completion.
+		if h.newDialog != nil {
+			h.newDialog.acceptDirectoryResult(msg)
+		}
+		return h, nil
+
 	case quitMsg:
 		// Execute final shutdown logic after splash delay
 		return h, h.performFinalShutdown(bool(msg))
