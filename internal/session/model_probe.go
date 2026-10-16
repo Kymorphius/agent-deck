@@ -79,11 +79,30 @@ func codexProbeBinary() string {
 			continue
 		}
 		if token := strings.Trim(field, `"'`); token != "" {
-			return token
+			return resolveCodexProbeBinary(token)
 		}
 		break
 	}
-	return "codex"
+	return resolveCodexProbeBinary("codex")
+}
+
+// matrix/hardened: SSH often omits ~/.local/bin from PATH. Only the default
+// bare Codex command may fall back there; keep PATH and explicit commands first.
+func resolveCodexProbeBinary(binary string) string {
+	if binary != "codex" {
+		return binary
+	}
+	if _, err := exec.LookPath(binary); !errors.Is(err, exec.ErrNotFound) {
+		return binary
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || !filepath.IsAbs(home) {
+		return binary
+	}
+	if path, err := exec.LookPath(filepath.Join(home, ".local", "bin", "codex")); err == nil {
+		return path
+	}
+	return binary
 }
 
 const (
@@ -195,6 +214,7 @@ func probedModelCatalog(kind string) *ModelProbeResult {
 	key, err := modelProbeBinaryKey(prober.binary())
 	if err != nil {
 		// Not installed: remember the miss so we do not LookPath per keystroke.
+		logging.ForComponent(logging.CompSession).Debug("model_probe_binary_missing", "tool", name, "error", err.Error())
 		modelProbeMemos[name] = &modelProbeMemo{checkedAt: now}
 		modelProbeMu.Unlock()
 		return nil

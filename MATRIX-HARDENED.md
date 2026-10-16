@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.78`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.79`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -702,3 +702,11 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 ## 66. Codex 6.1 Sol 模型候选
 
 `1.16.26+matrix.78` 将 `gpt-6.1-sol` 加入 Codex 内置模型目录，避免 CLI 模型探测不可用时，新建界面的回退列表遗漏它。探测列表仍优先，内置目录继续参与合并去重；模型字段允许直接输入完整 ID。
+
+## 67. 精简 SSH PATH 下的 Codex 模型探测
+
+`1.16.26+matrix.79` 修复远端模型探测在 SSH PATH 不含用户 bin 目录时静默回退的问题。
+
+- **matrix/hardened:** 默认裸命令 `codex` 仅在 PATH 返回 `exec.ErrNotFound` 时，尝试可执行的 `~/.local/bin/codex`。PATH 中的版本、显式路径和自定义 wrapper 保持优先；`exec.ErrDot` 等拒绝不被掩盖，不修改进程 PATH 或用户启动配置。
+- 回退命中后继续使用原有真实可执行文件缓存键，精简 PATH 的请求能够复用此前成功的模型探测缓存。二进制仍缺失时记录具体原因。
+- 验证覆盖精简 PATH 下实际探测、跨 PATH 复用缓存、PATH/自定义命令优先、缺失/不可执行/目录/断链回退拒绝以及 ErrDot；并在目标端保留原 SSH PATH、使用隔离空缓存验证真实自动探测。
