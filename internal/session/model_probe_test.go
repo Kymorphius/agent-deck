@@ -29,6 +29,7 @@ type fakeCodex struct {
 // at a temp dir and opts this test binary into probing.
 func installFakeCodex(t *testing.T, body string) *fakeCodex {
 	t.Helper()
+	t.Setenv("HOME", t.TempDir()) // matrix/hardened: never discover the real user fallback in tests.
 	dir := t.TempDir()
 	f := &fakeCodex{dir: dir, fixture: filepath.Join(dir, "models.json"), calls: filepath.Join(dir, "calls")}
 	if err := os.WriteFile(f.fixture, []byte(fakeCodexModelsJSON), 0o644); err != nil {
