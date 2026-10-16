@@ -71,6 +71,7 @@ func staticModelIDsForTool(tool string) []string {
 		}
 	case IsCodexCompatible(tool):
 		return []string{
+			"gpt-6.1-sol", // matrix/hardened: keep available when the CLI probe falls back.
 			"gpt-6-astra",
 			"gpt-6-sol",
 			"gpt-6-luna",
