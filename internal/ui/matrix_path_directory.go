@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -65,7 +66,12 @@ func (d *NewDialog) completePathDirectory() tea.Cmd {
 func (d *NewDialog) applyDirectoryMatches(matches []string, err error) {
 	d.pathCompletionStatus = ""
 	if err != nil {
-		d.pathCompletionStatus = "Directory completion unavailable (Enter to continue)"
+		reason := cellTruncate(sanitizeMatchForDisplay(err.Error()), 100, "…")
+		if errors.Is(err, context.DeadlineExceeded) {
+			reason = "remote request timed out"
+		}
+		d.pathCompletionStatus = "Directory completion unavailable: " + reason
+		uiLog.Warn("path_directory_completion_failed", "remote", d.remoteName, "error", err)
 		return
 	}
 	if len(matches) == 0 {

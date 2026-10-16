@@ -84,3 +84,13 @@ func TestMatrixPathDirectoryRemoteAndStaleResults(t *testing.T) {
 		})
 	}
 }
+
+// matrix/hardened: preserve a useful reason rather than a generic failure.
+func TestMatrixPathDirectoryErrorReason(t *testing.T) {
+	d := NewNewDialog()
+	d.Show()
+	d.applyDirectoryMatches(nil, errors.New("verb not allowed over the channel"))
+	if !strings.Contains(d.pathCompletionStatus, "verb not allowed") {
+		t.Fatal(d.pathCompletionStatus)
+	}
+}
