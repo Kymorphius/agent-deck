@@ -57,6 +57,9 @@ func (i *Instance) buildEnvSourceCommand() string {
 		if restartEnv := buildEnvExports(i.restartEnv); restartEnv != "" {
 			sources = append(sources, restartEnv)
 		}
+		if i.EnvFile != "" { // matrix/hardened: launch --env-file
+			sources = append(sources, buildSourceCmd(i.EnvFile, true))
+		}
 		if stripExpr := telegramStateDirStripExpr(i); stripExpr != "" {
 			sources = append(sources, stripExpr)
 		}
@@ -151,6 +154,13 @@ func (i *Instance) buildEnvSourceCommand() string {
 	//    so the command-line value wins for this replacement process.
 	if restartEnv := buildEnvExports(i.restartEnv); restartEnv != "" {
 		sources = append(sources, restartEnv)
+	}
+
+	// 8b. matrix/hardened: `launch --env-file`, after every configured
+	//     source so a caller-provided value wins; missing (already cleaned
+	//     up by its owner) is not an error.
+	if i.EnvFile != "" {
+		sources = append(sources, buildSourceCmd(i.EnvFile, true))
 	}
 
 	// 9. S8 (v1.7.40) — strip TELEGRAM_STATE_DIR on every non-channel-owning

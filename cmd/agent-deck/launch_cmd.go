@@ -94,6 +94,8 @@ func handleLaunchCommand(profile string, args []string, inspectFlags func(*flag.
 	// TELEGRAM_BOT_TOKEN spawns a duplicate `bun telegram` poller that
 	// races the conductor for the bot lock (Telegram 409, dropped messages).
 	inheritTelegramEnv := fs.Bool("inherit-telegram-env", false, "Keep TELEGRAM_* env vars in the child (#1133); off by default to prevent duplicate plugin pollers")
+	// matrix/hardened: a task-scoped env file sourced into the first spawn.
+	envFile := fs.String("env-file", "", "Absolute path of a shell env file (export lines) sourced into this session's first start, after every configured env source; not stored, not re-read on restart")
 	noIdentity := fs.Bool("no-identity", false, "Do not inject the agent-deck session identity block into the harness (global default: [launch] inject_identity)")
 	jsonOutput := fs.Bool("json", false, "Output as JSON")
 	quiet := fs.Bool("quiet", false, "Minimal output")
@@ -574,6 +576,14 @@ func handleLaunchCommand(profile string, args []string, inspectFlags func(*flag.
 	// #1133: explicit opt-in for inheriting the conductor's telegram env.
 	if *inheritTelegramEnv {
 		newInstance.InheritTelegramEnv = true
+	}
+
+	if *envFile != "" {
+		if err := validateLaunchEnvFile(*envFile); err != nil {
+			out.Error(err.Error(), ErrCodeInvalidOperation)
+			os.Exit(1)
+		}
+		newInstance.EnvFile = *envFile
 	}
 
 	// Per-session opt-out of harness identity injection (identity_injection.go).
@@ -1093,4 +1103,21 @@ func sendErrOrSpawnDied(sendErr error, paneGone bool, rec *session.SpawnFailureR
 		return sendErr
 	}
 	return fmt.Errorf("pane exited before delivery (reason: %s, elapsed_ms: %d); delivery did not happen", rec.Reason, rec.ElapsedMs)
+}
+
+// validateLaunchEnvFile accepts an absolute path to an existing regular file
+// that is not readable by group or others, and whose name cannot break out
+// of the double quotes it is sourced in. matrix/hardened.
+func validateLaunchEnvFile(path string) error {
+	if !filepath.IsAbs(path) || strings.ContainsAny(path, "\"$`\\\n") {
+		return fmt.Errorf("--env-file must be an absolute path without quotes, $, backticks or backslashes")
+	}
+	st, err := os.Stat(path)
+	if err != nil || !st.Mode().IsRegular() {
+		return fmt.Errorf("--env-file %s is not a readable file", path)
+	}
+	if st.Mode().Perm()&0o077 != 0 {
+		return fmt.Errorf("--env-file %s must not be readable by group or others (chmod 600)", path)
+	}
+	return nil
 }

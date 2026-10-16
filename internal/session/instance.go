@@ -469,6 +469,14 @@ type Instance struct {
 	// existing behavior is preserved when the flag is absent.
 	InheritTelegramEnv bool `json:"inherit_telegram_env,omitempty"`
 
+	// EnvFile is sourced into the first spawn after every configured env
+	// source, so its values win. matrix/hardened: lets a caller (Multica's
+	// agent-deck executor) hand a task-scoped token to the session without
+	// putting it in argv or in the persisted command. Like InheritTelegramEnv
+	// it is launch-only and not stored: a later restart does not re-read it.
+	// CLI: `--env-file /abs/path` on `agent-deck launch`.
+	EnvFile string `json:"env_file,omitempty"`
+
 	// IdentityInjectionDisabled is the per-session opt-out of the harness
 	// identity injection (see identity_injection.go): when true, the spawn
 	// neither writes the identity file nor passes the harness-specific
