@@ -56,6 +56,8 @@ const (
 	execStatus       = "执行｜状态"
 	execTask         = "执行｜关联任务"
 	execStartedAt    = "执行｜开始时间"
+	blockerStatus    = "卡点｜状态"
+	blockerTargets   = "卡点｜卡住对象"
 )
 
 // Task and execution statuses.
@@ -63,8 +65,13 @@ const (
 	StatusDone      = "已完成"
 	StatusCancelled = "已取消"
 	StatusCycle     = "周期进行中"
-	ExecRunning     = "进行中"
-	ExecPaused      = "暂停"
+	// matrix/hardened: the board statuses shared with World Store and Multica
+	// (personal-panel docs/specs/2026-10-16-three-way-board.md).
+	StatusBacklog = "待规划"
+	StatusTodo    = "待办"
+	StatusReview  = "待验收"
+	ExecRunning   = "进行中"
+	ExecPaused    = "暂停"
 )
 
 // Error codes. Most come from World Store (docs/ai-interface.md); the last
@@ -153,6 +160,9 @@ type Task struct {
 	ResultText   string     `json:"resultText,omitempty"`
 	Execution    *Execution `json:"execution,omitempty"`
 	ExecCategory string     `json:"execCategory,omitempty"`
+	// Blocked: an unresolved World Store blocker names this task. It is
+	// derived, never stored; the task's status (and Lane) stay as they are.
+	Blocked bool `json:"blocked,omitempty"`
 	// LinksRaw is the stored link value exactly as read: the baseline a
 	// link/unlink write must quote.
 	LinksRaw       string `json:"-"`
@@ -179,6 +189,9 @@ type Board struct {
 	LinksReady bool `json:"linksReady"`
 	// ExecReady is true once the execution category relation exists.
 	ExecReady bool `json:"execReady"`
+	// BlockersKnown is false while World Store has not confirmed its
+	// blockers: no task can then be shown as blocked, or as not blocked.
+	BlockersKnown bool `json:"blockersKnown"`
 	// CanWrite is World Store's own check of write permission on the space.
 	CanWrite bool `json:"canWrite"`
 	// Running is the execution currently running anywhere in the space
@@ -391,24 +404,26 @@ func (r nativeRow) ids(name string) []string {
 	return nil
 }
 
-var statusLanes = map[string]string{"待办": "todo", "待处理": "todo", "进行中": "doing", "暂停": "paused", StatusDone: "done", StatusCancelled: "cancelled"}
+// matrix/hardened: lanes follow the seven shared board columns. An open
+// execution (running or paused) keeps a task in "doing"; the card shows which.
+var statusLanes = map[string]string{
+	StatusBacklog: "backlog", StatusTodo: "todo", "待处理": "todo", "进行中": "doing", "暂停": "doing", StatusCycle: "doing",
+	StatusReview: "review", StatusDone: "done", StatusCancelled: "cancelled",
+}
 
 // laneOf places a task: closed statuses win, then an open execution, then
-// the status itself; statuses agent-deck does not know go to "review".
+// the status itself; statuses agent-deck does not know go to "unknown".
 func laneOf(status string, open *Execution) string {
 	if status == StatusDone || status == StatusCancelled {
 		return statusLanes[status]
 	}
 	if open != nil {
-		if open.Status == ExecRunning {
-			return "doing"
-		}
-		return "paused"
+		return "doing"
 	}
 	if lane, ok := statusLanes[status]; ok {
 		return lane
 	}
-	return "review"
+	return "unknown"
 }
 
 // parseLinks decodes the stored link value: ok=false means unknown format.
@@ -453,11 +468,13 @@ func (c *Client) Board(ctx context.Context) (*Board, error) {
 		SpaceID         string   `json:"spaceId"`
 		UpdatedAt       string   `json:"updatedAt"`
 		Pending         bool     `json:"pending"`
+		PendingParts    []string `json:"pendingParts"`
 		AvailableFields []string `json:"availableFields"`
 		CanWrite        bool     `json:"tuiCanWrite"`
 		Groups          struct {
 			Tasks      *[]nativeRow `json:"tasks"`
 			Executions *[]nativeRow `json:"executions"`
+			Blockers   *[]nativeRow `json:"blockers"`
 		} `json:"groups"`
 	}
 	if err := c.call(ctx, false, map[string]any{"op": "snapshot"}, &snap); err != nil {
@@ -495,8 +512,25 @@ func (c *Client) Board(ctx context.Context) (*Board, error) {
 			}
 		}
 	}
+	blocked := map[string]bool{}
+	board.BlockersKnown = snap.Groups.Blockers != nil
+	for _, part := range snap.PendingParts {
+		board.BlockersKnown = board.BlockersKnown && part != "blockers"
+	}
+	if board.BlockersKnown {
+		for _, b := range *snap.Groups.Blockers {
+			if st := b.str(blockerStatus); st == "已解除" || st == "不再相关" {
+				continue
+			}
+			for _, id := range b.ids(blockerTargets) {
+				blocked[id] = true
+			}
+		}
+	}
 	for _, r := range *snap.Groups.Tasks {
-		board.Tasks = append(board.Tasks, projectTask(r, open[r.ID]))
+		t := projectTask(r, open[r.ID])
+		t.Blocked = blocked[r.ID]
+		board.Tasks = append(board.Tasks, t)
 	}
 	return board, nil
 }
@@ -569,6 +603,50 @@ func (c *Client) Complete(ctx context.Context, owner Owner, t Task, resultText s
 		payload["result"], payload["expectedResult"] = resultText, t.ResultText
 	}
 	return c.action(ctx, owner, payload)
+}
+
+// SetStatus moves a task to one of the board statuses World Store accepts
+// directly (待规划, 待办, 待验收, 已取消), quoting the status it was read with.
+// Running and done go through Start and Complete instead. A task with an open
+// execution must have it finished first, as in World Store's own TUI.
+func (c *Client) SetStatus(ctx context.Context, owner Owner, t Task, status string) error {
+	switch {
+	case t.ReadOnly:
+		return &Error{Code: CodeBadInput, Message: "imported task is read-only"}
+	case t.Status == StatusDone || t.Status == StatusCancelled:
+		return &Error{Code: CodeBadInput, Message: "task is already closed"}
+	case t.Execution != nil:
+		return &Error{Code: CodeBadInput, Message: "task has an open execution; finish it first"}
+	case status != StatusBacklog && status != StatusTodo && status != StatusReview && status != StatusCancelled:
+		return &Error{Code: CodeBadInput, Message: "status " + status + " is not set directly"}
+	case status == t.Status:
+		return &Error{Code: CodeBadInput, Message: "task is already " + status}
+	}
+	return c.call(ctx, true, map[string]any{
+		"op": "task.update", "owner": owner, "confirm": true, "id": t.ID,
+		"patch": map[string]any{fieldStatus: status}, "expected": map[string]any{fieldStatus: t.Status},
+	}, nil)
+}
+
+// Finish ends the task's open execution (this round only; the task stays open).
+func (c *Client) Finish(ctx context.Context, owner Owner, t Task) error {
+	if t.Execution == nil {
+		return &Error{Code: CodeBadInput, Message: "task has no open execution"}
+	}
+	return c.action(ctx, owner, map[string]any{"mode": "finish", "executionId": t.Execution.ID, "expectedStatus": t.Execution.Status})
+}
+
+// SubmitForReview hands a task over for acceptance: its open execution, if
+// any, is finished first, then the status becomes 待验收. The two writes are
+// separate; if the second fails the round is still finished (re-read shows it).
+func (c *Client) SubmitForReview(ctx context.Context, owner Owner, t Task) error {
+	if t.Execution != nil {
+		if err := c.Finish(ctx, owner, t); err != nil {
+			return err
+		}
+		t.Execution = nil
+	}
+	return c.SetStatus(ctx, owner, t, StatusReview)
 }
 
 // OnBoard reports whether a task belongs on the board's default view: it

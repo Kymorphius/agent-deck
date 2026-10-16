@@ -45,7 +45,7 @@ import (
 )
 
 // matrix/hardened: identifies our hardened build.
-var Version = "1.16.26+matrix.79" // matrix/hardened: direct Path editing and target directory completion; overridden via -ldflags.
+var Version = "1.16.26+matrix.80" // matrix/hardened: direct Path editing and target directory completion; overridden via -ldflags.
 
 // Table column widths for list command output
 const (

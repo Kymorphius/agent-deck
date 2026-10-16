@@ -102,3 +102,29 @@ func Launch(ctx context.Context, req LaunchRequest) (string, error) {
 	}
 	return resp.ID, nil
 }
+
+// SendToSession queues text for an agent-deck session (delivered when it is
+// idle). matrix/hardened: used to pass a rejected review's reason back to the
+// session that did the work. The text goes on stdin, never into argv.
+func SendToSession(ctx context.Context, exe, profile, sessionID, text string) error {
+	if exe == "" {
+		return fmt.Errorf("send: agent-deck binary unknown")
+	}
+	var args []string
+	if profile != "" {
+		args = append(args, "-p", profile)
+	}
+	args = append(args, "session", "send", "--queue", "--message-file", "-", sessionID)
+	cmd := exec.CommandContext(ctx, exe, args...)
+	cmd.Stdin = strings.NewReader(text)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		msg := strings.TrimSpace(stderr.String())
+		if len(msg) > 300 {
+			msg = msg[len(msg)-300:]
+		}
+		return fmt.Errorf("send to %s failed: %w %s", sessionID, err, msg)
+	}
+	return nil
+}

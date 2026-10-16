@@ -14,19 +14,31 @@ type Column struct {
 	Hidden int
 }
 
-// Lanes in board order, with the title shown for each. laneOf maps
-// statuses it does not know (已调整, 周期进行中, ...) to "review"; those stay
-// visible, and World Store's own rules decide which actions they allow.
+// Lanes in board order, with the title shown for each. matrix/hardened: the
+// seven columns shared with World Store's TUI and Multica. "blocked" is
+// derived from blockers; statuses agent-deck does not know go to "unknown",
+// which is only shown when it has tasks.
 var laneOrder = []struct{ lane, title string }{
-	{"doing", "进行中"},
+	{"backlog", "待规划"},
 	{"todo", "待办"},
-	{"paused", "暂停"},
-	{"review", "待核对"},
-	{"done", "已完成"},
+	{"doing", "进行中"},
+	{"review", "待验收"},
+	{"blocked", "卡住"},
+	{"done", "完成"},
+	{"unknown", "待核"},
 }
 
 // DoneLimit caps the done column to the most recent completions.
 const DoneLimit = 20
+
+// ColumnOf is the column a task is shown in: its lane, or "blocked" while
+// an unresolved blocker names an open task.
+func ColumnOf(t Task) string {
+	if t.Blocked && t.Lane != "done" && t.Lane != "cancelled" {
+		return "blocked"
+	}
+	return t.Lane
+}
 
 // Columns groups tasks into board columns. Cancelled tasks are left out.
 // Open lanes sort by plan date (undated last) then name; done sorts by
@@ -41,11 +53,14 @@ func Columns(tasks []Task, filter string) []Column {
 		if filter != "" && !strings.Contains(strings.ToLower(t.Name+" "+t.Category+" "+t.Status), filter) {
 			continue
 		}
-		by[t.Lane] = append(by[t.Lane], t)
+		by[ColumnOf(t)] = append(by[ColumnOf(t)], t)
 	}
 	cols := make([]Column, 0, len(laneOrder))
 	for _, lo := range laneOrder {
 		ts := by[lo.lane]
+		if lo.lane == "unknown" && len(ts) == 0 {
+			continue
+		}
 		if lo.lane == "done" {
 			sort.SliceStable(ts, func(i, j int) bool { return deref(ts[i].CompletedAt) > deref(ts[j].CompletedAt) })
 		} else {

@@ -27,8 +27,10 @@ func handleTasks(profile string, args []string) {
 		handleTasksList(args[1:])
 	case "show":
 		handleTasksShow(args[1:])
-	case "start", "pause", "resume", "done":
+	case "start", "pause", "resume", "done", "review", "reject":
 		handleTasksAction(args[0], args[1:])
+	case "accept": // matrix/hardened: accepting a review is completing the task
+		handleTasksAction("done", args[1:])
 	case "link", "unlink":
 		handleTasksLink(profile, args[0] == "link", args[1:])
 	case "launch":
@@ -73,6 +75,9 @@ func printTasksHelp() {
 	fmt.Println("  pause <task>                Pause the task's running execution")
 	fmt.Println("  resume <task>               Resume the task's paused execution")
 	fmt.Println("  done <task> [--result s]    Mark complete (also closes its executions)")
+	fmt.Println("  review <task>               Hand over for review: finish its execution round, set 待验收")
+	fmt.Println("  accept <task> [--result s]  Accept a review (same as done)")
+	fmt.Println("  reject <task>               Send a review back to 待办 (the TUI's b also messages the session)")
 	fmt.Println("  link <task> [session]       Link a session (default: current session)")
 	fmt.Println("  unlink <task> [session]     Remove a session link")
 	fmt.Println("  launch <task> [path]        Start a session on the task and link it")
@@ -199,7 +204,7 @@ func handleTasksList(args []string) {
 		for _, t := range c.Tasks {
 			line := "  " + t.ID[:min(16, len(t.ID))] + "  " + t.Name
 			var tags []string
-			if c.Lane == "review" {
+			if c.Lane == "unknown" || c.Lane == "blocked" {
 				tags = append(tags, t.Status)
 			}
 			if t.Execution != nil {
@@ -308,6 +313,14 @@ func handleTasksAction(kind string, args []string) {
 		err = client.Resume(ctx, board.Owner, *t)
 	case "done":
 		err = client.Complete(ctx, board.Owner, *t, *result)
+	case "review":
+		err = client.SubmitForReview(ctx, board.Owner, *t)
+	case "reject":
+		if t.Status != worldstore.StatusReview {
+			err = &worldstore.Error{Code: worldstore.CodeBadInput, Message: "only tasks waiting for review (待验收) can be sent back"}
+		} else {
+			err = client.SetStatus(ctx, board.Owner, *t, worldstore.StatusTodo)
+		}
 	}
 	if err != nil {
 		out.Error(tasksErrorText(err), tasksErrorCode(err))

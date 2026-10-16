@@ -65,7 +65,7 @@ func TestBoardDerivesLanesFromStatusAndOpenExecutions(t *testing.T) {
 	if board.Owner != (Owner{"acc", "space"}) || !board.LinksReady || !board.CanWrite {
 		t.Fatalf("board = %+v", board)
 	}
-	want := map[string]string{"t1": "todo", "t2": "doing", "t3": "paused", "t4": "review", "t5": "done"}
+	want := map[string]string{"t1": "todo", "t2": "doing", "t3": "doing", "t4": "doing", "t5": "done"}
 	for id, lane := range want {
 		if got := board.Find(id).Lane; got != lane {
 			t.Errorf("%s lane = %s, want %s", id, got, lane)
@@ -267,24 +267,36 @@ func TestColumnsOrderCapAndFilter(t *testing.T) {
 		{ID: "2", Name: "undated", Lane: "todo"},
 		{ID: "3", Name: "early", Lane: "todo", PlanDate: d(100)},
 		{ID: "4", Name: "gone", Lane: "cancelled"},
-		{ID: "5", Name: "odd", Lane: "review", Status: "已调整"},
+		{ID: "5", Name: "odd", Lane: "unknown", Status: "已调整"},
+		{ID: "6", Name: "stuck", Lane: "todo", Blocked: true},
+		{ID: "7", Name: "stuck but done", Lane: "done", Blocked: true, CompletedAt: d(-1)},
 	}
 	for i := 0; i < DoneLimit+3; i++ {
 		tasks = append(tasks, Task{ID: "d", Name: "done", Lane: "done", CompletedAt: d(int64(i))})
 	}
 	cols := Columns(tasks, "")
-	if len(cols) != 5 || cols[0].Lane != "doing" || cols[4].Lane != "done" {
+	lanes := []string{}
+	for _, c := range cols {
+		lanes = append(lanes, c.Lane)
+	}
+	if strings.Join(lanes, ",") != "backlog,todo,doing,review,blocked,done,unknown" {
 		t.Fatalf("cols = %+v", cols)
 	}
 	todo := cols[1].Tasks
 	if todo[0].Name != "early" || todo[1].Name != "late" || todo[2].Name != "undated" {
 		t.Fatalf("todo order = %v", todo)
 	}
-	if len(cols[3].Tasks) != 1 {
-		t.Fatalf("unknown statuses must stay visible in review: %+v", cols[3])
+	if len(cols[6].Tasks) != 1 || cols[6].Tasks[0].Name != "odd" {
+		t.Fatalf("unknown statuses must stay visible: %+v", cols[6])
 	}
-	if len(cols[4].Tasks) != DoneLimit || cols[4].Hidden != 3 || *cols[4].Tasks[0].CompletedAt != int64(DoneLimit+2) {
-		t.Fatalf("done = %d hidden %d", len(cols[4].Tasks), cols[4].Hidden)
+	if len(cols[4].Tasks) != 1 || cols[4].Tasks[0].Name != "stuck" {
+		t.Fatalf("an open blocked task shows in 卡住, a done one stays done: %+v", cols[4])
+	}
+	if len(cols[5].Tasks) != DoneLimit || cols[5].Hidden != 4 || *cols[5].Tasks[0].CompletedAt != int64(DoneLimit+2) {
+		t.Fatalf("done = %d hidden %d", len(cols[5].Tasks), cols[5].Hidden)
+	}
+	if got := Columns(tasks[:3], ""); len(got) != 6 {
+		t.Fatalf("待核 is only shown when it has tasks: %d columns", len(got))
 	}
 	if got := Columns(tasks, "EAR"); len(got[1].Tasks) != 1 || got[1].Tasks[0].Name != "early" {
 		t.Fatalf("filter = %+v", got[1])
@@ -341,5 +353,52 @@ func TestExecCategoryProjectionFilterAndUpdate(t *testing.T) {
 	}
 	if err := c.SetExecCategory(context.Background(), board.Owner, *board.Find("t5"), DefaultExecCategory); CodeOf(err) != CodeBadInput {
 		t.Fatalf("read-only task: %v", err)
+	}
+}
+
+// matrix/hardened: seven-column board — blockers, direct statuses, review.
+func TestBlockersStatusesAndReviewRequests(t *testing.T) {
+	snap := strings.Replace(snapshotJSON, `"executions":[`, `"blockers":[{"id":"b1","fields":{"卡点｜状态":"卡住","卡点｜卡住对象":["t1"]}},{"id":"b2","fields":{"卡点｜状态":"已解除","卡点｜卡住对象":["t2"]}}],"executions":[`, 1)
+	f := &fakeEntry{answer: func(req map[string]any) (string, error) {
+		if req["op"] == "snapshot" {
+			return ok(snap), nil
+		}
+		return ok(`{"verified":true}`), nil
+	}}
+	c := f.client()
+	board, err := c.Board(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !board.BlockersKnown || !board.Find("t1").Blocked || board.Find("t2").Blocked || ColumnOf(*board.Find("t1")) != "blocked" {
+		t.Fatalf("blockers: known=%v t1=%v t2=%v", board.BlockersKnown, board.Find("t1").Blocked, board.Find("t2").Blocked)
+	}
+	unread, _ := boardEntry().client().Board(context.Background())
+	if unread.BlockersKnown {
+		t.Fatal("a snapshot without blockers must leave 卡住 unknown")
+	}
+
+	if err := c.SetStatus(context.Background(), board.Owner, *board.Find("t3"), StatusReview); CodeOf(err) != CodeBadInput {
+		t.Fatalf("a task with an open execution must be refused: %v", err)
+	}
+	for _, bad := range []string{"进行中", StatusDone, "暂停"} {
+		if err := c.SetStatus(context.Background(), board.Owner, *board.Find("t1"), bad); CodeOf(err) != CodeBadInput {
+			t.Fatalf("%s must not be set directly: %v", bad, err)
+		}
+	}
+	f.requests = nil
+	if err := c.SubmitForReview(context.Background(), board.Owner, *board.Find("t3")); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.requests) != 2 {
+		t.Fatalf("review of a task with an open round = finish + update, got %v", f.requests)
+	}
+	finish := f.requests[0]["payload"].(map[string]any)
+	if f.requests[0]["op"] != "task.action" || finish["mode"] != "finish" || finish["executionId"] != "e2" || finish["expectedStatus"] != "暂停" {
+		t.Fatalf("finish = %v", f.requests[0])
+	}
+	update := f.requests[1]
+	if update["op"] != "task.update" || update["patch"].(map[string]any)["任务｜状态"] != StatusReview || update["expected"].(map[string]any)["任务｜状态"] != "待办" {
+		t.Fatalf("update = %v", update)
 	}
 }
