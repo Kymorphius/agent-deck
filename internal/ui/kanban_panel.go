@@ -901,6 +901,9 @@ func (p *KanbanPanel) renderColumns(inner, bodyH int) string {
 				if t.Execution != nil && t.Execution.Status == worldstore.ExecPaused {
 					label = "‖ " + label
 				}
+				if t.Multica != nil {
+					label += " ·" + t.Multica.Summary()
+				}
 				text := kanbanFit(label, colW-2)
 				style, cursor := normal, " "
 				if c == p.col && i == p.rows[c] {
@@ -944,6 +947,9 @@ func (p *KanbanPanel) renderDetail(inner int) string {
 	}
 	if t.ExecCategory != "" {
 		meta = append(meta, "执行分类 "+t.ExecCategory)
+	}
+	if t.Multica != nil {
+		meta = append(meta, "Multica "+t.Multica.Summary())
 	}
 	if t.ReadOnly {
 		meta = append(meta, "read-only")

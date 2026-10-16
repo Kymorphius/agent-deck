@@ -37,6 +37,11 @@ const Source = "agent-deck"
 // LinkField is the native relation holding agent-deck links.
 const LinkField = "任务｜agent-deck 会话关联"
 
+// MulticaField holds the task's Multica issues (personal-panel
+// docs/multica-board-sync.md): a JSON link whose statuses World Store's sync
+// keeps current. matrix/hardened: read only; agent-deck never writes it.
+const MulticaField = "任务｜Multica 关联"
+
 // ExecCategoryField says who does a task, separate from the single-valued
 // scene category (任务｜分类): a task can be both 上班 and AI. Values: AI, 我, 世界.
 const ExecCategoryField = "任务｜执行分类"
@@ -160,6 +165,8 @@ type Task struct {
 	ResultText   string     `json:"resultText,omitempty"`
 	Execution    *Execution `json:"execution,omitempty"`
 	ExecCategory string     `json:"execCategory,omitempty"`
+	// Multica is the task's dispatched issue (nil when not dispatched or unreadable).
+	Multica *MulticaLink `json:"multica,omitempty"`
 	// Blocked: an unresolved World Store blocker names this task. It is
 	// derived, never stored; the task's status (and Lane) stay as they are.
 	Blocked bool `json:"blocked,omitempty"`
@@ -168,6 +175,57 @@ type Task struct {
 	LinksRaw       string `json:"-"`
 	AgentDeckLinks []Link `json:"agentDeckLinks,omitempty"`
 	LinksUnknown   bool   `json:"linksUnknown,omitempty"`
+}
+
+// MulticaIssue is one issue in the link's status mirror.
+type MulticaIssue struct {
+	ID         string `json:"id"`
+	Identifier string `json:"identifier"`
+	Status     string `json:"status"`
+}
+
+// MulticaLink is the parsed 任务｜Multica 关联 value.
+type MulticaLink struct {
+	Mode     string         `json:"mode"`
+	Root     MulticaIssue   `json:"root"`
+	Children []MulticaIssue `json:"children"`
+}
+
+var multicaLabels = map[string]string{"backlog": "待规划", "todo": "待办", "in_progress": "进行中", "in_review": "待验收", "done": "完成", "blocked": "卡住", "cancelled": "取消"}
+
+func parseMultica(raw string) *MulticaLink {
+	var v struct {
+		V int `json:"v"`
+		MulticaLink
+	}
+	if strings.TrimSpace(raw) == "" || json.Unmarshal([]byte(raw), &v) != nil || v.V != 1 || v.Root.Identifier == "" || multicaLabels[v.Root.Status] == "" {
+		return nil
+	}
+	return &v.MulticaLink
+}
+
+// Summary is the card text: "PP-12 进行中" or "PP-12 2/3 完成 · 1 待验收".
+func (m *MulticaLink) Summary() string {
+	if m == nil {
+		return ""
+	}
+	if m.Mode != "split" {
+		return m.Root.Identifier + " " + multicaLabels[m.Root.Status]
+	}
+	done, review := 0, 0
+	for _, c := range m.Children {
+		switch c.Status {
+		case "done":
+			done++
+		case "in_review":
+			review++
+		}
+	}
+	s := fmt.Sprintf("%s %d/%d 完成", m.Root.Identifier, done, len(m.Children))
+	if review > 0 {
+		s += fmt.Sprintf(" · %d 待验收", review)
+	}
+	return s
 }
 
 // LinkedTo reports whether the task records sessionID from deviceID.
@@ -454,6 +512,7 @@ func projectTask(r nativeRow, open *Execution) Task {
 		ExecCategory: r.str(ExecCategoryField),
 	}
 	t.Lane = laneOf(t.Status, open)
+	t.Multica = parseMultica(r.str(MulticaField))
 	t.LinksRaw = r.str(LinkField)
 	links, known := parseLinks(t.LinksRaw)
 	t.AgentDeckLinks, t.LinksUnknown = links, !known
@@ -652,7 +711,7 @@ func (c *Client) SubmitForReview(ctx context.Context, owner Owner, t Task) error
 // OnBoard reports whether a task belongs on the board's default view: it
 // carries the execution category, or a session is already working on it.
 func OnBoard(t Task, category string) bool {
-	return (category != "" && t.ExecCategory == category) || len(t.AgentDeckLinks) > 0
+	return (category != "" && t.ExecCategory == category) || len(t.AgentDeckLinks) > 0 || t.Multica != nil
 }
 
 // SetExecCategory sets (or with "" clears) the task's execution category,

@@ -37,6 +37,11 @@ func ColumnOf(t Task) string {
 	if t.Blocked && t.Lane != "done" && t.Lane != "cancelled" {
 		return "blocked"
 	}
+	// matrix/hardened: an open task whose Multica issue is being worked on
+	// shows in 进行中; its World Store status is unchanged.
+	if t.Multica != nil && t.Multica.Root.Status == "in_progress" && (t.Lane == "backlog" || t.Lane == "todo") {
+		return "doing"
+	}
 	return t.Lane
 }
 

@@ -402,3 +402,23 @@ func TestBlockersStatusesAndReviewRequests(t *testing.T) {
 		t.Fatalf("update = %v", update)
 	}
 }
+
+// matrix/hardened: the Multica link mirror shows on cards and moves a working issue to 进行中.
+func TestMulticaLinkSummaryAndColumn(t *testing.T) {
+	link := `{"v":1,"mode":"split","workspaceId":"w","root":{"id":"r","identifier":"PP-12","status":"in_progress"},"children":[{"id":"a","identifier":"PP-13","status":"done"},{"id":"b","identifier":"PP-14","status":"in_review"}],"taskStatus":"待办","syncedAt":1}`
+	m := parseMultica(link)
+	if m == nil || m.Summary() != "PP-12 1/2 完成 · 1 待验收" {
+		t.Fatalf("summary = %+v", m)
+	}
+	task := Task{Lane: "todo", Multica: m}
+	if ColumnOf(task) != "doing" || !OnBoard(task, "AI") {
+		t.Fatalf("column %s, on board %v", ColumnOf(task), OnBoard(task, "AI"))
+	}
+	if parseMultica(`{"v":2}`) != nil || parseMultica("") != nil || parseMultica(`{"v":1,"root":{"identifier":"PP-1","status":"weird"}}`) != nil {
+		t.Fatal("unknown link formats must be ignored")
+	}
+	single := parseMultica(`{"v":1,"mode":"single","root":{"identifier":"PP-2","status":"in_review"},"children":[]}`)
+	if single.Summary() != "PP-2 待验收" || ColumnOf(Task{Lane: "review", Multica: single}) != "review" {
+		t.Fatalf("single = %q", single.Summary())
+	}
+}
