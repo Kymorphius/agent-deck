@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.80`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.81`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -66,7 +66,7 @@
 - `internal/session/claude_hooks.go`：`isAgentDeckHookCommand` 的判断规则：先去掉开头的 `VAR=值`，再要求第二个词是 `hook-handler`、程序名的文件名部分是 `agent-deck`。`RemoveClaudeHooks` 会扫描全部事件，并做 UTC 时间戳备份（约 387–414 行）。
 - `cmd/agent-deck/main.go`（约 4845、5070 行）：`agent-deck uninstall` 会移除这些钩子。`uninstall.sh` 第 253 行附近的 jq 过滤用的是同一套规则（正则），写回时用 `cat >` 保持软链接和权限。
 
-**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.76`。
+**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.81`。
 
 **测试**：以 `_hardened_test.go` 结尾的文件、`update_check_disable_test.go`、`update_timer_wiring_test.go` 等是新增或调整过的测试；`testdata/goldens/*` 里的快照已经按加固后的输出更新。
 
@@ -723,3 +723,12 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 - **World Store 侧**：`task.update` 可直接写 `任务｜状态`，但只接受 `待规划`、`待办`、`待验收`、`已取消`；`worldstore.Client.SetStatus` 在本地先拒绝其他值、已关闭任务和有未结束执行的任务。
 - 验证：`internal/worldstore` 与 `internal/ui -run Kanban` 全部通过；`internal/ui`、`cmd/agent-deck` 全量里的失败均与基线相同或单独复跑通过（满负载偶发）；真实空间只读 `tasks list --all` 的七列分布与 World Store TUI 看板一致。真实空间未做写入。
 
+## 69. 独立的分组搜索定位
+
+`1.16.26+matrix.81` 新增 `Alt+S`（Mac `Option+S`，兼容普通 Option 字符 `ß`），只搜索分组名称与路径。`[hotkeys].group_search` 可重绑或禁用，帮助页同步显示。
+
+- **matrix/hardened:** 本地读取完整分组树的真实名称与路径，包含空组、折叠子组及显示名称别名；远程读取已有缓存，补齐祖先和宿主根，不增加网络请求。不同宿主或路径的重名组独立展示。
+- **matrix/hardened:** 支持大小写、Unicode 空白/标点归一化与顺序缩写，连续匹配优先。组名 `running/error` 按名称匹配；它不接受会话标题、项目路径或工具字段。
+- Enter 再核对当前分组身份，展开父组并定位，只进行导航；清除状态/时间过滤并恢复普通分组视图，保证空组可见。保留显式 `-g` 范围，远程列表追加也按同一范围过滤。Esc 和无结果 Enter 不改变列表视图，已移除的分组不会跳到邻近条目。
+- 模态输入接入文字输入法、光标闪烁、鼠标滚轮与尺寸更新；组名输入不触发列表快捷键。每次打开清空查询，重新打开可纳入新加载的分组。
+- 验证使用第 4 节隔离入口：组件覆盖匹配、排序、重名、刷新、长列表和 30/60/80/120 列；Home 覆盖真实默认/Mac/重绑/禁用、文字焦点、本地/远程定位、空组、折叠父组、视图恢复、取消、范围与陈旧选择。旧 TUI 在列表按 `Ctrl+T` 加载新构建。

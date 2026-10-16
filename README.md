@@ -358,6 +358,9 @@ Running many sessions? Socket pooling shares MCP processes across all sessions v
 
 ### Search
 
+<!-- matrix/hardened: a dedicated group-only locator beside session search. -->
+Press **Alt+S** (macOS **Option+S**) to find a group by its name or path. Only groups appear, including empty groups, folded subgroups, and groups already loaded from remotes. Type `agent deck` or `adk` to find `Agent-Deck`, use **↑/↓**, then **Enter** to expand and locate the group. Host and path identify groups with the same name. Enter returns to an unfiltered grouped list while preserving an explicit `-g` scope; **Esc** cancels without changing the view. Rebind or disable it through `[hotkeys].group_search`.
+
 <!-- matrix/hardened: local search includes groups and separator-aware fuzzy matching. -->
 Press `/` to search managed sessions by title, group, project path, or tool. Spaces and punctuation are interchangeable (`agent deck` matches `agent-deck`), and ordered abbreviations such as `adk` also match. Literal matches rank first, followed by separator-normalized matches and then fuzzy matches. `Alt+/` restricts the same search to the current group's direct sessions. Type `waiting`, `running`, `idle`, `error`, or `stopped` to filter by status. `G` searches all indexed conversation content; `Alt+R` searches content only in managed sessions.
 

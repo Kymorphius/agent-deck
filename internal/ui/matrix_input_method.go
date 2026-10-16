@@ -85,6 +85,7 @@ func (h *Home) inputMethodNavigation() bool {
 	}
 	// Modal focus has priority over the session's insert mode underneath it.
 	if h.search != nil && h.search.IsVisible() ||
+		h.groupSearch != nil && h.groupSearch.IsVisible() || // matrix/hardened: group names are text input.
 		h.globalSearch != nil && h.globalSearch.IsVisible() ||
 		h.promptInputDialog != nil && h.promptInputDialog.IsVisible() ||
 		h.zoxidePicker != nil && h.zoxidePicker.IsVisible() {

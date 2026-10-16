@@ -58,6 +58,7 @@ const (
 	hotkeyCreateGroup      = "create_group"
 	hotkeySearch           = "search"
 	hotkeyManagedRecall    = "recall_managed" // matrix/hardened: content search in registered sessions.
+	hotkeyGroupSearch      = "group_search"   // matrix/hardened: locate only group names and paths.
 	hotkeyHelp             = "help"
 	hotkeySettings         = "settings"
 	hotkeyImport           = "import"
@@ -162,6 +163,7 @@ var hotkeyActionOrder = []string{
 	hotkeyCreateGroup,
 	hotkeySearch,
 	hotkeyManagedRecall,
+	hotkeyGroupSearch,
 	hotkeyHelp,
 	hotkeySettings,
 	hotkeyImport,
@@ -225,6 +227,7 @@ var defaultHotkeyBindings = map[string]string{
 	hotkeyCreateGroup:      "g",
 	hotkeySearch:           "/",
 	hotkeyManagedRecall:    "alt+r", // matrix/hardened
+	hotkeyGroupSearch:      "alt+s", // matrix/hardened: Option+S also arrives as the existing ß alias.
 	hotkeyHelp:             "?",
 	hotkeySettings:         "S",
 	hotkeyImport:           "i",
