@@ -45,7 +45,7 @@ import (
 )
 
 // matrix/hardened: identifies our hardened build.
-var Version = "1.16.26+matrix.72" // matrix/hardened: preserve queued sessions before pane startup; overridden via -ldflags.
+var Version = "1.16.26+matrix.73" // matrix/hardened: automatic macOS input source for navigation; overridden via -ldflags.
 
 // Table column widths for list command output
 const (
@@ -1314,6 +1314,13 @@ func main() {
 	tmux.SweepStaleControlClients(tmux.DefaultSocketName())
 
 	programOptions := []tea.ProgramOption{tea.WithAltScreen()}
+	// matrix/hardened: the local IME controller requires terminal-tab focus
+	// reports and shares the normal/error/signal terminal cleanup lifecycle.
+	if homeModel.ConfigureInputMethod() {
+		programOptions = append(programOptions, tea.WithReportFocus())
+	}
+	setEmbeddedTerminalCleanup(homeModel.RestoreInputMethod)
+	defer runEmbeddedTerminalCleanup()
 	if homeModel.EmbeddedTerminalEnabled() {
 		// The input/output wrappers let the dashboard temporarily hand terminal
 		// traffic to an embedded tmux client without giving up the outer TUI.
@@ -1322,10 +1329,10 @@ func main() {
 		// One release for every exit: the normal return below, the signal
 		// handler, and the p.Run error path (both of which os.Exit past defers).
 		setEmbeddedTerminalCleanup(func() {
+			homeModel.RestoreInputMethod() // matrix/hardened: release native IME ownership.
 			sessionInput.Deactivate()
 			sessionOutput.ReleaseEmbeddedCursor()
 		})
-		defer runEmbeddedTerminalCleanup()
 		homeModel.SetSessionIO(sessionInput, sessionOutput)
 		programOptions = append(
 			programOptions,
@@ -1341,6 +1348,7 @@ func main() {
 		// Preserve the original Agent Deck protocol exactly when the feature is
 		// omitted or disabled: cell-motion mouse tracking, no focus reporting,
 		// and only the existing CSI-u compatibility reader around stdin.
+		// matrix/hardened: opted-in IME switching also requests focus reports.
 		programOptions = append(
 			programOptions,
 			tea.WithMouseCellMotion(),

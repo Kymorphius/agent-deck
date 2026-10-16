@@ -174,6 +174,10 @@ var configKeys = []ConfigKey{
 	{Key: "ui.embedded_terminal", Section: "Interface", Label: "Embedded terminal", Help: "Show the session terminal embedded next to the list", Type: "bool", RestartRequired: true,
 		get: func(c *UserConfig) any { return c.UI.GetEmbeddedTerminal() },
 		set: func(c *UserConfig, v any) { c.UI.EmbeddedTerminal = boolRef(v.(bool)) }},
+	// matrix/hardened: explicit opt-in, exposed to CLI and config clients.
+	{Key: "ui.auto_input_method", Section: "Interface", Label: "Automatic input method", Help: "Use direct keys for macOS navigation and restore the input method for typing", Type: "bool", RestartRequired: true,
+		get: func(c *UserConfig) any { return c.UI.AutoInputMethod },
+		set: func(c *UserConfig, v any) { c.UI.AutoInputMethod = v.(bool) }},
 	{Key: "ui.sidebar_density", Section: "Interface", Label: "Sidebar density", Help: "Embedded sidebar density", Type: "enum", Values: []string{SidebarDensityFull, SidebarDensityCompact, SidebarDensityMinimal, SidebarDensityAuto},
 		get: func(c *UserConfig) any { return c.UI.GetSidebarDensity() },
 		set: func(c *UserConfig, v any) { c.UI.SidebarDensity = v.(string) }},

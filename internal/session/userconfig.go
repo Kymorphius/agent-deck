@@ -487,6 +487,10 @@ func (c *UserConfig) ClaimPollingEnabled() bool {
 // UISettings controls TUI layout proportions.
 // See issue #1092.
 type UISettings struct {
+	// matrix/hardened: local macOS navigation bypasses the IME; typing
+	// restores the previous source. SSH and unsupported builds ignore it.
+	AutoInputMethod bool `toml:"auto_input_method,omitempty"`
+
 	// matrix/hardened: clear local search each time / or Alt+/ opens it;
 	// nil defaults to true, while false preserves the previous query.
 	ClearSearchOnOpen *bool `toml:"clear_search_on_open,omitempty"`

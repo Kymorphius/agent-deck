@@ -247,6 +247,12 @@ type pendingTitle struct {
 
 // Home is the main application model
 type Home struct {
+	// matrix/hardened: local macOS input-source ownership follows UI focus.
+	inputMethod        inputMethodController
+	inputMethodFocused bool
+	inputMethodKnown   bool
+	inputMethodNav     bool
+
 	// Dimensions
 	width  int
 	height int
@@ -7560,6 +7566,7 @@ func (h *Home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return h, nil
 	}
 	model, cmd := h.updateInner(msg)
+	h.syncInputMethod(msg) // matrix/hardened: switch before the next input/attach.
 	if !h.fullRepaint {
 		return model, cmd
 	}

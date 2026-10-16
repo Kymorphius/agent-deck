@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.72`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.73`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -653,3 +653,12 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 - **matrix/hardened:** 在启动宽限与退出分类之前保留 queued；当前进程及从存储恢复的会话使用同一规则。准确查询确认 tmux 会话存在后，仍执行正常状态判断，避免过时的 queued 掩盖实际运行或退出；查询失败时保留排队状态。
 - **matrix/hardened:** 查询在 Instance 锁外执行，回到锁内核对会话、停止代次与排队状态。排队后的 Start 继续进入正常启动流程，启动后失去窗格仍显示实际退出分类。并发上限和队列释放规则保持原样。
 - 验证使用隔离入口，覆盖新旧会话、存储恢复、空与缺失 tmux 句柄、排队后启动、已有窗格及启动后外部终止；同时运行状态分类与停止保护的 race 回归、core 启动排队与释放队列测试。安装后需重载 monitor；已打开的 TUI 在列表按 `Ctrl+T` 重载。
+
+## 61. macOS 导航与输入法适配
+
+`1.16.26+matrix.73` 增加显式开启的 `[ui].auto_input_method`。
+
+- **matrix/hardened:** 以 agent-deck 的列表、表单字段和会话焦点切换原生输入源：导航临时使用 ASCII，文字输入和 attach 恢复此前输入法；不推断 AI 会话内部模式。
+- **matrix/hardened:** 原生切换核对所属终端的前台应用及终端标签页焦点；SSH、后台 Web 和不支持的平台不取得桌面控制权。手动选择的输入源优先，失败保留恢复机会，正常/错误/信号退出共用清理入口。
+- 改动集中在 `internal/inputmethod/`、`internal/ui/matrix_input_method.go`；Home 更新后同步模式，CLI 仅在交互启动时配置控制器；配置入口支持 `config get/set/schema`。
+- 验证：隔离的模式/焦点和输入源归属测试；真实候选窗口体验需按 [输入法适配说明](docs/input-method.md) 的前台交互步骤验收。
