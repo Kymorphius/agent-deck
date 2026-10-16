@@ -314,8 +314,10 @@ A harness or account change is saved on its own (not together with other edits) 
 
 <!-- matrix/hardened: local search starts fresh by default, with an opt-out in Settings. -->
 - Opening `/` or `Alt+/` clears the previous query by default. In **Settings (`S`) → LOCAL SEARCH → Clear search on open (/)**, press **Space** to keep the last query instead (`[ui].clear_search_on_open = false`). Applies on the next open.
-- Fuzzy search session titles and groups
-- Max 10 results
+<!-- matrix/hardened: match the actual local-search fields and ranking. -->
+- Search titles, group paths, project paths, and tools, ignoring case. Spaces and punctuation are interchangeable: `agent deck`, `agent-deck`, and `agent_deck` match the same project.
+- Ordered fuzzy abbreviations such as `adk` match `agent-deck`. Literal and separator-normalized continuous matches rank ahead of fuzzy matches. Fuzzy path matching uses individual project/group names to avoid collecting letters across unrelated parent directories.
+- Up to ten result rows are visible at once; navigating down scrolls through the remaining matches.
 - `↑/↓` or `Ctrl+K/J` navigate
 - `Enter` select | `Tab` switch to global | `Esc` close
 
