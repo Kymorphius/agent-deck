@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.76`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.77`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -690,3 +690,11 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 - 保留 `waiting/running/idle/error/stopped` 的精确状态过滤及打开时清空设置。纯标点查询仍按字面处理；全空白查询返回原列表。
 - 输入提示和帮助说明可搜字段；30 列窗口将外框纳入宽度限制。相关本地搜索快照只更新提示文字。
 - 验证使用第 4 节隔离入口：`TestMatrixSessionSearch*` 覆盖分组、默认组、Unicode、缩写、符号、排序与误匹配；`TestMatrixLocalSearchMatching*` 经真实 `/` 按键路由验证输入、刷新、上下选择、Enter 定位与 30/60/80/120 列布局。安装后列表按 `Ctrl+T` 重载，AI 会话无需重启。
+
+## 65. 已连接远程通道时的 Path 补全
+
+`1.16.26+matrix.77` 修复新建远程会话按 Tab 报 `Directory completion unavailable`。
+
+- **matrix/hardened:** 隐藏的 `__complete-path` 不在 remote-agent 命令注册表中。TUI 的持久通道会拒绝它，而未启用通道的独立 CLI 请求可成功。此只读目录请求明确绕过持久通道，经现有 SSH exec 执行，兼容已运行的远程 agent。
+- 错误提示保留经过控制字符清理、长度限制的实际原因，完整错误进入 UI 日志；超时单独标明。
+- 验证覆盖已连接模拟通道时列表仍走通道、补全独立执行；两台真实远程主机的已连接通道复现原错误并验证修复，相关 session/UI race 测试通过。
