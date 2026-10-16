@@ -3073,6 +3073,12 @@ func RemoteAgentDeniesVerb(verb string) bool {
 // go over one-shot SSH so multiline startup queries are delivered once
 // without a failed mutation or an unsafe retry.
 func remoteChannelArgsSafe(args []string) bool {
+	// matrix/hardened: this hidden helper is absent from the remote agent's
+	// command registry, including already-running agents. Use read-only exec
+	// even while fleet polling keeps a persistent channel connected.
+	if len(args) > 0 && args[0] == "__complete-path" {
+		return false
+	}
 	if len(args) > 0 && RemoteAgentDeniesVerb(args[0]) {
 		return false
 	}
