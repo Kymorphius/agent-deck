@@ -319,7 +319,7 @@ func (h *HelpOverlay) View() string {
 		{"'1-'9", "Jump to root group"},
 		{"3j / 3k", "Move 3 rows (any count)"},
 		{"12 / :12 + " + openSessionKey, "Open session / toggle group at line 12 (:set nonu hides numbers)"},
-		{"12l / :12l", "Go to line 12 without opening"}, // matrix/hardened: keep a cursor-only address alongside numeric activation.
+		{"12l / :12l", "Go to line 12 without opening"},      // matrix/hardened: keep a cursor-only address alongside numeric activation.
 		{"12h / :12h", "Collapse group / parent at line 12"}, // matrix/hardened: absolute address plus existing h semantics.
 		{"''", "Back to the row before the last 'N / :N jump"},
 		{"Space", "Jump mode"},
@@ -454,7 +454,8 @@ func (h *HelpOverlay) View() string {
 		{
 			title: "SEARCH & FILTER",
 			items: [][2]string{
-				{searchKey, "Fuzzy search: title, group, project, tool"}, // matrix/hardened
+				{searchKey, "Fuzzy search: title, group, project, tool"},         // matrix/hardened
+				{h.key(hotkeyGroupSearch, "alt+s"), "Find group by name / path"}, // matrix/hardened
 				{FilterKeyError, "Filter abnormal (errors + interruptions)"},
 				{FilterKeyActive, "Filter open (hide abnormal)"},
 				{FilterKeyInterrupted, "Filter interrupted turns ↯"}, // matrix/hardened

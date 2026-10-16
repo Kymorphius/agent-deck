@@ -23,6 +23,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/BurntSushi/toml"
+	"github.com/charmbracelet/bubbles/cursor"
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -285,6 +286,7 @@ type Home struct {
 
 	// Components
 	search               *Search
+	groupSearch          *GroupSearch  // matrix/hardened: locate a group without searching sessions.
 	globalSearch         *GlobalSearch // Recall search over recall.db (the G key)
 	recallSource         RecallSource  // the index behind it (nil when [recall] enabled = false)
 	recallOff            string        // why the index is not open ("" when it is); G shows it in the local search
@@ -2120,6 +2122,7 @@ func NewHomeWithRuntimeSource(profile string, source session.RuntimeObservationS
 		storage:                   storage,
 		storageWarning:            storageWarning,
 		search:                    NewSearch(),
+		groupSearch:               NewGroupSearch(), // matrix/hardened
 		newDialog:                 NewNewDialog(),
 		groupDialog:               NewGroupDialog(),
 		forkDialog:                NewForkDialog(),
@@ -3725,6 +3728,15 @@ func (h *Home) rebuildFlatItemsAt(now time.Time) {
 			rows := buildRemoteFlatItemsWithEmptyGroups(remoteName, sessions, collapsed, h.remoteSessionOrder.forRemote(remoteName), remoteGroupLists[remoteName], showEmptyGroups)
 			if pinnedOnly { // matrix/hardened: only standalone sessions, with their host in the title.
 				rows = matrixPinnedRemoteRows(rows)
+			}
+			if h.groupScope != "" { // matrix/hardened: group location must preserve explicit local/remote scope.
+				scoped := rows[:0]
+				for _, row := range rows {
+					if h.isInGroupScope(row.Path) {
+						scoped = append(scoped, row)
+					}
+				}
+				rows = scoped
 			}
 			for _, row := range rows {
 				// An empty group's header has no session to count; give it
@@ -7751,6 +7763,15 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 				h.globalSearch, cmd = h.globalSearch.Update(msg)
 				return h, cmd
 			}
+			if h.groupSearch != nil && h.groupSearch.IsVisible() { // matrix/hardened: never scroll the list underneath.
+				key := tea.KeyDown
+				if msg.Button == tea.MouseButtonWheelUp {
+					key = tea.KeyUp
+				}
+				var cmd tea.Cmd
+				h.groupSearch, cmd = h.groupSearch.Update(tea.KeyMsg{Type: key})
+				return h, cmd
+			}
 			if h.mcpDialog.IsVisible() {
 				if msg.Button == tea.MouseButtonWheelUp {
 					h.mcpDialog.ScrollUp()
@@ -10322,6 +10343,13 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		h.globalSearch, cmd = h.globalSearch.Update(msg)
 		return h, cmd
 
+	case cursor.BlinkMsg: // matrix/hardened: keep the group's text cursor alive without sending ticks to the list.
+		if h.groupSearch != nil && h.groupSearch.IsVisible() {
+			var cmd tea.Cmd
+			h.groupSearch, cmd = h.groupSearch.Update(msg)
+			return h, cmd
+		}
+
 	case tea.KeyMsg:
 		// Track user activity for adaptive status updates
 		h.lastUserInputTime = time.Now()
@@ -10502,6 +10530,9 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if h.search.IsVisible() {
 			return h.handleSearchKey(msg)
+		}
+		if h.groupSearch != nil && h.groupSearch.IsVisible() { // matrix/hardened
+			return h.handleGroupSearchKey(msg)
 		}
 		if h.globalSearch.IsVisible() {
 			return h.handleGlobalSearchKey(msg)
@@ -11522,6 +11553,7 @@ func (h *Home) hasModalVisible() bool {
 		h.webServicePanel.IsVisible() || // matrix/hardened: hotkeyWebService overlay
 		(h.deadLetterPanel != nil && h.deadLetterPanel.IsVisible()) || // hotkeyDeadLetters overlay
 		h.helpOverlay.IsVisible() || h.search.IsVisible() || h.globalSearch.IsVisible() ||
+		(h.groupSearch != nil && h.groupSearch.IsVisible()) || // matrix/hardened
 		h.newDialog.IsVisible() || h.groupDialog.IsVisible() || h.forkDialog.IsVisible() ||
 		h.confirmDialog.IsVisible() || h.hookTrustDialog.IsVisible() || h.mcpDialog.IsVisible() || h.pluginDialog.IsVisible() || h.skillDialog.IsVisible() ||
 		h.geminiModelDialog.IsVisible() || h.promptInputDialog.IsVisible() || h.sessionPickerDialog.IsVisible() ||
@@ -12665,6 +12697,11 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "alt+r":
 		// matrix/hardened: content search limited to managed conversations.
 		return h, h.openManagedRecall()
+
+	case "alt+s":
+		// matrix/hardened: a separate, configurable group-only locator.
+		h.openGroupSearch()
+		return h, h.groupSearch.input.Cursor.BlinkCmd()
 
 	case "?":
 		h.helpOverlay.SetEmbeddedLayout(h.embeddedLayout)
@@ -19298,6 +19335,9 @@ func (h *Home) fitFilterBarHint(usedWidth int) string {
 // updateSizes updates component sizes
 func (h *Home) updateSizes() {
 	h.search.SetSize(h.width, h.height)
+	if h.groupSearch != nil { // matrix/hardened
+		h.groupSearch.SetSize(h.width, h.height)
+	}
 	h.newDialog.SetSize(h.width, h.height)
 	h.groupDialog.SetSize(h.width, h.height)
 	h.confirmDialog.SetSize(h.width, h.height)
@@ -19438,6 +19478,9 @@ func (h *Home) renderFrame() string {
 	}
 	if h.search.IsVisible() {
 		return h.search.View()
+	}
+	if h.groupSearch != nil && h.groupSearch.IsVisible() { // matrix/hardened
+		return h.groupSearch.View()
 	}
 	if h.globalSearch.IsVisible() {
 		// matrix/hardened: wire management labels to the current registry on

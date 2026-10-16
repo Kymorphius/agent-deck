@@ -310,6 +310,14 @@ A harness or account change is saved on its own (not together with other edits) 
 
 ## Search
 
+### Group Search (`Alt+S` / macOS `Option+S`)
+
+<!-- matrix/hardened: group navigation has its own rebindable entry. -->
+- Search only group names and paths, with the same separator-tolerant and ordered fuzzy matching as local session search. Group names such as `running` remain names here.
+- Includes empty groups, collapsed subgroups, and already-loaded remote groups. The host and full path distinguish duplicate names; opening the locator does not request remote data.
+- **↑/↓** or **Ctrl+K/J** choose a result; **Enter** expands its parents and locates the group. It clears status/time filters and restores a grouped view so the target is visible, while retaining the explicit `-g` scope. **Esc** keeps the previous view and filters.
+- Each opening starts with an empty query. Reopen to include newly loaded groups. Configure `[hotkeys].group_search = "alt+s"`, or use `""` to disable it.
+
 ### Local Search (`/`)
 
 <!-- matrix/hardened: local search starts fresh by default, with an opt-out in Settings. -->
