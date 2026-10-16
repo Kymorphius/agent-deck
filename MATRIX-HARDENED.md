@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.81`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.82`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -732,3 +732,12 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 - Enter 再核对当前分组身份，展开父组并定位，只进行导航；清除状态/时间过滤并恢复普通分组视图，保证空组可见。保留显式 `-g` 范围，远程列表追加也按同一范围过滤。Esc 和无结果 Enter 不改变列表视图，已移除的分组不会跳到邻近条目。
 - 模态输入接入文字输入法、光标闪烁、鼠标滚轮与尺寸更新；组名输入不触发列表快捷键。每次打开清空查询，重新打开可纳入新加载的分组。
 - 验证使用第 4 节隔离入口：组件覆盖匹配、排序、重名、刷新、长列表和 30/60/80/120 列；Home 覆盖真实默认/Mac/重绑/禁用、文字焦点、本地/远程定位、空组、折叠父组、视图恢复、取消、范围与陈旧选择。旧 TUI 在列表按 `Ctrl+T` 加载新构建。
+
+## 70. 看板显示 Multica 派发进度
+
+`1.16.26+matrix.82` 读取 World Store 的 `任务｜Multica 关联`（personal-panel `docs/multica-board-sync.md`，三方看板 P3）。
+
+- **matrix/hardened:** 只读，agent-deck 不写这个字段。卡片末尾显示 `·PP-12 进行中`，拆分派发显示 `·PP-12 2/3 完成 · 1 待验收`，详情行加上同样的摘要。issue 处于 in_progress 而任务仍是待规划/待办时，卡片显示在进行中列，任务状态不变。已派给 Multica 的任务进入默认视图。格式不认识的关联值一律忽略。
+- 在 agent-deck 里验收（`x`）或退回（`b`）只改 World Store；World Store 的同步脚本（launchd，每 2 分钟）随后把结果带到 Multica。
+- 验证：`internal/worldstore`、`internal/ui -run Kanban` 通过；真实环境用测试任务走通派发 → Multica 待验收 → `tasks accept` → Multica 完成。
+
