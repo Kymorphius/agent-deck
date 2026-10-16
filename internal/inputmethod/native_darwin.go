@@ -17,6 +17,9 @@ import (
 
 type nativeBackend struct{ owner C.int }
 
+// matrix/hardened: keep native ancestry lookup available to regression tests.
+func nativeParentPID(pid int) int { return int(C.deck_parent_pid(C.int(pid))) }
+
 func newBackend() backend {
 	// Never let a remote TUI change the host Mac's desktop input source.
 	if os.Getenv("SSH_CONNECTION") != "" || os.Getenv("SSH_TTY") != "" {

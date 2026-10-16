@@ -45,7 +45,7 @@ import (
 )
 
 // matrix/hardened: identifies our hardened build.
-var Version = "1.16.26+matrix.73" // matrix/hardened: automatic macOS input source for navigation; overridden via -ldflags.
+var Version = "1.16.26+matrix.74" // matrix/hardened: recognize terminal ancestry through privileged login; overridden via -ldflags.
 
 // Table column widths for list command output
 const (
