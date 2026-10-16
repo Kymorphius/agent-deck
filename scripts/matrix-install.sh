@@ -12,6 +12,12 @@ out=$(mktemp -d)
 GOTOOLCHAIN=${GOTOOLCHAIN:-go1.25.13} go build -trimpath -ldflags "-s -w -X main.Version=$ver" -o "$out/agent-deck" ./cmd/agent-deck
 if strings "$out/agent-deck" | grep -qE 'phc_[A-Za-z0-9]{20}'; then echo "refusing: a PostHog key is compiled in" >&2; exit 1; fi
 install -m 755 "$out/agent-deck" "$HOME/.local/bin/agent-deck"; rm -rf "$out"
+# matrix/hardened: cross-built remote binaries must be read back on the target,
+# rather than executed on the build host (the caller still stages the install).
+if [[ "$(go env GOOS)/$(go env GOARCH)" != "$(go env GOHOSTOS)/$(go env GOHOSTARCH)" ]]; then
+  echo "installed cross-build: $ver ($(go env GOOS)/$(go env GOARCH)); verify on target"
+  exit 0
+fi
 echo "installed: $("$HOME/.local/bin/agent-deck" --version)"
 # matrix/hardened: consume all status output so pipefail does not report SIGPIPE
 # after a successful install when hooks status writes more than three lines.

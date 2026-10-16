@@ -765,7 +765,7 @@ func TestNewDialog_TabDoesNotOverwriteCustomPath(t *testing.T) {
 	d.pathInput.SetValue(customPath)
 
 	startIdx := d.focusIndex
-	// User presses Tab to move to command selection
+	// matrix/hardened: Tab completes without leaving Path.
 	d, _ = d.Update(tea.KeyMsg{Type: tea.KeyTab})
 
 	// The custom path should be PRESERVED, not overwritten
@@ -776,49 +776,29 @@ func TestNewDialog_TabDoesNotOverwriteCustomPath(t *testing.T) {
 	}
 
 	// Focus should have advanced (path is valid).
-	if d.focusIndex == startIdx {
-		t.Errorf("Tab on valid custom path did not advance focus from %d", startIdx)
+	if d.focusIndex != startIdx {
+		t.Errorf("Tab on valid custom path unexpectedly moved focus from %d", startIdx)
 	}
 }
 
-// TestNewDialog_TabAppliesSuggestionWhenNavigated tests that Tab DOES apply
-// the suggestion when the user explicitly navigated with arrow keys.
-func TestNewDialog_TabAppliesSuggestionWhenNavigated(t *testing.T) {
+// matrix/hardened: leaving history browsing does not change Tab into history acceptance.
+func TestNewDialog_TabDoesNotApplyHistoryWhenNavigated(t *testing.T) {
+	// matrix/hardened: Path now enters direct editing; Tab completes only.
 	d := NewNewDialog()
 	d.Show()
-
-	suggestions := []string{
-		"/Users/test/project-1",
-		"/Users/test/project-2",
-	}
-	d.SetPathSuggestions(suggestions)
-
-	// User is on path field
-	d.focusIndex = 2
+	d.pathInput.SetValue("/preset/project")
+	d.pathInput.CursorEnd()
+	d.focusIndex = d.indexOf(focusPath)
 	d.updateFocus()
-
-	// User edits the path, then navigates to the suggestion with Down.
-	// Cursor convention: 0 = "Type custom path…" (synthetic), 1 = first
-	// real suggestion, 2 = second. Two presses lands on the second.
-	d.pathInput.SetValue("/some/partial")
-	d.pathSoftSelected = false
-	d.pathInput.Focus()
-	d, _ = d.Update(tea.KeyMsg{Type: tea.KeyDown})
-	d, _ = d.Update(tea.KeyMsg{Type: tea.KeyDown})
-	d, _ = d.Update(tea.KeyMsg{Type: tea.KeyLeft})
-
-	// Now Tab should apply the selected suggestion
-	d, _ = d.Update(tea.KeyMsg{Type: tea.KeyTab})
-
-	_, path, _ := d.GetValues()
-
-	// Should be the second suggestion (cursor 0 → 1 → 2 = suggestions[1])
-	if path != "/Users/test/project-2" {
-		t.Errorf(
-			"Tab should apply suggestion after arrow navigation\nGot: %q\nWant: %q",
-			path,
-			"/Users/test/project-2",
-		)
+	if d.pathSoftSelected || !d.pathInput.Focused() {
+		t.Fatal("Path must be directly editable")
+	}
+	d.SetPathSuggestions([]string{"/history/deep/project"})
+	d.suggestionNavigated = true
+	d.pathSuggestionCursor = 1
+	d.Update(tea.KeyMsg{Type: tea.KeyTab})
+	if d.pathInput.Value() != "/preset/project" {
+		t.Fatal("Tab must not insert a history project")
 	}
 }
 
@@ -1389,7 +1369,11 @@ func TestNewDialog_TabNavigationWithWorktree(t *testing.T) {
 	// Tab walks the focus list sequentially (0 -> 1 -> ... -> wrap). Order is now
 	// Name, Command, Path, Worktree, Sandbox, Branch, Multi-repo (UX top-3 #3).
 	for i := 1; i <= maxIdx; i++ {
-		dialog, _ = dialog.Update(tea.KeyMsg{Type: tea.KeyTab})
+		key := tea.KeyTab
+		if dialog.currentTarget() == focusPath {
+			key = tea.KeyEnter
+		}
+		dialog, _ = dialog.Update(tea.KeyMsg{Type: key})
 		want := i
 		if i == branchIdx {
 			want = branchIdx
@@ -1420,7 +1404,11 @@ func TestNewDialog_TabNavigationWithoutWorktree(t *testing.T) {
 	// Tab walks the focus list sequentially and wraps. Order is now Name,
 	// Command, Path, Worktree, Sandbox, Multi-repo (UX top-3 #3).
 	for i := 1; i <= maxIdx; i++ {
-		dialog, _ = dialog.Update(tea.KeyMsg{Type: tea.KeyTab})
+		key := tea.KeyTab
+		if dialog.currentTarget() == focusPath {
+			key = tea.KeyEnter
+		}
+		dialog, _ = dialog.Update(tea.KeyMsg{Type: key})
 		if dialog.focusIndex != i {
 			t.Errorf("After Tab %d, focusIndex = %d, want %d", i, dialog.focusIndex, i)
 		}
@@ -1825,174 +1813,124 @@ func TestNewDialog_ShowInGroup_DefaultWorktree_AutoPopulatesBranchFromName(t *te
 
 // ===== Soft-Select Tests =====
 
-func TestNewDialog_SoftSelect_InitialState(t *testing.T) {
+func TestNewDialog_PathEditor_InitialState(t *testing.T) {
 	d := NewNewDialog()
 	d.SetSize(80, 40)
 	d.Show()
 
-	// After Show(), path is pre-filled and soft-selected
-	if !d.pathSoftSelected {
-		t.Error("pathSoftSelected should be true after Show()")
+	// matrix/hardened: preserve the prefill without soft-selecting it.
+	if d.pathSoftSelected {
+		t.Error("Path should not start soft-selected")
 	}
 	if d.pathInput.Value() == "" {
 		t.Error("path should be pre-filled with CWD after Show()")
 	}
 }
 
-func TestNewDialog_SoftSelect_TypeClearsField(t *testing.T) {
+func TestNewDialog_PathEditor_TypeEditsPrefill(t *testing.T) {
+	// matrix/hardened: Path now enters direct editing; Tab completes only.
 	d := NewNewDialog()
-	d.SetSize(80, 40)
 	d.Show()
-
-	// Move focus to path field
-	d.focusIndex = 2
-	d.updateFocus()
-
-	originalPath := d.pathInput.Value()
-	if originalPath == "" {
-		t.Fatal("path should be pre-filled")
-	}
-	if !d.pathSoftSelected {
-		t.Fatal("pathSoftSelected should be true when focusing path with value")
-	}
-
-	// Type a character while soft-selected
-	d, _ = d.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
-
-	// Field should have only the typed character (old value cleared)
-	val := d.pathInput.Value()
-	if val != "x" {
-		t.Errorf("path = %q, want %q (old value should be replaced)", val, "x")
-	}
-	if d.pathSoftSelected {
-		t.Error("pathSoftSelected should be false after typing")
-	}
-}
-
-func TestNewDialog_SoftSelect_BackspaceClearsField(t *testing.T) {
-	d := NewNewDialog()
-	d.SetSize(80, 40)
-	d.Show()
-
-	d.focusIndex = 2
-	d.updateFocus()
-
-	if !d.pathSoftSelected {
-		t.Fatal("pathSoftSelected should be true")
-	}
-
-	// Press backspace while soft-selected
-	d, _ = d.Update(tea.KeyMsg{Type: tea.KeyBackspace})
-
-	if d.pathInput.Value() != "" {
-		t.Errorf("path should be empty after backspace, got %q", d.pathInput.Value())
-	}
-	if d.pathSoftSelected {
-		t.Error("pathSoftSelected should be false after backspace")
-	}
-}
-
-func TestNewDialog_SoftSelect_MovementExits(t *testing.T) {
-	d := NewNewDialog()
-	d.SetSize(80, 40)
-	d.Show()
-
-	d.focusIndex = 2
-	d.updateFocus()
-
-	originalPath := d.pathInput.Value()
-	if !d.pathSoftSelected {
-		t.Fatal("pathSoftSelected should be true")
-	}
-
-	// Press Left to exit soft-select
-	d, _ = d.Update(tea.KeyMsg{Type: tea.KeyLeft})
-
-	// Value should be preserved
-	if d.pathInput.Value() != originalPath {
-		t.Errorf("path = %q, want %q (value should be preserved)", d.pathInput.Value(), originalPath)
-	}
-	if d.pathSoftSelected {
-		t.Error("pathSoftSelected should be false after Left key")
-	}
-}
-
-func TestNewDialog_SoftSelect_TabPreservesValue(t *testing.T) {
-	d := NewNewDialog()
-	d.SetSize(80, 40)
-	d.Show()
-
-	d.focusIndex = 2
-	d.updateFocus()
-
-	originalPath := d.pathInput.Value()
-	if !d.pathSoftSelected {
-		t.Fatal("pathSoftSelected should be true")
-	}
-
-	// Press Tab to accept and move to next field
-	d, _ = d.Update(tea.KeyMsg{Type: tea.KeyTab})
-
-	// Value should be preserved (Tab accepts as-is)
-	if d.pathInput.Value() != originalPath {
-		t.Errorf("path = %q, want %q (Tab should preserve value)", d.pathInput.Value(), originalPath)
-	}
-	// Focus should have moved forward
-	if d.focusIndex != 3 {
-		t.Errorf("focusIndex = %d, want 3 (should move to command)", d.focusIndex)
-	}
-}
-
-func TestNewDialog_MatrixCtrlNPPreservesSoftSelect(t *testing.T) {
-	d := NewNewDialog()
-	d.SetSize(80, 40)
-	d.Show()
-	d.SetPathSuggestions([]string{"/path/one", "/path/two"})
+	d.pathInput.SetValue("/preset/project")
+	d.pathInput.CursorEnd()
 	d.focusIndex = d.indexOf(focusPath)
 	d.updateFocus()
-	if !d.pathSoftSelected {
-		t.Fatal("pathSoftSelected should be true")
+	if d.pathSoftSelected || !d.pathInput.Focused() {
+		t.Fatal("Path must be directly editable")
 	}
-	originalPath := d.pathInput.Value()
-	for _, key := range []tea.KeyType{tea.KeyCtrlN, tea.KeyCtrlP} {
-		d, _ = d.Update(tea.KeyMsg{Type: key})
-		if !d.pathSoftSelected || d.suggestionNavigated || d.pathInput.Value() != originalPath {
-			t.Fatalf("%v changed soft-selected path or suggestion state", key)
-		}
-	}
-	d, _ = d.Update(tea.KeyMsg{Type: tea.KeyRight})
-	if d.pathSoftSelected || !d.suggestionsActive {
-		t.Fatal("Right should open the suggestions dropdown")
+	d.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	if d.pathInput.Value() != "/preset/projectx" {
+		t.Fatal("typing must edit the existing path")
 	}
 }
 
-func TestNewDialog_SoftSelect_ReactivatesOnRefocus(t *testing.T) {
+func TestNewDialog_PathEditor_BackspaceDeletesOneCharacter(t *testing.T) {
+	// matrix/hardened: Path now enters direct editing; Tab completes only.
 	d := NewNewDialog()
-	d.SetSize(80, 40)
 	d.Show()
-
-	d.focusIndex = 2
+	d.pathInput.SetValue("/preset/project")
+	d.pathInput.CursorEnd()
+	d.focusIndex = d.indexOf(focusPath)
 	d.updateFocus()
-
-	// Exit soft-select by typing
-	d, _ = d.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
-	if d.pathSoftSelected {
-		t.Fatal("should not be soft-selected after typing")
+	if d.pathSoftSelected || !d.pathInput.Focused() {
+		t.Fatal("Path must be directly editable")
 	}
+	d.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+	if d.pathInput.Value() != "/preset/projec" {
+		t.Fatal("Backspace must delete one character")
+	}
+}
 
-	// Set a real value back and Tab away (real dir so the issue #896 invalid-path
-	// guard doesn't keep focus on the field).
+func TestNewDialog_PathEditor_CursorMovementStaysInInput(t *testing.T) {
+	// matrix/hardened: Path now enters direct editing; Tab completes only.
+	d := NewNewDialog()
+	d.Show()
+	d.pathInput.SetValue("/preset/project")
+	d.pathInput.CursorEnd()
+	d.focusIndex = d.indexOf(focusPath)
+	d.updateFocus()
+	if d.pathSoftSelected || !d.pathInput.Focused() {
+		t.Fatal("Path must be directly editable")
+	}
+	d.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	d.Update(tea.KeyMsg{Type: tea.KeyRight})
+	if d.IsSuggestionsActive() || d.pathInput.Value() != "/preset/project" {
+		t.Fatal("cursor movement must stay in editor")
+	}
+}
+
+func TestNewDialog_PathEditor_TabWithoutMatchStays(t *testing.T) {
+	// matrix/hardened: Path now enters direct editing; Tab completes only.
+	d := NewNewDialog()
+	d.Show()
+	d.pathInput.SetValue("/preset/project")
+	d.pathInput.CursorEnd()
+	d.focusIndex = d.indexOf(focusPath)
+	d.updateFocus()
+	if d.pathSoftSelected || !d.pathInput.Focused() {
+		t.Fatal("Path must be directly editable")
+	}
+	d.Update(tea.KeyMsg{Type: tea.KeyTab})
+	if d.currentTarget() != focusPath || d.pathInput.Value() != "/preset/project" {
+		t.Fatal("Tab must stay in editor without a match")
+	}
+}
+
+func TestNewDialog_MatrixCtrlNPPreservesPathEditor(t *testing.T) {
+	// matrix/hardened: Path now enters direct editing; Tab completes only.
+	d := NewNewDialog()
+	d.Show()
+	d.pathInput.SetValue("/preset/project")
+	d.pathInput.CursorEnd()
+	d.focusIndex = d.indexOf(focusPath)
+	d.updateFocus()
+	if d.pathSoftSelected || !d.pathInput.Focused() {
+		t.Fatal("Path must be directly editable")
+	}
+	for _, key := range []tea.KeyType{tea.KeyCtrlN, tea.KeyCtrlP} {
+		d.Update(tea.KeyMsg{Type: key})
+	}
+	if !d.pathInput.Focused() || d.pathInput.Value() != "/preset/project" || d.IsSuggestionsActive() {
+		t.Fatal("Ctrl+N/P must stay inert")
+	}
+}
+
+func TestNewDialog_PathEditor_RefocusIsEditable(t *testing.T) {
+	// matrix/hardened: Path now enters direct editing; Tab completes only.
+	d := NewNewDialog()
+	d.Show()
+	d.pathInput.SetValue("/preset/project")
+	d.pathInput.CursorEnd()
+	d.focusIndex = d.indexOf(focusPath)
+	d.updateFocus()
+	if d.pathSoftSelected || !d.pathInput.Focused() {
+		t.Fatal("Path must be directly editable")
+	}
 	d.pathInput.SetValue(t.TempDir())
-	d, _ = d.Update(tea.KeyMsg{Type: tea.KeyTab}) // move to command
-
-	// Shift+Tab back to path
-	d, _ = d.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
-
-	if d.focusIndex != 2 {
-		t.Fatalf("focusIndex = %d, want 2", d.focusIndex)
-	}
-	if !d.pathSoftSelected {
-		t.Error("pathSoftSelected should reactivate when refocusing path field with value")
+	d.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	d.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
+	if d.currentTarget() != focusPath || d.pathSoftSelected || !d.pathInput.Focused() {
+		t.Fatal("refocus must return to editing")
 	}
 }
 
@@ -2510,32 +2448,28 @@ func TestNewDialog_Tab_StaysOnInvalidPath(t *testing.T) {
 	}
 }
 
-// TestNewDialog_Tab_AdvancesOnValidPath ensures the invalid-path guard from
+// TestNewDialog_PathEditor_EnterAdvancesOnValidPath ensures the invalid-path guard from
 // issue #896 (problem 1) does not regress the happy path: when the user has
 // typed a real directory, Tab still moves to the next field.
-func TestNewDialog_Tab_AdvancesOnValidPath(t *testing.T) {
+func TestNewDialog_PathEditor_EnterAdvancesOnValidPath(t *testing.T) {
+	// matrix/hardened: Path now enters direct editing; Tab completes only.
 	d := NewNewDialog()
 	d.Show()
-
-	for d.currentTarget() != focusPath {
-		d.focusIndex++
-		if d.focusIndex >= len(d.focusTargets) {
-			t.Fatal("focusPath not reachable")
-		}
-	}
+	d.pathInput.SetValue("/preset/project")
+	d.pathInput.CursorEnd()
+	d.focusIndex = d.indexOf(focusPath)
 	d.updateFocus()
-
-	tmp := t.TempDir()
-	d.pathSoftSelected = false
-	d.pathInput.Focus()
-	d.pathInput.SetValue(tmp)
-	d.pathInput.SetCursor(len(tmp))
-
-	startIdx := d.focusIndex
-	d, _ = d.Update(tea.KeyMsg{Type: tea.KeyTab})
-
-	if d.focusIndex == startIdx {
-		t.Errorf("Tab on valid path %q did not advance focus (still %d)", tmp, startIdx)
+	if d.pathSoftSelected || !d.pathInput.Focused() {
+		t.Fatal("Path must be directly editable")
+	}
+	d.pathInput.SetValue(t.TempDir())
+	d.Update(tea.KeyMsg{Type: tea.KeyTab})
+	if d.currentTarget() != focusPath {
+		t.Fatal("Tab must complete and stay even on an existing directory")
+	}
+	d.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if d.currentTarget() == focusPath {
+		t.Fatal("Enter must advance")
 	}
 }
 
@@ -2710,7 +2644,7 @@ func TestNewDialog_CtrlSInertWhileDropdownActive(t *testing.T) {
 	// Enter on an existing directory advances instead).
 	d.focusIndex = d.indexOf(focusPath)
 	d.updateFocus()
-	d, _ = d.Update(tea.KeyMsg{Type: tea.KeySpace})
+	d, _ = d.Update(tea.KeyMsg{Type: tea.KeyDown})
 	if !d.IsSuggestionsActive() {
 		t.Fatal("path dropdown should be active after Enter on Path")
 	}

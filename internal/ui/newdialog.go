@@ -210,6 +210,8 @@ type NewDialog struct {
 	inheritedSettings []settingDisplay // non-default Docker config values to display.
 	// Inline validation error displayed inside the dialog.
 	validationErr         string
+	pathCompletionSeq     uint64 // matrix/hardened: discard stale remote completions.
+	pathCompletionStatus  string
 	pathCycler            session.CompletionCycler // Path autocomplete state.
 	suggestionsLineOffset int                      // Content line where suggestions overlay should appear.
 	// Multi-repo mode.
@@ -560,6 +562,8 @@ func (d *NewDialog) ShowInGroup(groupPath, groupName, defaultPath string, conduc
 	d.parentGroupPath = groupPath
 	d.parentGroupName = groupName
 	d.visible = true
+	d.pathCompletionSeq++
+	d.pathCompletionStatus = ""
 	d.focusIndex = 0
 	d.validationErr = ""
 	d.defaultsStatus = ""
@@ -633,7 +637,7 @@ func (d *NewDialog) ShowInGroup(groupPath, groupName, defaultPath string, conduc
 	// scrolled the path tail out of view. Park it at the end explicitly, as
 	// every other pathInput prefill in this file does.
 	d.pathInput.CursorEnd()
-	d.pathSoftSelected = true // activate soft-select for pre-filled path.
+	d.pathSoftSelected = false // matrix/hardened: edit the prefilled path directly.
 	// Initialize tool options from global config.
 	d.geminiOptions.SetDefaults(false)
 	d.codexOptions.SetDefaults(false)
@@ -1095,7 +1099,11 @@ func (d *NewDialog) filterPathSuggestions() {
 	if query == "" {
 		d.pathSuggestions = d.allPathSuggestions
 	} else {
-		d.pathSuggestions = filterPathSuggestions(d.allPathSuggestions, query)
+		if d.remoteTarget {
+			d.pathSuggestions = fuzzyFilterPaths(d.allPathSuggestions, query)
+		} else {
+			d.pathSuggestions = filterPathSuggestions(d.allPathSuggestions, query)
+		}
 	}
 	// Cursor space: 0 = "Type custom", 1..N = pathSuggestions[0..N-1]
 	if d.pathSuggestionCursor > len(d.pathSuggestions) {
@@ -1961,13 +1969,9 @@ func (d *NewDialog) updateFocus() {
 	case focusName:
 		d.nameInput.Focus()
 	case focusPath:
-		if d.pathInput.Value() != "" {
-			d.pathSoftSelected = true
-			// Keep pathInput blurred — we render custom reverse-video style.
-			// pathInput.Focus() is called when soft-select exits.
-		} else {
-			d.pathInput.Focus()
-		}
+		// matrix/hardened: focus means editing, including prefilled paths.
+		d.pathInput.Focus()
+
 	case focusCommand:
 		if d.customCommandSelected() { // shell.
 			d.commandInput.Focus()
@@ -2095,7 +2099,10 @@ func (d *NewDialog) Update(msg tea.Msg) (*NewDialog, tea.Cmd) {
 				// Fields already applied via preview — just close picker.
 				d.showRecentPicker = false
 				d.recentSnapshot = nil
-				d.pathSoftSelected = true
+				d.pathSoftSelected = false
+				if d.currentTarget() == focusPath {
+					d.pathInput.Focus()
+				}
 				return d, nil
 			case "esc", "ctrl+r":
 				// Cancel — restore original form state.
@@ -2116,6 +2123,11 @@ func (d *NewDialog) Update(msg tea.Msg) (*NewDialog, tea.Cmd) {
 			d.recentSessionCursor = 0
 			d.previewRecentSession(d.recentSessions[0])
 			return d, nil
+		}
+
+		// matrix/hardened: Tab completes a directory and stays in Path.
+		if isNewDialogTabKey(msg) && (cur == focusPath || d.multiRepoEditing) {
+			return d, d.completePathDirectory()
 		}
 
 		// Issue #896 sub-bug 4: when the path-suggestions popup is visible
@@ -2192,7 +2204,13 @@ func (d *NewDialog) Update(msg tea.Msg) (*NewDialog, tea.Cmd) {
 				d.pathInput.Focus()
 				return d, nil
 			}
-			return d, nil // consume all other keys while dropdown is active
+			// matrix/hardened: typing exits browse into the path editor.
+			if msg.Type == tea.KeyRunes || msg.Type == tea.KeyBackspace || msg.Type == tea.KeyDelete {
+				d.DismissSuggestions()
+				d.pathInput.Focus()
+			} else {
+				return d, nil
+			}
 		}
 
 		if d.modelSuggestionActive && d.currentTarget() == focusModel {
@@ -2271,54 +2289,6 @@ func (d *NewDialog) Update(msg tea.Msg) (*NewDialog, tea.Cmd) {
 		}
 
 		if isNewDialogTabKey(msg) {
-			// On path field (or multi-repo path editing): trigger autocomplete or cycle through matches.
-			isPathEditing := cur == focusPath || d.multiRepoEditing
-			if isPathEditing && !d.remoteTarget {
-				path := d.pathInput.Value()
-				info, err := os.Stat(path)
-				isDir := err == nil && info.IsDir()
-				isPartial := !isDir || strings.HasSuffix(path, string(os.PathSeparator))
-
-				if d.pathCycler.IsActive() || isPartial {
-					if d.pathCycler.IsActive() {
-						d.pathInput.SetValue(d.pathCycler.Next())
-						d.pathInput.SetCursor(len(d.pathInput.Value()))
-						return d, nil
-					}
-					matches, err := session.GetDirectoryCompletions(path)
-					// matrix/hardened: a unique match descends like a shell
-					// (append "/" and list its subdirectories) instead of
-					// arming a one-entry cycler that re-offers the same
-					// directory on every Tab, which left completion stuck.
-					if err == nil && len(matches) == 1 {
-						d.pathCycler.Reset()
-						d.pathInput.SetValue(withTrailingPathSep(matches[0]))
-						d.pathInput.SetCursor(len(d.pathInput.Value()))
-						d.filterPathSuggestions()
-						return d, nil
-					}
-					if err == nil && len(matches) > 0 {
-						d.pathCycler.SetMatches(matches)
-						d.pathInput.SetValue(d.pathCycler.Next())
-						d.pathInput.SetCursor(len(d.pathInput.Value()))
-						return d, nil
-					}
-				}
-			}
-
-			// On path field: apply selected suggestion ONLY if user explicitly navigated.
-			// Cursor 0 = "Type custom" (no-op); cursor 1..N maps to pathSuggestions[0..N-1].
-			if isPathEditing && d.suggestionNavigated && d.pathSuggestionCursor > 0 {
-				suggestionIdx := d.pathSuggestionCursor - 1
-				if suggestionIdx < len(d.pathSuggestions) {
-					d.pathInput.SetValue(d.pathSuggestions[suggestionIdx])
-					d.pathInput.SetCursor(len(d.pathInput.Value()))
-				}
-			}
-			// When editing a multi-repo path, Tab is only for autocomplete — don't move focus.
-			if d.multiRepoEditing {
-				return d, nil
-			}
 			if cur == focusModel {
 				if d.modelNavigated && d.modelSuggestionCursor > 0 {
 					d.ApplyHighlightedModelSuggestion()
@@ -2331,23 +2301,6 @@ func (d *NewDialog) Update(msg tea.Msg) (*NewDialog, tea.Cmd) {
 			// via ↓.
 			if cur == focusOptions && d.toolOptions != nil && !d.toolOptions.AtBottom() {
 				return d, d.toolOptions.Update(msg)
-			}
-			// Issue #896 (problem 1): don't advance focus from a non-empty path
-			// that doesn't point to an existing directory. Tab should stick to
-			// the input until the user has a usable path; otherwise it silently
-			// jumps to the agent selector and the typed path is left dangling.
-			if isPathEditing && !d.remoteTarget {
-				v := strings.Trim(strings.TrimSpace(d.pathInput.Value()), "'\"")
-				if d.remoteTarget && v != "" {
-					d.moveFocus(1)
-					return d, nil
-				}
-				if v != "" {
-					expanded := session.ExpandPath(v)
-					if info, err := os.Stat(expanded); err != nil || !info.IsDir() {
-						return d, nil
-					}
-				}
 			}
 			// Move to next field.
 			d.moveFocus(1)
@@ -2749,6 +2702,8 @@ func (d *NewDialog) Update(msg tea.Msg) (*NewDialog, tea.Cmd) {
 		oldValue := d.pathInput.Value()
 		d.pathInput, cmd = d.pathInput.Update(msg)
 		if d.pathInput.Value() != oldValue {
+			d.pathCompletionSeq++
+			d.pathCompletionStatus = ""
 			d.suggestionNavigated = false
 			d.suggestionsActive = false
 			d.suggestionsHidden = false // typing re-opens the dropdown
@@ -3441,7 +3396,10 @@ func (d *NewDialog) View() string {
 			// Issue #1536: on a path that resolves to an existing directory,
 			// Enter advances to the next field; otherwise it opens the browse
 			// list. Advertise both so the typed-custom-path flow is discoverable.
-			helpText = "Tab autocomplete │ Enter next/browse │ Esc cancel"
+			helpText = "Tab complete │ Enter next/browse │ Shift+Tab back │ Esc cancel"
+			if d.pathCompletionStatus != "" {
+				helpText = d.pathCompletionStatus + " │ " + helpText
+			}
 		}
 	} else if cur == focusBranch {
 		if d.branchPicker != nil && d.branchPicker.IsVisible() {
@@ -3709,7 +3667,7 @@ func (d *NewDialog) renderSuggestionsDropdown(bounds ...int) string {
 	if d.suggestionsActive {
 		footerText = " ↑/↓ navigate │ Space select │ Enter select & close "
 	} else {
-		footerText = " →/Space browse "
+		footerText = " Tab complete │ ↓ browse "
 	}
 	b.WriteString("\n")
 	b.WriteString(lipgloss.NewStyle().Foreground(ColorBorder).Background(menuBg).Render(footerText))

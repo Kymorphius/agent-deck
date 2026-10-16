@@ -48,10 +48,10 @@ func TestMatrixPathCompletion_UniqueMatchDescends(t *testing.T) {
 		t.Fatalf("GetValues path = %q, want trailing separator dropped", path)
 	}
 
-	// A leaf directory has nothing left to complete: Tab moves on.
+	// matrix/hardened: even a leaf stays in the editor; Enter moves on.
 	d, _ = d.Update(tea.KeyMsg{Type: tea.KeyTab})
-	if d.currentTarget() == focusPath {
-		t.Fatal("Tab on a complete leaf directory should leave the path field")
+	if d.currentTarget() != focusPath {
+		t.Fatal("Tab must remain in Path")
 	}
 }
 

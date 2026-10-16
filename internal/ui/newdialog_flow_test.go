@@ -167,8 +167,8 @@ func TestNewSessionFlow_HomeEnterOnEffortDoesNotCreate(t *testing.T) {
 func TestNewSessionFlow_EnterOnPrefilledPathAdvances(t *testing.T) {
 	d := flowDialog(t, "claude")
 	flowFocus(t, d, focusPath)
-	if !d.pathSoftSelected {
-		t.Fatal("precondition: a pre-filled path lands in soft-select")
+	if d.pathSoftSelected || !d.pathInput.Focused() {
+		t.Fatal("pre-filled path must be editable")
 	}
 	d = pressKey(d, tea.KeyEnter)
 	if d.IsSuggestionsActive() {

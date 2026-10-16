@@ -488,6 +488,7 @@ func TestSSHRunnerRun_InterruptedMutatingVerbIsNotReexecuted(t *testing.T) {
 
 func TestRemoteVerbReadOnly(t *testing.T) {
 	readOnly := [][]string{
+		{"__complete-path", "/tmp/partial"}, // matrix/hardened: remote TUI directory listing.
 		{"list", "--json"}, {"ls"}, {"accounts", "--json"}, {"group", "list", "--json"},
 		{"costs", "summary", "--json"}, {"mcp", "list", "--quiet"}, {"skill", "list"},
 		{"session", "output", "s1", "--json"}, {"session", "pane", "s1"}, {"session", "show", "s1"}, {"version"},

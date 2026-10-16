@@ -45,7 +45,7 @@ import (
 )
 
 // matrix/hardened: identifies our hardened build.
-var Version = "1.16.26+matrix.74" // matrix/hardened: recognize terminal ancestry through privileged login; overridden via -ldflags.
+var Version = "1.16.26+matrix.75" // matrix/hardened: direct Path editing and target directory completion; overridden via -ldflags.
 
 // Table column widths for list command output
 const (
@@ -428,6 +428,21 @@ func main() {
 			return
 		case "completion":
 			handleCompletion(args[1:])
+			return
+		// matrix/hardened: host-local directory completion for remote TUI paths.
+		case "__complete-path":
+			if len(args) != 2 {
+				fmt.Fprintln(os.Stderr, "expected one path")
+				os.Exit(2)
+			}
+			matches, err := session.GetDirectoryCompletions(args[1])
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+			if err := json.NewEncoder(os.Stdout).Encode(matches); err != nil {
+				os.Exit(1)
+			}
 			return
 		case "__complete":
 			handleComplete(profile, args[1:])
