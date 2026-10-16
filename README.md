@@ -358,7 +358,8 @@ Running many sessions? Socket pooling shares MCP processes across all sessions v
 
 ### Search
 
-Press `/` to fuzzy-search across all sessions. Filter by status with `!` (running), `@` (waiting), `#` (idle), `&` (error). Press `$` for the Cost Dashboard and `G` for global search across all Claude conversations.
+<!-- matrix/hardened: local search includes groups and separator-aware fuzzy matching. -->
+Press `/` to search managed sessions by title, group, project path, or tool. Spaces and punctuation are interchangeable (`agent deck` matches `agent-deck`), and ordered abbreviations such as `adk` also match. Literal matches rank first, followed by separator-normalized matches and then fuzzy matches. `Alt+/` restricts the same search to the current group's direct sessions. Type `waiting`, `running`, `idle`, `error`, or `stopped` to filter by status. `G` searches all indexed conversation content; `Alt+R` searches content only in managed sessions.
 
 <!-- matrix/hardened: make local-search query retention an explicit preference. -->
 Local search (`/` and `Alt+/`) clears the previous query each time it opens by default. To keep the last query, open **Settings (`S`) → LOCAL SEARCH → Clear search on open (/)** and turn it off with **Space**, or set `[ui].clear_search_on_open = false`. The change takes effect on the next search without restarting.

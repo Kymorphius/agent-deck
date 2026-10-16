@@ -49,7 +49,8 @@ type Search struct {
 // NewSearch creates a new search overlay
 func NewSearch() *Search {
 	ti := textinput.New()
-	ti.Placeholder = "Search sessions..."
+	// matrix/hardened: expose the fields accepted by local fuzzy search.
+	ti.Placeholder = "Fuzzy: title, group, project, tool"
 	ti.Focus()
 	ti.CharLimit = 100
 	ti.Width = 50
@@ -333,7 +334,8 @@ func renderSearchResult(item *session.Instance, selected bool, width int) string
 func searchOverlayWidth(screenWidth int) int {
 	const preferred = 60
 	if screenWidth > 0 && screenWidth < preferred+10 {
-		return max(screenWidth-10, 30)
+		// matrix/hardened: include the outer border in a 30-column terminal.
+		return min(max(screenWidth-10, 30), max(20, screenWidth-2))
 	}
 	return preferred
 }

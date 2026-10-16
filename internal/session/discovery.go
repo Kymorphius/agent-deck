@@ -145,14 +145,13 @@ func GroupByProject(instances []*Instance) map[string][]*Instance {
 	return groups
 }
 
-// FilterByQuery filters sessions by title, project path, tool, or status
-// Supports status filters: "waiting", "running", "idle", "error"
+// FilterByQuery filters sessions by title, project path, group, tool, or status.
+// Supports status filters: "waiting", "running", "idle", "error", "stopped".
 func FilterByQuery(instances []*Instance, query string) []*Instance {
+	query = strings.ToLower(strings.TrimSpace(query))
 	if query == "" {
 		return instances
 	}
-
-	query = strings.ToLower(strings.TrimSpace(query))
 
 	// Check for status filters
 	statusFilters := map[string]Status{
@@ -168,25 +167,17 @@ func FilterByQuery(instances []*Instance, query string) []*Instance {
 		return filterByStatus(instances, status)
 	}
 
-	// Regular fuzzy search on title, path, tool
-	filtered := make([]*Instance, 0)
-
-	for _, inst := range instances {
-		if strings.Contains(strings.ToLower(inst.Title), query) ||
-			strings.Contains(strings.ToLower(inst.ProjectPath), query) ||
-			strings.Contains(strings.ToLower(inst.Tool), query) {
-			filtered = append(filtered, inst)
-		}
-	}
-
-	return filtered
+	// matrix/hardened: include groups and separator-insensitive fuzzy names,
+	// while ranking literal matches first and keeping state words exact.
+	return matrixFilterSessionSearch(instances, query)
 }
 
 // filterByStatus returns only instances with the specified status
 func filterByStatus(instances []*Instance, status Status) []*Instance {
 	filtered := make([]*Instance, 0)
 	for _, inst := range instances {
-		if inst.Status == status {
+		// matrix/hardened: an incomplete list must not panic during search.
+		if inst != nil && inst.Status == status {
 			filtered = append(filtered, inst)
 		}
 	}

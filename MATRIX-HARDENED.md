@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.75`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.76`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -66,7 +66,7 @@
 - `internal/session/claude_hooks.go`：`isAgentDeckHookCommand` 的判断规则：先去掉开头的 `VAR=值`，再要求第二个词是 `hook-handler`、程序名的文件名部分是 `agent-deck`。`RemoveClaudeHooks` 会扫描全部事件，并做 UTC 时间戳备份（约 387–414 行）。
 - `cmd/agent-deck/main.go`（约 4845、5070 行）：`agent-deck uninstall` 会移除这些钩子。`uninstall.sh` 第 253 行附近的 jq 过滤用的是同一套规则（正则），写回时用 `cat >` 保持软链接和权限。
 
-**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.72`。
+**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.76`。
 
 **测试**：以 `_hardened_test.go` 结尾的文件、`update_check_disable_test.go`、`update_timer_wiring_test.go` 等是新增或调整过的测试；`testdata/goldens/*` 里的快照已经按加固后的输出更新。
 
@@ -680,3 +680,13 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 - 远程结果按对话框实例、打开代次、输入修订、设备与当前焦点核对，防止慢响应覆盖后续输入。
 - 验证覆盖项目历史不抢占目录前缀、逐级补全、无匹配仍留在编辑器、直接编辑与重新聚焦、远程成功/失败/过期响应和既有创建流程。
 - **matrix/hardened:** 安装脚本支持交叉构建到隔离暂存目录，跳过在构建机执行异平台程序，版本及目录接口由目标机器读回验证。
+
+## 64. 本地搜索支持分组与模糊名称
+
+`1.16.26+matrix.76` 修复 `/` 搜不到分组名、`agent deck` 无法匹配 `agent-deck` 的问题。`Alt+/` 和 Recall 不可用时的本地搜索回退共用同一匹配逻辑。
+
+- **matrix/hardened:** 标题、分组路径、项目路径、工具各自独立匹配；空分组按默认 `My Sessions` 处理。Unicode 空白与标点归一化，支持空格、连字符、下划线的等价写法，以及 `adk` 这样的顺序缩写。
+- **matrix/hardened:** 字面连续匹配优先，其次为归一化连续匹配，再按模糊分数排序；同质量结果保留输入顺序，不修改原列表。模糊路径只匹配项目末级名称及各分组段，避免在长目录链中凑出缩写。
+- 保留 `waiting/running/idle/error/stopped` 的精确状态过滤及打开时清空设置。纯标点查询仍按字面处理；全空白查询返回原列表。
+- 输入提示和帮助说明可搜字段；30 列窗口将外框纳入宽度限制。相关本地搜索快照只更新提示文字。
+- 验证使用第 4 节隔离入口：`TestMatrixSessionSearch*` 覆盖分组、默认组、Unicode、缩写、符号、排序与误匹配；`TestMatrixLocalSearchMatching*` 经真实 `/` 按键路由验证输入、刷新、上下选择、Enter 定位与 30/60/80/120 列布局。安装后列表按 `Ctrl+T` 重载，AI 会话无需重启。
