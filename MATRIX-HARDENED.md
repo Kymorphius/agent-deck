@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.82`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.83`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -740,4 +740,12 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 - **matrix/hardened:** 只读，agent-deck 不写这个字段。卡片末尾显示 `·PP-12 进行中`，拆分派发显示 `·PP-12 2/3 完成 · 1 待验收`，详情行加上同样的摘要。issue 处于 in_progress 而任务仍是待规划/待办时，卡片显示在进行中列，任务状态不变。已派给 Multica 的任务进入默认视图。格式不认识的关联值一律忽略。
 - 在 agent-deck 里验收（`x`）或退回（`b`）只改 World Store；World Store 的同步脚本（launchd，每 2 分钟）随后把结果带到 Multica。
 - 验证：`internal/worldstore`、`internal/ui -run Kanban` 通过；真实环境用测试任务走通派发 → Multica 待验收 → `tasks accept` → Multica 完成。
+
+## 71. launch 的 `--env-file`
+
+`1.16.26+matrix.83` 给 `agent-deck launch` 加 `--env-file /绝对路径`，供 Multica 的 agent-deck 执行器（personal-panel 三方看板 P4）把任务令牌交给会话，而不进 argv 或持久化的命令。
+
+- **matrix/hardened:** 文件在所有已配置的环境来源（全局 env_files、init 脚本、工具 env_file、group/conductor/tool inline env、restart env）之后以 `[ -f ] && source` 读入，所以它的值优先；文件已被所有者删除时不报错。只接受绝对路径、普通文件、权限不含 group/other（`chmod 600`），路径里不能有引号、`$`、反引号、反斜杠或换行。
+- 与 `--inherit-telegram-env` 一样只作用于首次启动，不存入会话存储：之后 restart 不会再读，因为任务令牌在任务结束后本就失效。
+- 验证：`internal/session` 的 `TestBuildEnvSourceCommand_EnvFileSourcedLast`、`cmd/agent-deck` 的 `TestValidateLaunchEnvFile`。
 
