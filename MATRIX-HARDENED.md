@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.77`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.78`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -698,3 +698,7 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 - **matrix/hardened:** 隐藏的 `__complete-path` 不在 remote-agent 命令注册表中。TUI 的持久通道会拒绝它，而未启用通道的独立 CLI 请求可成功。此只读目录请求明确绕过持久通道，经现有 SSH exec 执行，兼容已运行的远程 agent。
 - 错误提示保留经过控制字符清理、长度限制的实际原因，完整错误进入 UI 日志；超时单独标明。
 - 验证覆盖已连接模拟通道时列表仍走通道、补全独立执行；两台真实远程主机的已连接通道复现原错误并验证修复，相关 session/UI race 测试通过。
+
+## 66. Codex 6.1 Sol 模型候选
+
+`1.16.26+matrix.78` 将 `gpt-6.1-sol` 加入 Codex 内置模型目录，避免 CLI 模型探测不可用时，新建界面的回退列表遗漏它。探测列表仍优先，内置目录继续参与合并去重；模型字段允许直接输入完整 ID。
