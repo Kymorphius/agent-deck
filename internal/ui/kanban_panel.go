@@ -10,6 +10,8 @@ package ui
 import (
 	"context"
 	"fmt"
+	"os/exec"
+	"runtime"
 	"strings"
 	"time"
 
@@ -40,6 +42,8 @@ type kanbanEnv struct {
 	execCategory string
 	// send queues a message for a session; nil means `agent-deck session send`.
 	send func(ctx context.Context, sessionID, text string) error
+	// open hands a URL to the system browser; nil means open / xdg-open.
+	open func(url string) error
 }
 
 type kanbanConfirm struct {
@@ -370,6 +374,8 @@ func (p *KanbanPanel) Update(msg tea.Msg) (*KanbanPanel, tea.Cmd) {
 		p.rebuild(selected)
 	case "s", "p", "c", "x", "e", "L", "U", "n", "v", "b":
 		p.startConfirm(k)
+	case "o": // matrix/hardened: open the task's Multica issue
+		p.openMultica()
 	case "enter":
 		return p, p.jump()
 	}
@@ -568,6 +574,7 @@ func (p *KanbanPanel) execute() tea.Cmd {
 	p.busy, p.err = true, ""
 	// Captured here: the closure runs off the UI goroutine and must not touch p.
 	env, owner, task, linksReady, sessions := *p.env, p.board.Owner, c.task, p.board.LinksReady, p.liveLinks(c.task)
+
 	var ctxSession kanbanSession
 	if p.context != nil {
 		ctxSession = *p.context
@@ -578,6 +585,10 @@ func (p *KanbanPanel) execute() tea.Cmd {
 		done := func(err error, notice string) tea.Msg {
 			if err != nil {
 				return kanbanWrittenMsg{err: err}
+			}
+			// matrix/hardened: a decision on a dispatched task reaches Multica now.
+			if task.Multica != nil && (c.kind == "done" || c.kind == "review") {
+				env.client.TriggerMulticaSync()
 			}
 			return kanbanWrittenMsg{notice: notice}
 		}
@@ -599,6 +610,9 @@ func (p *KanbanPanel) execute() tea.Cmd {
 		case "reject":
 			if err := env.client.SetStatus(bg, owner, task, worldstore.StatusTodo); err != nil {
 				return kanbanWrittenMsg{err: err}
+			}
+			if task.Multica != nil { // matrix/hardened: the send-back reaches Multica now
+				env.client.TriggerMulticaSync()
 			}
 			reason := strings.TrimSpace(c.reason)
 			if reason == "" || len(sessions) == 0 {
@@ -653,6 +667,37 @@ func (p *KanbanPanel) execute() tea.Cmd {
 		}
 		return kanbanWrittenMsg{}
 	}
+}
+
+// openMultica opens the selected task's Multica issue in the browser.
+func (p *KanbanPanel) openMultica() {
+	t := p.selected()
+	switch {
+	case t == nil:
+		p.notice = "No task selected."
+		return
+	case t.Multica == nil:
+		p.notice = "This task has not been dispatched to Multica."
+		return
+	case !strings.HasPrefix(t.Multica.Root.URL, "http://") && !strings.HasPrefix(t.Multica.Root.URL, "https://"):
+		p.notice = "World Store did not record a web address for " + t.Multica.Root.Identifier + "."
+		return
+	}
+	open := p.env.open
+	if open == nil {
+		open = func(url string) error {
+			name := "xdg-open"
+			if runtime.GOOS == "darwin" {
+				name = "open"
+			}
+			return exec.Command(name, url).Start()
+		}
+	}
+	if err := open(t.Multica.Root.URL); err != nil {
+		p.err = "Could not open the browser: " + err.Error()
+		return
+	}
+	p.notice = "Opened " + t.Multica.Root.Identifier + " in the browser."
 }
 
 // liveLinks are the task's linked sessions that exist in this deck.
@@ -1001,7 +1046,7 @@ func (p *KanbanPanel) renderFooter(inner int) string {
 	default:
 		status = ""
 	}
-	keys := "[a] All/AI  [e] On/off board  [s] Start  [p] Pause  [c] Resume  [v] To review  [x] Done/Accept  [b] Send back  [L/U] Link  [n] New session  [Enter] Go to session  [/] Filter  [r] Reload  [Esc] Close"
+	keys := "[a] All/AI  [e] On/off board  [s] Start  [p] Pause  [c] Resume  [v] To review  [x] Done/Accept  [b] Send back  [o] Open issue  [L/U] Link  [n] New session  [Enter] Go to session  [/] Filter  [r] Reload  [Esc] Close"
 	if p.confirm != nil && p.confirm.kind == "reject" {
 		keys = "Type the reason (optional)  [Enter] Send back  [Esc] Cancel"
 	} else if p.confirm != nil {
