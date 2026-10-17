@@ -999,8 +999,12 @@ func (s *Searcher) Status(ctx context.Context) (Status, error) {
 	// file within 30 days: the index is what survives.
 	cut := time.Now().Add(30 * 24 * time.Hour).UnixNano()
 	_ = db.QueryRowContext(ctx, `SELECT COALESCE(sum(size),0) FROM source WHERE retention_d>0 AND state IN (0,1) AND mtime_ns + retention_d*86400*1000000000 < ?`, cut).Scan(&st.ExpiringBytes)
-	if ib, err := s.st.InitialBackfillStatus(); err == nil {
+	// matrix/hardened: retain cancellation and the reader pool through the
+	// final status query even while a concurrent sweep owns the writer.
+	if ib, err := s.st.InitialBackfillStatusContext(ctx); err == nil {
 		st.InitialBackfill = ib
+	} else if ctx.Err() != nil {
+		return st, ctx.Err()
 	}
 	return st, nil
 }

@@ -604,8 +604,25 @@ bounded sweep pass in a background command and shows a staleness line
 ("index behind by N source(s) / M MB; catching up in the background",
 then "index swept 3m ago"); while anything was deferred the overlay keeps
 running bounded passes, one second apart and through the busy/load gate,
-so the catch-up never holds a core or competes with a running agent. The
-overlay is the terminal width less a margin, capped at 160 columns, and
+so the catch-up never holds a core or competes with a running agent.
+
+**matrix/hardened:** press `Ctrl+R` or `F5` inside Recall to refresh without
+closing the overlay. This cancels the previous requests, clears cached
+previews, runs a new bounded sweep, and searches the current keywords again.
+The query, managed-only scope and selected conversation are retained. Each
+completed batch makes newly indexed content searchable even while older
+history is still catching up; an in-flight search finishes before a follow-up
+read so repeated batches cannot keep cancelling it. Source discovery no longer
+uses up the entire 150 ms parsing window before any new content can be read.
+Reads receive a five-second timeout and sweeps a ten-second cancellation
+deadline; some older ingest SQL still relies on SQLite's busy timeout.
+Closing or refreshing discards late results and
+timers from the previous cycle. Manual refresh uses the same single ungated
+pass as opening Recall; brief sweep-lock contention gets up to three paced
+retries, and further catch-up still uses the busy/load gate. Large backlogs
+can require multiple passes; the staleness line continues to show pending work.
+
+The overlay is the terminal width less a margin, capped at 160 columns, and
 fits 80. The catch-up tick is routed by the TUI's message loop whatever
 overlay is on top, and closing the overlay ends the chain. With
 `[recall] enabled = false`, `G` falls back to the local title search and

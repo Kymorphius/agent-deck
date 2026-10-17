@@ -4,6 +4,7 @@
 package store
 
 import (
+	"context"
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
@@ -327,9 +328,16 @@ type InitialBackfillStatus struct {
 // as unchanged (cheap) and persists a real marker so this fallback is never
 // consulted again for this index.
 func (s *Store) InitialBackfillStatus() (InitialBackfillStatus, error) {
+	return s.InitialBackfillStatusContext(context.Background())
+}
+
+// InitialBackfillStatusContext reads the last committed marker without waiting
+// for an in-process sweep's writer connection. matrix/hardened: TUI status
+// reads must remain cancelable while a refresh holds the single writer.
+func (s *Store) InitialBackfillStatusContext(ctx context.Context) (InitialBackfillStatus, error) {
 	var status InitialBackfillStatus
 	var state, doneAt, done, pending, walked, total, unreadable sql.NullString
-	row := s.W.QueryRow(`SELECT
+	row := s.R.QueryRowContext(ctx, `SELECT
 		(SELECT v FROM meta WHERE k=?),
 		(SELECT v FROM meta WHERE k=?),
 		(SELECT v FROM meta WHERE k=?),
@@ -369,7 +377,7 @@ func (s *Store) InitialBackfillStatus() (InitialBackfillStatus, error) {
 		return status, nil
 	}
 	var n int
-	if err := s.W.QueryRow(`SELECT count(*) FROM session`).Scan(&n); err != nil {
+	if err := s.R.QueryRowContext(ctx, `SELECT count(*) FROM session`).Scan(&n); err != nil {
 		return status, err
 	}
 	status.State = InitialBackfillPending

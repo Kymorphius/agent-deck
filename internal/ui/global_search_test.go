@@ -222,7 +222,7 @@ func TestGlobalSearch_CatchUpIsPaced(t *testing.T) {
 	gs.SetSource(src)
 	gs.SetSize(120, 40)
 	gs.Show()
-	_, cmd := gs.Update(recallRefreshMsg{res: ingest.Result{Deferred: 4, DeferredBytes: 1 << 20}})
+	_, cmd := gs.Update(recallRefreshMsg{epoch: gs.epoch, res: ingest.Result{Deferred: 4, DeferredBytes: 1 << 20}})
 	if cmd == nil {
 		t.Fatal("a deferred pass must schedule the continuation")
 	}
@@ -233,7 +233,7 @@ func TestGlobalSearch_CatchUpIsPaced(t *testing.T) {
 		t.Fatalf("stale line %q sweeping %v", gs.staleLine(), gs.sweeping)
 	}
 	// The tick fires: one gated pass.
-	_, cmd = gs.Update(recallCatchUpMsg{})
+	_, cmd = gs.Update(recallCatchUpMsg{epoch: gs.epoch})
 	if cmd == nil {
 		t.Fatal("the tick must run the gated pass")
 	}
@@ -245,11 +245,11 @@ func TestGlobalSearch_CatchUpIsPaced(t *testing.T) {
 	}
 	// A tick that outlives the overlay (closed, or the chain ended) is inert.
 	gs.sweeping = false
-	if _, cmd := gs.Update(recallCatchUpMsg{}); cmd != nil {
+	if _, cmd := gs.Update(recallCatchUpMsg{epoch: gs.epoch}); cmd != nil {
 		t.Fatal("no pass after the chain ended")
 	}
 	gs.Hide()
-	if _, cmd := gs.Update(recallCatchUpMsg{}); cmd != nil {
+	if _, cmd := gs.Update(recallCatchUpMsg{epoch: gs.epoch}); cmd != nil {
 		t.Fatal("no pass after the overlay closed")
 	}
 }
@@ -269,7 +269,7 @@ func TestGlobalSearch_PreviewErrorIsShown(t *testing.T) {
 	if !strings.Contains(ansi.Strip(gs.View()), "loading turns...") {
 		t.Fatal("before the preview answers the pane says it is loading")
 	}
-	gs.Update(recallPreviewMsg{sessID: 41, err: query.ErrNotFound})
+	gs.Update(recallPreviewMsg{epoch: gs.epoch, sessID: 41, err: query.ErrNotFound})
 	frame := ansi.Strip(gs.View())
 	if strings.Contains(frame, "loading turns...") || !strings.Contains(frame, "preview failed: recall: no such session") {
 		t.Fatalf("frame:\n%s", frame)
@@ -282,7 +282,7 @@ func TestGlobalSearch_RefreshSkippedAndSearchErrorAreShown(t *testing.T) {
 	gs.SetSource(src)
 	gs.SetSize(120, 40)
 	gs.Show()
-	gs.Update(recallRefreshMsg{err: errors.New("another sweep is running")})
+	gs.Update(recallRefreshMsg{epoch: gs.epoch, err: errors.New("another sweep is running")})
 	if !strings.Contains(gs.staleLine(), "another sweep is running") {
 		t.Fatalf("stale line %q", gs.staleLine())
 	}
@@ -364,27 +364,27 @@ func TestGlobalSearchGolden(t *testing.T) {
 	gs.SetSource(src)
 	gs.SetSize(140, 40)
 	gs.Show()
-	gs.Update(recallStatusMsg{status: src.status})
+	gs.Update(recallStatusMsg{revision: gs.statusRevision, epoch: gs.epoch, status: src.status})
 	assertOverlayGolden(t, gs, "recall_search_open.golden")
 
-	gs.Update(recallRefreshMsg{res: ingest.Result{}})
+	gs.Update(recallRefreshMsg{epoch: gs.epoch, res: ingest.Result{}})
 	gs.input.SetValue("clock skew")
 	gs.query = "clock skew"
 	res, _ := src.Search(context.Background(), "clock skew", recallResultLimit)
 	gs.Update(globalSearchResultsMsg{query: "clock skew", generation: gs.generation, res: res})
-	gs.Update(recallPreviewMsg{sessID: 41, detail: src.detail[41]})
+	gs.Update(recallPreviewMsg{epoch: gs.epoch, sessID: 41, detail: src.detail[41]})
 	gs.MarkInAgentDeck([]*session.Instance{{ID: "auth-fix"}})
 	for i := range gs.results {
 		gs.results[i].EndedAt = time.Time{} // relative dates would drift
 	}
 	assertOverlayGolden(t, gs, "recall_search_results.golden")
 
-	gs.Update(recallRefreshMsg{res: ingest.Result{Deferred: 3, DeferredBytes: 152 << 20}})
+	gs.Update(recallRefreshMsg{epoch: gs.epoch, res: ingest.Result{Deferred: 3, DeferredBytes: 152 << 20}})
 	assertOverlayGolden(t, gs, "recall_search_behind.golden")
 
 	// The same results screen at the three widths the task named: the
 	// overlay follows the terminal below its 160-column cap and fits 80.
-	gs.Update(recallRefreshMsg{res: ingest.Result{}})
+	gs.Update(recallRefreshMsg{epoch: gs.epoch, res: ingest.Result{}})
 	for _, w := range []int{200, 120, 80} {
 		gs.SetSize(w, 40)
 		assertOverlayGolden(t, gs, fmt.Sprintf("recall_search_results_%d.golden", w))
@@ -448,7 +448,7 @@ func TestHome_CatchUpTickAdvancesTheIndexWithOverlayOpen(t *testing.T) {
 	}
 	// The tick fires and arrives at Home: one gated pass, its status re-read.
 	src.status = query.Status{Sessions: 2, Messages: 48, LastSweep: 0}
-	model, cmd = h.Update(recallCatchUpMsg{})
+	model, cmd = h.Update(recallCatchUpMsg{epoch: h.globalSearch.epoch})
 	h = model.(*Home)
 	if cmd == nil {
 		t.Fatalf("Home dropped recallCatchUpMsg (overlay visible=%v sweeping=%v)", h.globalSearch.IsVisible(), h.globalSearch.sweeping)
@@ -469,7 +469,7 @@ func TestHome_CatchUpTickAdvancesTheIndexWithOverlayOpen(t *testing.T) {
 	if h.globalSearch.IsVisible() || h.globalSearch.sweeping {
 		t.Fatalf("after Esc: visible=%v sweeping=%v", h.globalSearch.IsVisible(), h.globalSearch.sweeping)
 	}
-	if _, cmd := h.Update(recallCatchUpMsg{}); cmd != nil {
+	if _, cmd := h.Update(recallCatchUpMsg{epoch: h.globalSearch.epoch}); cmd != nil {
 		t.Fatal("a tick after Esc must not schedule a pass")
 	}
 	if len(src.refreshes) != 2 {

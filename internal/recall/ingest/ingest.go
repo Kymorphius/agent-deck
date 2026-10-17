@@ -102,6 +102,12 @@ type Options struct {
 	Usage    UsageSink
 	// Budget bounds one Sweep (nil: unlimited).
 	Budget *reader.Budget
+	// ParseBudgetAfterDiscovery, when positive with a non-nil Budget, starts
+	// its wall deadline after discovery while retaining the byte cap.
+	// matrix/hardened: interactive sweeps must make parsing progress even
+	// when listing a large corpus already takes longer than 150 ms. Callers
+	// bound discovery itself with ctx; batch callers keep the original budget.
+	ParseBudgetAfterDiscovery time.Duration
 	// PerSourceBytes caps how much of one file a single pass parses; the
 	// rest continues next pass (0: unlimited).
 	PerSourceBytes int64
@@ -245,6 +251,11 @@ func (in *Ingester) Sweep(ctx context.Context) (Result, error) {
 	cands, err := in.discover(ctx, &res, byKey, byPath)
 	if err != nil {
 		return res, err
+	}
+	// matrix/hardened: the interactive parse window starts only once the
+	// ledger and full source walk are ready, so repeated refreshes can advance.
+	if in.opts.Budget != nil && in.opts.ParseBudgetAfterDiscovery > 0 {
+		in.opts.Budget.Deadline = time.Now().Add(in.opts.ParseBudgetAfterDiscovery)
 	}
 	in.prioritizeQueued(&res, cands)
 	touched := map[int64]bool{}

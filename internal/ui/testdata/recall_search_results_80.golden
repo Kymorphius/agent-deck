@@ -18,7 +18,7 @@
   │     [未管理] claude •…     ││ 👤 Review PR 2308 for the auth fix         │
   │                            ││ 🤖 Reading the diff. The root cause was    │
   │ [Enter] Open  [Tab] Local  ││    clock skew.                             │
-  │ [Esc] Cancel               ││ … 10 more; agent-deck recall show #41      │
+  │ [F5] [Esc] Cancel          ││ … 10 more; agent-deck recall show #41      │
   │                            ││                                            │
   │                            ││                                            │
   │                            ││                                            │

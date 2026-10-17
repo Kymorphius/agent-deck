@@ -30,9 +30,10 @@ type RecallSource interface {
 	Show(ctx context.Context, sessID int64, turns int) (query.Detail, error)
 	// Status is the index summary shown in the header.
 	Status(ctx context.Context) (query.Status, error)
-	// Refresh runs one bounded sweep pass (150 ms / 32 MB): the first pass
-	// after opening is ungated, like the CLI's pre-search sweep; later
-	// passes (the background continuation of what the first deferred) go
+	// Refresh runs one sweep with a 150 ms / 32 MB parse budget after source
+	// discovery: the first pass after opening is ungated, like the CLI's
+	// pre-search sweep; later passes (the continuation of what the first
+	// deferred) go
 	// through the busy/load gate so they never compete with a running
 	// agent. It returns what the pass left behind.
 	Refresh(ctx context.Context, gated bool) (ingest.Result, error)
@@ -127,7 +128,14 @@ func (r *recallIndex) Status(ctx context.Context) (query.Status, error) {
 // is taken without waiting: another sweep running means the pass is
 // skipped and the index served as-is.
 func (r *recallIndex) Refresh(ctx context.Context, gated bool) (ingest.Result, error) {
-	r.mu.Lock()
+	// matrix/hardened: a canceled or superseded refresh must not queue
+	// behind an earlier sweep and run after the user has already retried.
+	if err := ctx.Err(); err != nil {
+		return ingest.Result{}, err
+	}
+	if !r.mu.TryLock() {
+		return ingest.Result{}, store.ErrLocked
+	}
 	defer r.mu.Unlock()
 	release, err := store.Lock(r.lock)
 	if err != nil {
@@ -142,6 +150,9 @@ func (r *recallIndex) Refresh(ctx context.Context, gated bool) (ingest.Result, e
 		QueuePath:      r.queue,
 		NewestFirst:    true,
 		Budget:         reader.NewBudget(ingest.InteractiveDeadline, ingest.InteractiveBytes),
+		// matrix/hardened: discovery must not consume every interactive
+		// parse window and leave new transcript tails unindexed forever.
+		ParseBudgetAfterDiscovery: ingest.InteractiveDeadline,
 	}
 	if gated {
 		opts.Gate = &ingest.Gate{Busy: func() (bool, string) { return session.RecallBusy(r.reg) }, MaxLoadAvg: r.cfg.Recall.GetMaxLoadAvg()}

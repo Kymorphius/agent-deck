@@ -77,7 +77,7 @@ func TestRecallIndex_PreviewLoadsOverTheRealIndex(t *testing.T) {
 	gs.SetSource(idx)
 	gs.SetSize(120, 40)
 	gs.Show()
-	gs.Update(recallStatusMsg{})
+	gs.Update(recallStatusMsg{revision: gs.statusRevision, epoch: gs.epoch})
 	for _, r := range "heron" {
 		_, cmd := gs.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
 		if r == 'n' {
