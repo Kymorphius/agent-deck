@@ -20,6 +20,19 @@ func (h *Home) matrixStandaloneSessionView() bool {
 	return h.groupViewMode == session.GroupViewPinnedOnly || h.groupViewMode == session.GroupViewRecent
 }
 
+// matrix/hardened: explicit navigation into Recent starts at the newest match.
+// Refreshes still use identity restoration so background updates cannot move
+// the user's selection. Other views retain their existing selection behavior.
+func (h *Home) matrixRebuildAfterViewChange(identity selectedItemIdentity) {
+	if h.groupViewMode != session.GroupViewRecent {
+		h.rebuildFlatItemsPreservingSelection(identity)
+		return
+	}
+	h.cursor, h.viewOffset = 0, 0
+	h.pendingCursorRestore = nil
+	h.rebuildFlatItems()
+}
+
 // matrix/hardened: recent means an operator visit, not background output or a
 // status transition. Read the complete tree so folds cannot hide a recent chat.
 func matrixRecentItemsFromTree(tree *session.GroupTree) []session.Item {
