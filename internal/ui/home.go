@@ -324,6 +324,7 @@ type Home struct {
 	kanbanPanel          *KanbanPanel          // matrix/hardened: World Store task board (alt+t)
 	adoptPanel           *AdoptPanel           // matrix/hardened: adopt a running Claude from tmux (alt+u)
 	webServicePanel      *WebServicePanel      // matrix/hardened: the user's own `agent-deck web` service (alt+w)
+	aiUpdatesPanel       *AIUpdatesPanel       // matrix/hardened: explicit local Codex install / activation
 	webServiceWatch      *webServiceWatch      // matrix/hardened: background reading for the header's "web" mark
 	deadLetterPanel      *DeadLetterPanel      // Inspect, retry, and explicitly purge delivery failures
 
@@ -2154,6 +2155,7 @@ func NewHomeWithRuntimeSource(profile string, source session.RuntimeObservationS
 		agentsPanel:               NewAgentsPanel(),
 		deadLetterPanel:           NewDeadLetterPanel(),
 		toolVisibilityPanel:       NewToolVisibilityPanel(),
+		aiUpdatesPanel:            NewAIUpdatesPanel(), // matrix/hardened: no work until opened from settings
 		insertBatchDuration:       defaultInsertBatchDuration,
 		insertOpenKeySender:       defaultInsertOpenKeySender,
 		cursor:                    0,
@@ -7641,6 +7643,9 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if cmd, ok := h.handlePermanentDeleteMsg(msg); ok { // matrix/hardened
 		return h, cmd
 	}
+	if cmd, ok := h.handleAIUpdatesMsg(msg); ok { // matrix/hardened: accept completion even after closing
+		return h, cmd
+	}
 
 	switch msg := msg.(type) {
 	case pathDirectoryResult: // matrix/hardened: async remote Path completion.
@@ -7679,6 +7684,7 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		h.kanbanPanel.SetSize(msg.Width, msg.Height)     // matrix/hardened
 		h.adoptPanel.SetSize(msg.Width, msg.Height)      // matrix/hardened
 		h.webServicePanel.SetSize(msg.Width, msg.Height) // matrix/hardened
+		h.aiUpdatesPanel.SetSize(msg.Width, msg.Height)  // matrix/hardened
 		if h.deadLetterPanel != nil {
 			h.deadLetterPanel.SetSize(msg.Width, msg.Height)
 		}
@@ -7699,6 +7705,16 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return h, h.fetchSelectedPreview()
 
 	case tea.MouseMsg:
+		// matrix/hardened: this modal owns scrolling; never move the list behind it.
+		if h.aiUpdatesPanel.IsVisible() {
+			switch msg.Button {
+			case tea.MouseButtonWheelUp:
+				h.aiUpdatesPanel.Update(tea.KeyMsg{Type: tea.KeyUp})
+			case tea.MouseButtonWheelDown:
+				h.aiUpdatesPanel.Update(tea.KeyMsg{Type: tea.KeyDown})
+			}
+			return h, nil
+		}
 		// matrix/hardened: absorb mouse input while previewing or deleting.
 		if h.permanentDeleteDialog != nil && h.permanentDeleteDialog.IsVisible() {
 			switch msg.Button {
@@ -10442,6 +10458,11 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		// Handle delivery and watcher panels (before settings panel)
+		if h.aiUpdatesPanel.IsVisible() { // matrix/hardened: local AI updates are modal
+			var cmd tea.Cmd
+			h.aiUpdatesPanel, cmd = h.aiUpdatesPanel.Update(msg)
+			return h, cmd
+		}
 		if h.deadLetterPanel != nil && h.deadLetterPanel.IsVisible() {
 			var cmd tea.Cmd
 			h.deadLetterPanel, cmd = h.deadLetterPanel.Update(msg)
@@ -10498,6 +10519,9 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			var cmd tea.Cmd
 			var shouldSave bool
 			h.settingsPanel, cmd, shouldSave = h.settingsPanel.Update(msg)
+			if h.settingsPanel.ConsumeAIUpdatesRequest() { // matrix/hardened
+				return h, tea.Batch(cmd, h.openAIUpdatesPanel())
+			}
 			if h.settingsPanel.ConsumeToolVisibilityRequest() {
 				h.settingsPanel.Hide()
 				h.toolVisibilityPanel.Show()
@@ -11575,6 +11599,7 @@ func (h *Home) hasModalVisible() bool {
 	return h.initialLoading || h.isQuitting || h.notesEditing || h.jumpMode ||
 		(h.permanentDeleteDialog != nil && h.permanentDeleteDialog.IsVisible()) || // matrix/hardened
 		h.setupWizard.IsVisible() || h.settingsPanel.IsVisible() ||
+		h.aiUpdatesPanel.IsVisible() || // matrix/hardened: settings AI updates overlay
 		(h.toolVisibilityPanel != nil && h.toolVisibilityPanel.IsVisible()) ||
 		h.watcherPanel.IsVisible() || // hotkeyWatcherPanel overlay
 		h.agentsPanel.IsVisible() || // hotkeyAgentsPanel overlay
@@ -19453,6 +19478,9 @@ func (h *Home) renderFrame() string {
 	}
 
 	// Delivery and watcher panels are modal (before settings panel)
+	if h.aiUpdatesPanel.IsVisible() { // matrix/hardened
+		return h.aiUpdatesPanel.View()
+	}
 	if h.deadLetterPanel != nil && h.deadLetterPanel.IsVisible() {
 		return h.deadLetterPanel.View()
 	}

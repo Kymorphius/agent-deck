@@ -45,7 +45,7 @@ import (
 )
 
 // matrix/hardened: identifies our hardened build.
-var Version = "1.16.26+matrix.86" // matrix/hardened: recent-interaction list; overridden via -ldflags.
+var Version = "1.16.26+matrix.87" // matrix/hardened: deferred Codex backend updates; overridden via -ldflags.
 
 // Table column widths for list command output
 const (
@@ -471,6 +471,9 @@ func main() {
 			return
 		case "update":
 			handleUpdate(args[1:])
+			return
+		case "ai-update": // matrix/hardened: install Codex without restarting its shared backend.
+			handleAIUpdate(profile, args[1:])
 			return
 		case "session":
 			handleSession(profile, args[1:])
@@ -1550,6 +1553,7 @@ var commandRegistry = map[string]bool{
 	"group": true, "try": true, "launch": true, "conductor": true,
 	"agents": true, "agent": true,
 	"tasks":           true, // matrix/hardened: World Store task board
+	"ai-update":       true, // matrix/hardened: separate AI package installation from activation.
 	"webservice":      true, // matrix/hardened: this host's own `agent-deck web` service
 	"telegram-doctor": true, "watcher": true, "openclaw": true, "oc": true,
 	"remote": true, "remote-agent": true, "system": true, "worktree": true, "wt": true, "costs": true, "events": true, "daemon": true, "monitor": true, "usage": true, "web": true, "config": true, "recall": true,
@@ -4600,6 +4604,7 @@ func printHelp() {
 	fmt.Println("  launch [path]    Add, start, and optionally send a message in one step")
 	fmt.Println("  accounts         List configured named account slots")
 	fmt.Println("  harness          Installed harnesses, login and hook state, install/login commands [--json]")
+	fmt.Println("  ai-update        Check/install Codex; keep shared tasks running until a separate restart") // matrix/hardened
 	fmt.Println("  limits           Claude 5h/7d and Codex weekly usage per account [--json] ([macapp] plugins)")
 	fmt.Println("  doctor           Check accounts and runtime health")
 	fmt.Println("  health           Runtime health snapshots and budgets [--json] [--since 1h]")
