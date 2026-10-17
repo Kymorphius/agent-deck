@@ -336,7 +336,7 @@ func TestMatrixPinnedViewHotkeyRebindAndDisable(t *testing.T) {
 }
 
 // matrix/hardened: p opens pinned view even for multi-repo sessions; their
-// dedicated path editor remains reachable through its configurable Ctrl+L key.
+// dedicated path editor remains reachable through its configurable Alt+L key.
 func TestMatrixPinnedViewKeepsMultiRepoEditorAccessible(t *testing.T) {
 	home := matrixPinnedHome(t)
 	inst := matrixPinnedInstance(t, home, "a1")
@@ -348,15 +348,15 @@ func TestMatrixPinnedViewKeepsMultiRepoEditorAccessible(t *testing.T) {
 	if home.groupViewMode != session.GroupViewPinnedOnly || home.editPathsDialog.IsVisible() {
 		t.Fatal("p must toggle pinned view without opening the multi-repo editor")
 	}
-	home.Update(tea.KeyMsg{Type: tea.KeyCtrlL})
+	home.Update(altKeyMsg('l'))
 	if !home.editPathsDialog.IsVisible() || home.groupViewMode != session.GroupViewPinnedOnly {
-		t.Fatal("Ctrl+L did not open the multi-repo editor in the pinned view")
+		t.Fatal("Alt+L did not open the multi-repo editor in the pinned view")
 	}
 	home.editPathsDialog.Hide()
 	home.setHotkeys(resolveHotkeys(map[string]string{hotkeyEditPaths: "ctrl+k"}))
-	home.Update(tea.KeyMsg{Type: tea.KeyCtrlL})
+	home.Update(altKeyMsg('l'))
 	if home.editPathsDialog.IsVisible() {
-		t.Fatal("Ctrl+L remained active after rebinding the path editor")
+		t.Fatal("Alt+L remained active after rebinding the path editor")
 	}
 	home.Update(tea.KeyMsg{Type: tea.KeyCtrlK})
 	if !home.editPathsDialog.IsVisible() {
@@ -364,7 +364,7 @@ func TestMatrixPinnedViewKeepsMultiRepoEditorAccessible(t *testing.T) {
 	}
 	home.editPathsDialog.Hide()
 	home.setHotkeys(resolveHotkeys(map[string]string{hotkeyEditPaths: ""}))
-	home.Update(tea.KeyMsg{Type: tea.KeyCtrlL})
+	home.Update(altKeyMsg('l'))
 	if home.editPathsDialog.IsVisible() {
 		t.Fatal("disabled path editor still opened")
 	}

@@ -12447,7 +12447,7 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return h, nil
 
 	case defaultHotkeyBindings[hotkeyEditPaths]:
-		// matrix/hardened: Ctrl+L edits multi-repo paths; p now toggles pinned view.
+		// matrix/hardened: Alt+L edits multi-repo paths; Ctrl+L switches status views.
 		if h.cursor < len(h.flatItems) {
 			item := h.flatItems[h.cursor]
 			if item.Type == session.ItemTypeSession && item.Session != nil && item.Session.IsMultiRepo() {
@@ -13606,6 +13606,12 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "0":
 		// Clear status filter (show all)
 		return h, h.changeStatusFilter("")
+
+	case defaultHotkeyBindings[hotkeyPreviousView]: // matrix/hardened: main-list-only view navigation.
+		return h, h.matrixCycleStatusView(-1)
+
+	case defaultHotkeyBindings[hotkeyNextView]: // matrix/hardened: main-list-only view navigation.
+		return h, h.matrixCycleStatusView(1)
 
 	case "!", "shift+1":
 		// Filter to running sessions only
