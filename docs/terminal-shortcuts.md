@@ -152,6 +152,32 @@ The trigger is configured under `[hotkeys]` as `switch_session` (must be a
 `ctrl+<letter>` chord); it is unbound by default and never overrides the
 detach key.
 
+## Recent interactions list
+
+<!-- matrix/hardened: use the persistent interaction timestamp, independent of agent output. -->
+Press **Ctrl+E** from the session list to open **最近 / Recent**. This is a flat
+list across groups, sorted by persisted `LastAccessedAt` (`last_accessed`) in
+descending order. A session moves up when you open or return from it, send a
+confirmed inline prompt from the list, or send accepted user input through the
+Web terminal. Background agent output does not change this order. Sessions
+without a recorded timestamp are omitted.
+
+Press **Ctrl+E** again to return to the normal grouped list. The **`t`** cycle
+also visits normal, active-on-top, populated-on-top, pinned-only, then Recent.
+Collapsed groups and parent sessions do not hide recent entries; existing
+status, time, archive and explicit group-scope filters continue to apply.
+Remote entries require a remote agent-deck version that reports their
+`last_accessed_at` timestamp; older remotes cannot provide a recent position.
+
+The shortcut applies to the list. Attached terminals and text inputs keep
+their own **Ctrl+E** behavior. Rebind it or disable the direct shortcut in
+`config.toml`:
+
+```toml
+[hotkeys]
+toggle_recent_view = "ctrl+e" # Another key is allowed; "" disables the shortcut.
+```
+
 ## Jump to a recently used session
 
 The switcher above is one way to hop across the tree without scrolling;

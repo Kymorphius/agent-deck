@@ -296,8 +296,13 @@ func TestCycleGroupViewKeyTogglesMode(t *testing.T) {
 		t.Fatalf("after 3 presses expected PinnedOnly, got %v", home.groupViewMode)
 	}
 	press()
+	// matrix/hardened: recent follows pinned in the presentation cycle.
+	if home.groupViewMode != session.GroupViewRecent {
+		t.Fatalf("after 4 presses expected Recent, got %v", home.groupViewMode)
+	}
+	press()
 	if home.groupViewMode != session.GroupViewNormal {
-		t.Fatalf("after 4 presses expected Normal again, got %v", home.groupViewMode)
+		t.Fatalf("after 5 presses expected Normal again, got %v", home.groupViewMode)
 	}
 }
 

@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.85`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.86`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -757,6 +757,16 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 - 对已派发任务做验收（`x`）、交付验收（`v`）、退回（`b`），以及命令行 `tasks done|accept|review|reject` 成功后，后台运行一次 bridge 旁边的 `scripts/multica.cjs sync`（`worldstore.Client.TriggerMulticaSync`），结果马上到 Multica，不必等 World Store 的监听或 2 分钟兜底轮询。脚本自带锁并自己记日志；找不到脚本时什么都不做。
 - 验证：`TestTriggerMulticaSyncNeedsTheScript`、`TestKanbanOpensMulticaIssue` 及原有看板测试通过。
 
+
+## 73. 最近交互的会话列表
+
+`1.16.26+matrix.86` 新增 `Ctrl+E` 的「最近 / Recent」视图，再按一次返回普通分组；`t` 的视图循环也可进入。`[hotkeys].toggle_recent_view` 可重绑或置空。
+
+- **matrix/hardened:** 从完整分组成员构建独立会话行，按持久化的 `LastAccessedAt` 跨分组、跨主机倒序排列；固定位置、状态和手动顺序不改变时间顺序。同一时间按主机与会话 ID 稳定排序，展开的窗口跟随所属会话，普通分组与父会话的折叠状态保留。
+- TUI 打开与返回、已确认的列表内手动提示、CLI 交互 attach，以及网页终端成功接收的非空输入更新交互时间；网页输入每连接最多每五秒写一次。后台输出、状态刷新、自动发送和网页后台重连不更新。没有交互记录的会话不以创建时间冒充交互。
+- 状态、归档、分组范围与时间窗口继续组合；「最近」中的时间窗口和行内时间都使用交互时间。没有匹配时保持空视图，显示返回入口。所选模式沿用 `ui_state.group_view_mode`，重开后恢复。
+- **matrix/hardened:** `list --json` 增加 `last_accessed_at`，供远程列表合并排序；旧远端未报告时不猜测时间，需要更新目标端后才能纳入「最近」。保持原同步频率，不增加后台扫描或定时器。
+- 验证使用第 4 节隔离入口，覆盖混合主机倒序、折叠与子会话、固定和状态干扰、筛选组合、稳定同时间排序、窗口跟随、真实快捷键和持久化、交互写入与背景不写入、宽度与空列表。安装后旧 TUI 在列表按 `Ctrl+T` 重载；AI pane 无需重启。
 
 ## Claude 外部钩子缺失的处理
 

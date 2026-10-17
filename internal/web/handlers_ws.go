@@ -157,6 +157,9 @@ func (s *Server) handleSessionWS(w http.ResponseWriter, r *http.Request) {
 	})
 
 	var bridge *tmuxPTYBridge
+	// matrix/hardened: a browser reconnect or passive terminal observer must
+	// not promote a conversation. Only successfully accepted user input does.
+	access := webSessionAccessRecorder{profile: snapshot.Profile, sessionID: sessionID}
 	if menuSession.TmuxSession != "" {
 		bridge, err = newTmuxPTYBridge(menuSession.TmuxSession, menuSession.TmuxSocketName, sessionID, writer)
 		if err != nil {
@@ -273,6 +276,8 @@ func (s *Server) handleSessionWS(w http.ResponseWriter, r *http.Request) {
 					SessionID: sessionID,
 					Time:      time.Now().UTC(),
 				})
+			} else {
+				access.acceptedInput(msg.Data)
 			}
 		case "resize":
 			if bridge == nil {

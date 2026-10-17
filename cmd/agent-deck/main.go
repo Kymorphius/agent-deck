@@ -45,7 +45,7 @@ import (
 )
 
 // matrix/hardened: identifies our hardened build.
-var Version = "1.16.26+matrix.85" // matrix/hardened: group-only fuzzy locator; overridden via -ldflags.
+var Version = "1.16.26+matrix.86" // matrix/hardened: recent-interaction list; overridden via -ldflags.
 
 // Table column widths for list command output
 const (
@@ -3134,6 +3134,8 @@ func buildListJSON(profileName string, instances []*session.Instance, cachedStat
 		// apply the local recency filter (session.TimeFilterMode) to this
 		// session, the same way it applies to a local one.
 		LastActivityAt string `json:"last_activity_at,omitempty"`
+		// matrix/hardened: expose the persisted visit clock for remote recent lists.
+		LastAccessedAt string `json:"last_accessed_at,omitempty"`
 		// Viewers are the people attached to the tmux session (the remote
 		// deck's "who else is viewing" indicator reads it from here). A
 		// pointer so "nobody" ([]) and "unknown" (absent: tmux could not be
@@ -3196,6 +3198,7 @@ func buildListJSON(profileName string, instances []*session.Instance, cachedStat
 			CodexSessionID:    inst.CodexSessionID,
 			ResolvedCodexHome: inst.ResolvedCodexHome(),
 			LastActivityAt:    inst.DisplayLastActivityTime().Format(time.RFC3339Nano),
+			LastAccessedAt:    matrixListAccessedAt(inst),
 		}
 		if cached[inst] {
 			sj.StatusSource = "cached"
@@ -3250,6 +3253,7 @@ func handleListAllProfiles(jsonOutput, includeSuperseded bool) {
 			SSHRemotePath     string    `json:"ssh_remote_path,omitempty"`
 			CodexSessionID    string    `json:"codex_session_id,omitempty"`
 			ResolvedCodexHome string    `json:"resolved_codex_home,omitempty"`
+			LastAccessedAt    string    `json:"last_accessed_at,omitempty"` // matrix/hardened: same visit clock across JSON list paths.
 		}
 		// Non-nil so an empty result marshals as [] rather than null.
 		allSessions := []sessionJSON{}
@@ -3283,6 +3287,7 @@ func handleListAllProfiles(jsonOutput, includeSuperseded bool) {
 					SSHRemotePath:     inst.SSHRemotePath,
 					CodexSessionID:    inst.CodexSessionID,
 					ResolvedCodexHome: inst.ResolvedCodexHome(),
+					LastAccessedAt:    matrixListAccessedAt(inst), // matrix/hardened
 				})
 			}
 		}

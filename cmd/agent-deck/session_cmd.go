@@ -1538,18 +1538,10 @@ func handleSessionAttach(profile string, args []string) {
 		os.Exit(1)
 	}
 
-	// Attach to the session
-	tmuxSession := inst.GetTmuxSession()
-	if tmuxSession == nil {
-		fmt.Fprintf(os.Stderr, "Error: no tmux session for '%s'\n", inst.Title)
-		os.Exit(1)
-	}
-
-	// Create context for attach
-	ctx := context.Background()
-
+	// matrix/hardened: share TTY validation and durable recent-visit recording
+	// with launch/add --attach, including remote `session attach` entry points.
 	attachedAt := time.Now()
-	if err := tmuxSession.Attach(ctx, detachByte); err != nil {
+	if err := attachInstanceInteractive(inst); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: failed to attach: %v\n", err)
 		os.Exit(1)
 	}
