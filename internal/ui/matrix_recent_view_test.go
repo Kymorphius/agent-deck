@@ -206,7 +206,7 @@ func TestMatrixRecentViewSortKeepsWindowBlocksAndStableTies(t *testing.T) {
 	}
 }
 
-func TestMatrixRecentViewHotkeyPreservesSelectionAndEmptyExit(t *testing.T) {
+func TestMatrixRecentViewHotkeyStartsNewestAndPreservesSelectionOnExit(t *testing.T) {
 	home := matrixPinnedHome(t)
 	now := time.Now()
 	for i, inst := range home.instances {
@@ -216,9 +216,10 @@ func TestMatrixRecentViewHotkeyPreservesSelectionAndEmptyExit(t *testing.T) {
 	selected := matrixPinnedInstance(t, home, "b1")
 	home.cursor = sessionIndexByTitle(home, "b1")
 	home.Update(tea.KeyMsg{Type: tea.KeyCtrlE})
-	if home.groupViewMode != session.GroupViewRecent || home.flatItems[home.cursor].Session.ID != selected.ID {
-		t.Fatal("Ctrl+E did not enter recent while preserving the selected session")
+	if home.groupViewMode != session.GroupViewRecent || home.cursor != 0 || home.flatItems[home.cursor].Session.Title != "a1" {
+		t.Fatal("Ctrl+E did not enter recent at the newest session")
 	}
+	home.cursor = sessionIndexByTitle(home, "b1")
 	home.Update(tea.KeyMsg{Type: tea.KeyCtrlE})
 	if home.groupViewMode != session.GroupViewNormal || home.flatItems[home.cursor].Session == nil || home.flatItems[home.cursor].Session.ID != selected.ID {
 		t.Fatal("Ctrl+E did not return to normal with the same selected session")

@@ -164,6 +164,10 @@ without a recorded timestamp are omitted.
 
 Press **Ctrl+E** again to return to the normal grouped list. The **`t`** cycle
 also visits normal, active-on-top, populated-on-top, pinned-only, then Recent.
+<!-- matrix/hardened: explicit timeline navigation always begins with the newest match. -->
+Entering Recent starts at its first, newest row and scrolls to the top. Changing
+its status or time filter also starts at the newest match. Background refreshes
+and returning from an attached session retain the current conversation selection.
 Collapsed groups and parent sessions do not hide recent entries; existing
 status, time, archive and explicit group-scope filters continue to apply.
 Remote entries require a remote agent-deck version that reports their

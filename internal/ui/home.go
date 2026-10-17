@@ -8022,6 +8022,17 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			h.setError(msg.err)
 		} else {
+			// matrix/hardened: a reload started in another view must not restore
+			// its old row after entering Recent, including remote/window rows.
+			preserveRecentSelection := h.groupViewMode == session.GroupViewRecent && msg.restoreState != nil
+			var recentSelection selectedItemIdentity
+			if preserveRecentSelection {
+				recentSelection = h.captureSelectedItemIdentity()
+				msg.restoreState.cursorSessionID = ""
+				msg.restoreState.cursorGroupPath = ""
+				msg.restoreState.cursorCreatingID = ""
+			}
+
 			// Fix stale state: re-capture current cursor AND expanded groups.
 			// Between storageChangedMsg (which saved restoreState) and now,
 			// the user may have navigated or toggled groups.
@@ -8178,6 +8189,9 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Restore state if provided (from auto-reload)
 			if msg.restoreState != nil {
 				h.restoreState(*msg.restoreState)
+				if preserveRecentSelection { // matrix/hardened: full identity includes host and window ownership.
+					h.restoreSelectedItemIdentity(recentSelection)
+				}
 				// #746: re-run --select after auto-reload. The very first
 				// loadSessionsMsg may fire before the storage watcher has
 				// observed a session that `launch --json` just persisted,
@@ -13238,10 +13252,10 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "t":
 		// matrix/hardened: cycle the grouped, pinned, and recent presentations.
-		// Preserve the cursor's row identity across the rebuild.
+		// matrix/hardened: Recent starts at its newest row; other modes retain selection.
 		selectedBefore := h.captureSelectedItemIdentity()
 		h.groupViewMode = session.GroupViewMode((int(h.groupViewMode) + 1) % session.GroupViewModeCount)
-		h.rebuildFlatItemsPreservingSelection(selectedBefore)
+		h.matrixRebuildAfterViewChange(selectedBefore)
 		h.skipDivider(1)
 		h.syncViewport()
 		h.saveUIState()
@@ -13266,19 +13280,18 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		} else {
 			h.groupViewMode = session.GroupViewRecent
 		}
-		h.rebuildFlatItemsPreservingSelection(selectedBefore)
+		h.matrixRebuildAfterViewChange(selectedBefore)
 		h.syncViewport()
 		h.saveUIState()
 		return h, h.fetchSelectedPreview()
 
 	case "*":
 		// Cycle time-range filter: all → today → 3 days → 7 days → 30 days → all.
-		// Preserve the cursor's row identity across the rebuild, same as the
-		// 't' view-mode cycle above.
+		// matrix/hardened: restart Recent at the newest matching interaction.
 		selectedBefore := h.captureSelectedItemIdentity()
 		h.timeFilter = session.TimeFilterMode((int(h.timeFilter) + 1) % session.TimeFilterModeCount)
 		h.keepEmptyFilter = true
-		h.rebuildFlatItemsPreservingSelection(selectedBefore)
+		h.matrixRebuildAfterViewChange(selectedBefore)
 		h.syncViewport()
 		h.saveUIState()
 		return h, h.fetchSelectedPreview()
@@ -13650,7 +13663,7 @@ func (h *Home) changeStatusFilter(filter session.Status) tea.Cmd {
 	default:
 		h.statusFilter = filter
 	}
-	h.rebuildFlatItemsPreservingSelection(selectedBefore)
+	h.matrixRebuildAfterViewChange(selectedBefore) // matrix/hardened: Recent starts at the newest match.
 	return h.fetchSelectedPreview()
 }
 
