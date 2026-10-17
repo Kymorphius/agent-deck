@@ -45,7 +45,7 @@ import (
 )
 
 // matrix/hardened: identifies our hardened build.
-var Version = "1.16.26+matrix.83" // matrix/hardened: group-only fuzzy locator; overridden via -ldflags.
+var Version = "1.16.26+matrix.84" // matrix/hardened: group-only fuzzy locator; overridden via -ldflags.
 
 // Table column widths for list command output
 const (

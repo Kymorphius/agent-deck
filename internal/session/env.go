@@ -58,7 +58,7 @@ func (i *Instance) buildEnvSourceCommand() string {
 			sources = append(sources, restartEnv)
 		}
 		if i.EnvFile != "" { // matrix/hardened: launch --env-file
-			sources = append(sources, buildSourceCmd(i.EnvFile, true))
+			sources = append(sources, envFileSourceCmd(i.EnvFile))
 		}
 		if stripExpr := telegramStateDirStripExpr(i); stripExpr != "" {
 			sources = append(sources, stripExpr)
@@ -160,7 +160,7 @@ func (i *Instance) buildEnvSourceCommand() string {
 	//     source so a caller-provided value wins; missing (already cleaned
 	//     up by its owner) is not an error.
 	if i.EnvFile != "" {
-		sources = append(sources, buildSourceCmd(i.EnvFile, true))
+		sources = append(sources, envFileSourceCmd(i.EnvFile))
 	}
 
 	// 9. S8 (v1.7.40) — strip TELEGRAM_STATE_DIR on every non-channel-owning
@@ -262,6 +262,13 @@ func paneWarning(msg string) string {
 
 // buildSourceCmd creates a shell command to source a file.
 // If ignoreMissing is true, wraps in a file existence check.
+// envFileSourceCmd sources a `launch --env-file` file and succeeds when it is
+// gone: the sources are chained with &&, and its owner deletes it when its
+// task ends, so a later restart must still start. matrix/hardened.
+func envFileSourceCmd(path string) string {
+	return fmt.Sprintf(`{ [ ! -f "%s" ] || source "%s"; }`, path, path)
+}
+
 func buildSourceCmd(path string, ignoreMissing bool) string {
 	if ignoreMissing {
 		// Use [ -f file ] && source file pattern for safe sourcing

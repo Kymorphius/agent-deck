@@ -472,8 +472,10 @@ type Instance struct {
 	// EnvFile is sourced into the first spawn after every configured env
 	// source, so its values win. matrix/hardened: lets a caller (Multica's
 	// agent-deck executor) hand a task-scoped token to the session without
-	// putting it in argv or in the persisted command. Like InheritTelegramEnv
-	// it is launch-only and not stored: a later restart does not re-read it.
+	// putting it in argv or in the persisted command. Unlike InheritTelegramEnv
+	// only its path is stored (tool_data extras, env_file_persist.go) so the
+	// first spawn finds it even when another process starts the session; the
+	// owner deletes the file when done, so a later restart sources nothing.
 	// CLI: `--env-file /abs/path` on `agent-deck launch`.
 	EnvFile string `json:"env_file,omitempty"`
 

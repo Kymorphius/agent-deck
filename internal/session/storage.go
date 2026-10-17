@@ -159,6 +159,10 @@ type InstanceData struct {
 	// PluginChannelLinkDisabled or removes the plugin from the catalog.
 	AutoLinkedChannels []string `json:"auto_linked_channels,omitempty"`
 
+	// EnvFile mirrors Instance.EnvFile (matrix/hardened: launch --env-file),
+	// read from the tool_data extras zone.
+	EnvFile string `json:"env_file,omitempty"`
+
 	// User-supplied claude CLI tokens, appended to every start/resume/fork
 	// command. Persisted so restarts preserve custom flags like --agent/--model.
 	ExtraArgs []string `json:"extra_args,omitempty"`
@@ -1076,6 +1080,7 @@ func instanceToRow(inst *Instance) (*statedb.InstanceRow, error) {
 	// the positional MarshalToolData signature so legacy binaries that don't
 	// know the key preserve it via MergeToolDataExtras.
 	toolData = WriteIdleTimeoutSecsToToolData(toolData, inst.IdleTimeoutSecs)
+	toolData = WriteEnvFileToToolData(toolData, inst.EnvFile) // matrix/hardened: launch --env-file
 	toolData = WriteFavoriteToToolData(toolData, inst.Favorite, inst.favoriteCleared)
 	// #1821: subcommand_passthrough lives in the same extras zone — see
 	// Instance.SubcommandPassthrough's doc for why losing it on reload must
@@ -1309,6 +1314,7 @@ func (s *Storage) LoadLite() ([]*InstanceData, []*GroupData, error) {
 			AutoLinkedChannels:        autoLinkedChannels2,
 			Color:                     color2,
 			IdleTimeoutSecs:           ReadIdleTimeoutSecsFromToolData(r.ToolData),
+			EnvFile:                   ReadEnvFileFromToolData(r.ToolData), // matrix/hardened
 			Favorite:                  ReadFavoriteFromToolData(r.ToolData),
 			SubcommandPassthrough:     ReadSubcommandPassthroughFromToolData(r.ToolData),
 			IdentityInjectionDisabled: ReadIdentityInjectionDisabledFromToolData(r.ToolData),
@@ -1453,6 +1459,7 @@ func (s *Storage) LoadWithGroupsSnapshot() ([]*Instance, []*GroupData, *statedb.
 			AutoLinkedChannels:        autoLinkedChannels,
 			Color:                     color,
 			IdleTimeoutSecs:           ReadIdleTimeoutSecsFromToolData(r.ToolData),
+			EnvFile:                   ReadEnvFileFromToolData(r.ToolData), // matrix/hardened
 			Favorite:                  ReadFavoriteFromToolData(r.ToolData),
 			SubcommandPassthrough:     ReadSubcommandPassthroughFromToolData(r.ToolData),
 			IdentityInjectionDisabled: ReadIdentityInjectionDisabledFromToolData(r.ToolData),
@@ -1764,6 +1771,7 @@ func (s *Storage) convertToInstances(data *StorageData) ([]*Instance, []*GroupDa
 			Plugins:                      instData.Plugins,
 			PluginChannelLinkDisabled:    instData.PluginChannelLinkDisabled,
 			AutoLinkedChannels:           instData.AutoLinkedChannels,
+			EnvFile:                      instData.EnvFile, // matrix/hardened
 			Color:                        instData.Color,
 			IdleTimeoutSecs:              instData.IdleTimeoutSecs,
 			Favorite:                     instData.Favorite,
