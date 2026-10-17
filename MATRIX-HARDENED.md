@@ -757,3 +757,7 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 - 对已派发任务做验收（`x`）、交付验收（`v`）、退回（`b`），以及命令行 `tasks done|accept|review|reject` 成功后，后台运行一次 bridge 旁边的 `scripts/multica.cjs sync`（`worldstore.Client.TriggerMulticaSync`），结果马上到 Multica，不必等 World Store 的监听或 2 分钟兜底轮询。脚本自带锁并自己记日志；找不到脚本时什么都不做。
 - 验证：`TestTriggerMulticaSyncNeedsTheScript`、`TestKanbanOpensMulticaIssue` 及原有看板测试通过。
 
+
+## Claude 外部钩子缺失的处理
+
+**matrix/hardened:** 远程会话的 `SessionStart` 若报告外部脚本不存在，检查目标设备的有效 Claude 配置；该设备已有的第三方钩子不会因重新安装 Agent Deck 而消失。按 [外部钩子故障处理](docs/claude-hook-errors.md) 先完整备份，再精确清理失效引用，保留其他钩子，并区分配置读回与实际启动验证。此类设置修复不需要修改程序或升级构建版本。
