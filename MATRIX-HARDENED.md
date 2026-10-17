@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.87`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.88`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -776,6 +776,13 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 - **matrix/hardened:** 显式安装同时关闭原生自动更新并固定选择；持原生生命周期与安装器兼容锁，覆盖文件锁及目录 fallback，移除 eligibility marker，防止已排队的原生更新器随后自行重启。没有默认检查、轮询或新增系统定时器。
 - 仅对已核对的 `0.163.0` 运行后台、完整 CLI 与专用 daemon 包支持延后安装；未知后台或更新器拒绝盲选。`Restart` 是另一个可能中断所有共享任务的原生操作，界面必须另按 `y` 确认。
 - 验证使用第 4 节隔离入口，覆盖完整包与校验失败、安全解包、设置保留、原生锁互斥、安装不重启、实际版本读回、UI 异步状态与设置页布局；旧 TUI 在列表按 `Ctrl+T` 加载新面板。
+
+## 75. 分组搜索紧凑列表
+
+`1.16.26+matrix.88` 将 `Alt+S` 分组搜索改为单行的分组、路径、设备三列，按窗口高度显示结果，解除原来十项的上限。用法见 [分组搜索与定位](docs/group-search.md)。
+
+- **matrix/hardened:** 普通分组只列父路径，顶级组显示 `—`；显示名称别名保留真实相对路径，远程设备单独列出，避免重复命名空间。窄窗口收起路径列，底部固定显示所选设备和完整相对路径，过长时从中间省略。
+- 验证使用第 4 节隔离入口，覆盖宽屏至少二十项、中文与 emoji 对齐、同名组身份、窄屏尾栏和所有结果逐项可达；搜索、快捷键和 Home 定位回归通过。旧 TUI 在列表按 `Ctrl+T` 加载新布局。
 
 ## Claude 外部钩子缺失的处理
 

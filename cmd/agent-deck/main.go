@@ -45,7 +45,7 @@ import (
 )
 
 // matrix/hardened: identifies our hardened build.
-var Version = "1.16.26+matrix.87" // matrix/hardened: deferred Codex backend updates; overridden via -ldflags.
+var Version = "1.16.26+matrix.88" // matrix/hardened: compact group search; overridden via -ldflags.
 
 // Table column widths for list command output
 const (
