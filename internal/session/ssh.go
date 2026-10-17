@@ -1175,6 +1175,8 @@ type RemoteHostStats struct {
 	MemUsedBytes    uint64
 	MemTotalBytes   uint64
 	MemUsagePercent float64
+	// matrix/hardened: preserve a guest/app budget label received from the remote.
+	MemScope string
 
 	DiskAvailable    bool
 	DiskUsedBytes    uint64
@@ -1218,6 +1220,8 @@ type remoteHostStatsWire struct {
 		Load15 float64 `json:"load15"`
 	} `json:"load,omitempty"`
 	Memory *struct {
+		// matrix/hardened: absent on older remotes, so their legacy display stays unchanged.
+		Scope        string  `json:"scope,omitempty"`
 		UsedBytes    uint64  `json:"used_bytes"`
 		TotalBytes   uint64  `json:"total_bytes"`
 		UsagePercent float64 `json:"usage_percent"`
@@ -1294,6 +1298,7 @@ func parseRemoteHostStats(output []byte) (RemoteHostStats, error) {
 	}
 	if wire.Memory != nil {
 		stats.MemAvailable = true
+		stats.MemScope = wire.Memory.Scope
 		stats.MemUsedBytes, stats.MemTotalBytes, stats.MemUsagePercent = wire.Memory.UsedBytes, wire.Memory.TotalBytes, wire.Memory.UsagePercent
 	}
 	if wire.Disk != nil {

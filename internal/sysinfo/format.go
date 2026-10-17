@@ -58,6 +58,17 @@ func formatCPU(s CPUStat, format string) string {
 func formatMem(s MemStat, format string) string {
 	used := FormatBytes(s.UsedBytes)
 	total := FormatBytes(s.TotalBytes)
+	// matrix/hardened: retain the guest qualifier even in icon/minimal headers.
+	if s.Scope == MemoryScopeGuest {
+		switch format {
+		case "full":
+			return fmt.Sprintf("RAM (guest): %s/%s (%.0f%%)", used, total, s.UsagePercent)
+		case "minimal":
+			return fmt.Sprintf("guest %s/%s", used, total)
+		default:
+			return fmt.Sprintf("⛁ guest %s/%s", used, total)
+		}
+	}
 	switch format {
 	case "full":
 		return fmt.Sprintf("RAM: %s/%s (%.0f%%)", used, total, s.UsagePercent)

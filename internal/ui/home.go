@@ -26360,8 +26360,11 @@ func (h *Home) renderSystemStatsBlock(width int) string {
 		return ""
 	}
 
-	stats := h.sysStatsCollector.Get()
-	show := h.sysStatsConfig.GetShow()
+	return renderSystemStatsSnapshot(h.sysStatsCollector.Get(), h.sysStatsConfig.GetShow(), width)
+}
+
+// matrix/hardened: scope-aware rendering uses a snapshot without probing host resources.
+func renderSystemStatsSnapshot(stats sysinfo.Stats, show []string, width int) string {
 	showSet := make(map[string]bool, len(show))
 	for _, s := range show {
 		showSet[s] = true
@@ -26391,7 +26394,18 @@ func (h *Home) renderSystemStatsBlock(width int) string {
 		bar := renderBar(stats.Memory.UsagePercent, barWidth)
 		used := sysinfo.FormatBytes(stats.Memory.UsedBytes)
 		total := sysinfo.FormatBytes(stats.Memory.TotalBytes)
-		lines = append(lines, fmt.Sprintf("  %s %s %s", labelStyle.Render("RAM"), bar, valStyle.Render(fmt.Sprintf("%s/%s", used, total))))
+		if stats.Memory.Scope == sysinfo.MemoryScopeGuest {
+			// matrix/hardened: keep the guest label visible; omit the bar before narrowing values.
+			label := labelStyle.Width(9).Render("RAM guest")
+			value := valStyle.Render(fmt.Sprintf("%s/%s", used, total))
+			line := fmt.Sprintf("  %s %s %s", label, bar, value)
+			if cellWidth(line) > width {
+				line = fmt.Sprintf("  %s %s", label, value)
+			}
+			lines = append(lines, cellTruncate(line, max(0, width), "…"))
+		} else {
+			lines = append(lines, fmt.Sprintf("  %s %s %s", labelStyle.Render("RAM"), bar, valStyle.Render(fmt.Sprintf("%s/%s", used, total))))
+		}
 	}
 	if showSet["disk"] && stats.Disk.Available {
 		bar := renderBar(stats.Disk.UsagePercent, barWidth)

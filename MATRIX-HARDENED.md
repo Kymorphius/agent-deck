@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.93`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.94`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -66,7 +66,7 @@
 - `internal/session/claude_hooks.go`：`isAgentDeckHookCommand` 的判断规则：先去掉开头的 `VAR=值`，再要求第二个词是 `hook-handler`、程序名的文件名部分是 `agent-deck`。`RemoveClaudeHooks` 会扫描全部事件，并做 UTC 时间戳备份（约 387–414 行）。
 - `cmd/agent-deck/main.go`（约 4845、5070 行）：`agent-deck uninstall` 会移除这些钩子。`uninstall.sh` 第 253 行附近的 jq 过滤用的是同一套规则（正则），写回时用 `cat >` 保持软链接和权限。
 
-**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.81`。
+**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.94`。
 
 **测试**：以 `_hardened_test.go` 结尾的文件、`update_check_disable_test.go`、`update_timer_wiring_test.go` 等是新增或调整过的测试；`testdata/goldens/*` 里的快照已经按加固后的输出更新。
 
@@ -819,6 +819,25 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 - **不覆盖的路径**：Shift+Enter 在新窗口里直接起 mosh/ssh、TUI 内嵌终端，都不经过本机的输入转发，按键不经过这里。
 - **改动地图**：`internal/session/matrix_remote_image.go`、`cmd/agent-deck/matrix_image_put_cmd.go`（新文件）；`internal/session/ssh.go`（`Attach` 传入钩子、`runRemoteAttachWithImagePaste`、`sshAttachInput.pasteImage` 与 `forward` 开头的判断）；`cmd/agent-deck/session_cmd.go`（`image-put` 分发与帮助）；`help_session.golden`。远程主机必须同样升级，否则自动退回普通 Ctrl+V。
 - **测试**：`internal/session/matrix_remote_image_test.go`（拦截/不拦截的各种读取、上传失败与无图片时转发、存图与清理）、`cmd/agent-deck/matrix_image_put_cmd_test.go`。
+
+## 80. Filesystem units and guest memory scope
+
+`1.16.26+matrix.94` corrects Linux filesystem accounting when the fundamental
+block size differs from the preferred I/O size. It also labels iSH/LinPad memory
+as a guest budget throughout local and remote resource displays. See
+[System resource accounting](docs/system-resources.md) for units, scope, invalid
+snapshots, compatibility, and validation boundaries.
+
+- **matrix/hardened:** Linux uses `statfs.Frsize`, falling back to `Bsize` only
+  when `Frsize` is zero. Darwin keeps using its fundamental `Bsize`. Invalid
+  counters and multiplication overflow make the disk metric unavailable.
+- **matrix/hardened:** `/proc/ish/version` identifies the guest interface without
+  reading process or OOM details. Memory retains `MemTotal`/`MemAvailable` with a
+  visible `guest` qualifier and an optional JSON `memory.scope` field. No host
+  physical memory size is inferred.
+- Validation uses the isolated test entry point for collection, formatting,
+  CLI/SSH/REST propagation, and local/remote rendering. Linux ARM64 builds are
+  staged separately; deployment and device validation are separate steps.
 
 ## Claude 外部钩子缺失的处理
 

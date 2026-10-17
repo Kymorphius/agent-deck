@@ -15,6 +15,8 @@ export function Footer() {
   const stats = systemStatsSignal.value
   const cpu = stats?.cpu?.usage_percent
   const mem = stats?.memory?.usage_percent
+  // matrix/hardened: guest/app budgets must not look like host physical RAM.
+  const memLabel = stats?.memory?.scope === 'guest' ? 'mem (guest)' : 'mem'
   return html`
     <div class="footer">
       <span class="fseg"><span class="d" style=${dotStyle}/>ws · ${conn}</span>
@@ -24,7 +26,7 @@ export function Footer() {
       <span class="fseg" style="color: var(--tn-yellow);">◐ ${waiting}</span>
       <span class="fseg" style="color: var(--tn-red);">✕ ${errors}</span>
       ${typeof cpu === 'number' && html`<span class="fseg">cpu · ${cpu.toFixed(0)}%</span>`}
-      ${typeof mem === 'number' && html`<span class="fseg">mem · ${mem.toFixed(0)}%</span>`}
+      ${typeof mem === 'number' && html`<span class="fseg">${memLabel} · ${mem.toFixed(0)}%</span>`}
       <span class="fspacer"/>
       <span class="fkbd"><span class="k">⌘K</span> palette</span>
       <span class="fkbd"><span class="k">/</span> filter</span>

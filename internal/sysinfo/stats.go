@@ -22,12 +22,16 @@ type CPUStat struct {
 	UsagePercent float64 // 0-100
 }
 
+// matrix/hardened: a guest budget must remain distinguishable from host RAM.
+const MemoryScopeGuest = "guest"
+
 // MemStat represents memory usage.
 type MemStat struct {
 	Available    bool
 	UsedBytes    uint64
 	TotalBytes   uint64
 	UsagePercent float64 // 0-100
+	Scope        string  // matrix/hardened: empty preserves legacy semantics; "guest" is a guest/app budget.
 }
 
 // DiskStat represents root filesystem disk usage.

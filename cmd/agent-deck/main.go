@@ -45,7 +45,7 @@ import (
 )
 
 // matrix/hardened: identifies our hardened build.
-var Version = "1.16.26+matrix.93" // matrix/hardened: Ctrl+V pastes a local image into a remote session; overridden via -ldflags.
+var Version = "1.16.26+matrix.94" // matrix/hardened: correct filesystem units and preserve guest memory scope; overridden via -ldflags.
 
 // Table column widths for list command output
 const (
