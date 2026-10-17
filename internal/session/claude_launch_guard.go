@@ -88,6 +88,7 @@ func (i *Instance) detachedClaudeLaunchInstance() *Instance {
 		Channels: append([]string(nil), i.Channels...), Plugins: append([]string(nil), i.Plugins...),
 		PluginChannelLinkDisabled: i.PluginChannelLinkDisabled,
 		InheritTelegramEnv:        i.InheritTelegramEnv,
+		EnvFile:                   i.EnvFile, // matrix/hardened: launch --env-file
 		IdentityInjectionDisabled: i.IdentityInjectionDisabled, ContextLevel: i.ContextLevel,
 		WorkerScratchConfigDir: i.WorkerScratchConfigDir,
 		IsForkAwaitingStart:    i.IsForkAwaitingStart, ForkStartCommand: i.ForkStartCommand,
