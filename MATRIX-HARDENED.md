@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.92`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.93`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -808,6 +808,17 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 - **matrix/hardened:** 全部及分组搜索在选择后清除遮挡目标的状态、时间、置顶、最近及分组范围，展开分组并定位；归档目标只切换展示分区。Recall 已管理结果使用同一定位规则。打开和取消搜索不改变视图。
 - **matrix/hardened:** 当前视图搜索对完整注册集合组合筛选，包含折叠组与子会话，回车保留视图；后台刷新保持范围和关键词。各入口重新装载候选，避免退出分组搜索后 `/` 沿用子集。定位前重新核对注册表身份与当前范围，失效目标显示错误。
 - 新 `[hotkeys].view_search = "alt+?"` 支持重绑或禁用；兼容 Mac 普通 Option 字符 `¿`、`÷`。验证使用第 4 节隔离入口，覆盖范围组合、归档互跳、后台刷新、删除/移动/过期目标、取消、按键和输入法，以及 30/60/80/120 列布局及相关界面快照。旧 TUI 在列表按 `Ctrl+T` 加载新构建。
+
+## 79. 远程会话 Ctrl+V 粘贴本机图片
+
+2026-10-17 新增。接入远程会话（TUI 回车、`remote attach`，SSH 或 mosh）时，单独按一次 Ctrl+V：本机剪贴板里有图片，就经 SSH 运行远程的 `agent-deck session image-put <会话> --json` 把图片存到远程 `<profile 目录>/uploads/<会话ID>/`（与网页终端图片按钮同一目录、同一规则：PNG/JPEG/GIF/WebP、≤20 MB、保留 7 天），再把返回的路径以 bracketed paste 输进窗格，Claude Code 把图片路径识别成 `[Image #n]`。剪贴板没有图片、远程是旧版本或上传失败时，Ctrl+V 原样转发，行为与以前相同。
+
+- **为什么不用远程剪贴板**：Claude Code 只读它所在主机的剪贴板，远程接入时那是远程主机的，不是本机的；终端里的 Ctrl+V 只是一个按键，图片数据不会经过终端。
+- **识别规则**：只认"一次读取恰好是 Ctrl+V"（`0x16`，或远程程序开了 kitty 键盘协议时的 `ESC[118;5u` / `ESC[118;5:1u`），且不在粘贴内容或转义序列中（复用 `MatrixF9DetachInput.Protected()`），所以粘贴文字里的 0x16 不会触发。
+- **读本机剪贴板**：macOS 用 `osascript` 取 `«class PNGf»`；Linux 依次试 `wl-paste`、`xclip`。
+- **不覆盖的路径**：Shift+Enter 在新窗口里直接起 mosh/ssh、TUI 内嵌终端，都不经过本机的输入转发，按键不经过这里。
+- **改动地图**：`internal/session/matrix_remote_image.go`、`cmd/agent-deck/matrix_image_put_cmd.go`（新文件）；`internal/session/ssh.go`（`Attach` 传入钩子、`runRemoteAttachWithImagePaste`、`sshAttachInput.pasteImage` 与 `forward` 开头的判断）；`cmd/agent-deck/session_cmd.go`（`image-put` 分发与帮助）；`help_session.golden`。远程主机必须同样升级，否则自动退回普通 Ctrl+V。
+- **测试**：`internal/session/matrix_remote_image_test.go`（拦截/不拦截的各种读取、上传失败与无图片时转发、存图与清理）、`cmd/agent-deck/matrix_image_put_cmd_test.go`。
 
 ## Claude 外部钩子缺失的处理
 

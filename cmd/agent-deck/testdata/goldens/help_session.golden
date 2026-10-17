@@ -20,6 +20,7 @@ Commands:
   show [id]               Show session details (auto-detect current if no id)
   viewers [id]            List the terminals attached to a session (who is viewing it)
   adopt <tmux-session>    Take over a Claude already running in tmux, without interrupting it (--list)
+  image-put <id> < image  Store an image from stdin for the session and print its path
   current                 Show current session and profile (auto-detect)
   primer [id]             Show the resolved context-level and rendered primer/identity text (#2260; auto-detect current if no id)
   set <id> <field> <value>  Update session property
