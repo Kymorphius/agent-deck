@@ -185,16 +185,17 @@ func (h *Home) jumpToIndex(idx int) {
 // unscoped search flow so the user never gets a silent no-op.
 func (h *Home) openInGroupSearch() {
 	groupPath := h.currentGroupPath()
+	// matrix/hardened: an unset session group still belongs to Default.
+	if groupPath == "" && h.getSelectedSession() != nil {
+		groupPath = session.DefaultGroupPath
+	}
 	if groupPath == "" {
-		h.search.Show()
+		h.openSessionSearch()
+		h.search.SetNotice("请选择本机分组；当前搜索全部本机会话")
 		return
 	}
 	h.search.SetScopedGroup(groupPath)
-	// Re-populate items through the scope filter.
-	h.instancesMu.RLock()
-	items := make([]*session.Instance, len(h.instances))
-	copy(items, h.instances)
-	h.instancesMu.RUnlock()
-	h.search.SetItems(items)
+	// matrix/hardened: refresh through the selected scope, clearing view mode.
+	h.setSessionSearchItems()
 	h.search.Show()
 }

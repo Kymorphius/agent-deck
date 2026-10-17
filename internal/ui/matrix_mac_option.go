@@ -20,6 +20,7 @@ var matrixMacOptionKeys = map[string]string{
 	"¥": "alt+y", "Ω": "alt+z",
 	"¡": "alt+1", "™": "alt+2", "£": "alt+3", "¢": "alt+4", "∞": "alt+5",
 	"§": "alt+6", "¶": "alt+7", "•": "alt+8", "ª": "alt+9", "º": "alt+0",
+	"÷": "alt+/", "¿": "alt+?", // matrix/hardened: group/view search with ordinary Option keys.
 }
 
 // matrixMacOptionKey returns the alt+key a macOS Option character stands for,

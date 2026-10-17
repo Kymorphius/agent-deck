@@ -45,7 +45,7 @@ import (
 )
 
 // matrix/hardened: identifies our hardened build.
-var Version = "1.16.26+matrix.91" // matrix/hardened: Ctrl+H/L cycle status views; overridden via -ldflags.
+var Version = "1.16.26+matrix.92" // matrix/hardened: global, view and group session search; overridden via -ldflags.
 
 // Table column widths for list command output
 const (

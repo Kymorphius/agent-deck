@@ -13,13 +13,13 @@
                         │  🔍 Local Search (Agent Deck sessions)                     │
                         │                                                            │
                         │  ╭──────────────────────────────────────────────────╮      │
-                        │  │ > Search sessions...                             │      │
+                        │  │ > Fuzzy: title, group, project, tool             │      │
                         │  ╰──────────────────────────────────────────────────╯      │
                         │    Tip: waiting / running / idle to filter by status       │
                         │                                                            │
                         │                                                            │
-                        │    No results                                              │
+                        │    全部本机会话 · No results                               │
                         │    [Enter] Select  [↑↓] Navigate                           │
-                        │    [Tab] Global  [Esc] Cancel                              │
+                        │    [Tab] Recall  [Esc] Cancel                              │
                         │                                                            │
                         ╰────────────────────────────────────────────────────────────╯

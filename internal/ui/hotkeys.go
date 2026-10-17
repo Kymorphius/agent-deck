@@ -60,6 +60,7 @@ const (
 	hotkeyWorktreeFinish   = "worktree_finish"
 	hotkeyCreateGroup      = "create_group"
 	hotkeySearch           = "search"
+	hotkeyViewSearch       = "view_search"    // matrix/hardened: candidates limited to the current list filters.
 	hotkeyManagedRecall    = "recall_managed" // matrix/hardened: content search in registered sessions.
 	hotkeyGroupSearch      = "group_search"   // matrix/hardened: locate only group names and paths.
 	hotkeyHelp             = "help"
@@ -168,6 +169,7 @@ var hotkeyActionOrder = []string{
 	hotkeyWorktreeFinish,
 	hotkeyCreateGroup,
 	hotkeySearch,
+	hotkeyViewSearch, // matrix/hardened
 	hotkeyManagedRecall,
 	hotkeyGroupSearch,
 	hotkeyHelp,
@@ -235,6 +237,7 @@ var defaultHotkeyBindings = map[string]string{
 	hotkeyWorktreeFinish:   "W",
 	hotkeyCreateGroup:      "g",
 	hotkeySearch:           "/",
+	hotkeyViewSearch:       "alt+?", // matrix/hardened: Alt+Shift+/ complements current-group Alt+/.
 	hotkeyManagedRecall:    "alt+r", // matrix/hardened
 	hotkeyGroupSearch:      "alt+s", // matrix/hardened: Option+S also arrives as the existing ß alias.
 	hotkeyHelp:             "?",
@@ -334,9 +337,9 @@ func resolveHotkeys(overrides map[string]string) map[string]string {
 		}
 	}
 
-	// matrix/hardened: new navigation defaults must not steal an existing
-	// explicit binding, notably edit_paths = "ctrl+l" from older builds.
-	for _, action := range []string{hotkeyPreviousView, hotkeyNextView} {
+	// matrix/hardened: new navigation/search defaults must not steal an
+	// existing explicit binding, notably edit_paths = "ctrl+l" from older builds.
+	for _, action := range []string{hotkeyPreviousView, hotkeyNextView, hotkeyViewSearch} {
 		if _, overridden := canonicalOverrides[action]; overridden {
 			continue
 		}

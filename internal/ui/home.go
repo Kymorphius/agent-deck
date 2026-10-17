@@ -10702,19 +10702,10 @@ func (h *Home) handleSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		selected := h.search.Selected()
 		if selected != nil {
-			// Ensure the session's group AND all parent groups are expanded so it's visible
-			if selected.GroupPath != "" {
-				h.groupTree.ExpandGroupWithParents(selected.GroupPath)
-			}
-			h.rebuildFlatItems()
-
-			// Find the session in flatItems (not instances) and set cursor
-			for i, item := range h.flatItems {
-				if item.Type == session.ItemTypeSession && item.Session != nil && item.Session.ID == selected.ID {
-					h.cursor = i
-					h.syncViewport() // Ensure the cursor is visible in the viewport
-					break
-				}
+			// matrix/hardened: global search reveals the target; view search
+			// retains its filters and revalidates current membership.
+			if !h.locateSearchSession(selected, h.search.viewFilter != nil) {
+				h.setError(fmt.Errorf("会话已变化或不再属于搜索范围，请重新搜索"))
 			}
 		}
 		h.search.Hide()
@@ -10757,8 +10748,7 @@ func (h *Home) handleGlobalSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// Check if user wants to switch to local search
 	if h.globalSearch.WantsSwitchToLocal() {
-		h.search.SetItems(h.instances)
-		h.search.Show()
+		h.openSessionSearch() // matrix/hardened: restore the full registry scope.
 	}
 
 	return h, cmd
@@ -10777,8 +10767,8 @@ func (h *Home) openGlobalSearch() tea.Cmd {
 		if notice == "" {
 			notice = recallOffNotice
 		}
+		h.openSessionSearch() // matrix/hardened: avoid a previous group/view scope.
 		h.search.SetNotice(notice + "; showing the local title search instead")
-		h.search.Show()
 		return nil
 	}
 	h.globalSearch.SetSize(h.width, h.height)
@@ -10821,7 +10811,10 @@ func (h *Home) handleGlobalSearchSelection(result *GlobalSearchResult) tea.Cmd {
 	owner := findGlobalSearchOwner(result, h.instances)
 	h.instancesMu.RUnlock()
 	if owner != nil {
-		h.jumpToSession(owner)
+		// matrix/hardened: Recall also locates through pinned/time/archive views.
+		if !h.locateSearchSession(owner, false) {
+			h.setError(fmt.Errorf("该会话已变化，请重新搜索"))
+		}
 		return nil
 	}
 	// matrix/hardened: managed-only Recall is a locator. A result whose
@@ -12221,6 +12214,10 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		h.openInGroupSearch()
 		return h, nil
 
+	case "alt+?": // matrix/hardened: search only sessions in the current view.
+		h.openViewSearch()
+		return h, nil
+
 	case h.actionKey(hotkeyOpenShellHere):
 		// Open a shell sub-session in the focused session's worktree (or
 		// project path) as an iTerm2 split pane or new tmux window,
@@ -12758,9 +12755,8 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return h, nil
 
 	case "/":
-		// The quick local title filter; Tab from it reaches Recall, and G
-		// opens Recall directly.
-		h.search.Show()
+		// matrix/hardened: refresh all candidates after any scoped search.
+		h.openSessionSearch()
 		return h, nil
 
 	case "alt+r":

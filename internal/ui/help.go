@@ -459,7 +459,9 @@ func (h *HelpOverlay) View() string {
 		{
 			title: "SEARCH & FILTER",
 			items: [][2]string{
-				{searchKey, "Fuzzy search: title, group, project, tool"},                    // matrix/hardened
+				{searchKey, "All local sessions; reveal result across views"},               // matrix/hardened
+				{h.key(hotkeyViewSearch, "alt+?"), "Search sessions in current view"},       // matrix/hardened
+				{"Alt+/", "Search sessions in current group"},                               // matrix/hardened
 				{h.key(hotkeyGroupSearch, "alt+s"), "Find group by name / path"},            // matrix/hardened
 				{h.key(hotkeyPreviousView, "Ctrl+H"), "Previous status view (wrap around)"}, // matrix/hardened
 				{h.key(hotkeyNextView, "Ctrl+L"), "Next status view (wrap around)"},         // matrix/hardened

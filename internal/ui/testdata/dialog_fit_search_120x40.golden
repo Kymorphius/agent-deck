@@ -11,7 +11,7 @@
                              │  🔍 Local Search (Agent Deck sessions)                     │
                              │                                                            │
                              │  ╭──────────────────────────────────────────────────╮      │
-                             │  │ > Search sessions...                             │      │
+                             │  │ > Fuzzy: title, group, project, tool             │      │
                              │  ╰──────────────────────────────────────────────────╯      │
                              │    Tip: waiting / running / idle to filter by status       │
                              │                                                            │
@@ -25,8 +25,8 @@
                              │      session-08 (claude)  my-sessions · ?                  │
                              │      session-09 (claude)  my-sessions · ?                  │
                              │      session-10 (claude)  my-sessions · ?                  │
-                             │    11 results                                              │
+                             │    全部本机会话 · 11 results                               │
                              │    [Enter] Select  [↑↓] Navigate                           │
-                             │    [Tab] Global  [Esc] Cancel                              │
+                             │    [Tab] Recall  [Esc] Cancel                              │
                              │                                                            │
                              ╰────────────────────────────────────────────────────────────╯

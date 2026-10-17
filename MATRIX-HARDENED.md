@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.91`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.92`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -800,6 +800,14 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 - **matrix/hardened:** 循环顺序固定，空结果不回退；保留分组/置顶/最近展示模式、时间窗口和显式分组范围。普通列表沿用身份选择保持，Recent 仍从最新匹配行开始。`~` 是异常的中断细分，左右按 Abnormal 的位置导航；Open 的隐藏停止子步继续由 `%` 控制。
 - **matrix/hardened:** `[hotkeys].previous_view` / `next_view` 支持重绑和置空；默认路径编辑从旧 `Ctrl+L` 移到 `Alt+L`（更新第 58 节的历史默认）。已有显式 `edit_paths = "ctrl+l"` 等自定义绑定优先，冲突的新增默认入口不启用，帮助也不显示失效动作。文字输入、弹窗、insert mode 和已连接终端沿用各自按键路由。
 - 验证使用第 4 节隔离入口：双向回绕、空结果、选择/范围、Recent、直接入口、重绑/禁用/冲突与文本编辑测试，以及相关快捷键、帮助、筛选与键盘协议的 race 回归。安装后旧 TUI 在列表按 `Ctrl+T` 加载新构建，AI pane 无需重启。
+
+## 78. 会话搜索范围与跨视图定位
+
+`1.16.26+matrix.92` 将 `/` 全部本机会话、`Alt+?` 当前视图和 `Alt+/` 当前分组搜索分别标明范围。详情见 [会话搜索范围](docs/session-search.md)。
+
+- **matrix/hardened:** 全部及分组搜索在选择后清除遮挡目标的状态、时间、置顶、最近及分组范围，展开分组并定位；归档目标只切换展示分区。Recall 已管理结果使用同一定位规则。打开和取消搜索不改变视图。
+- **matrix/hardened:** 当前视图搜索对完整注册集合组合筛选，包含折叠组与子会话，回车保留视图；后台刷新保持范围和关键词。各入口重新装载候选，避免退出分组搜索后 `/` 沿用子集。定位前重新核对注册表身份与当前范围，失效目标显示错误。
+- 新 `[hotkeys].view_search = "alt+?"` 支持重绑或禁用；兼容 Mac 普通 Option 字符 `¿`、`÷`。验证使用第 4 节隔离入口，覆盖范围组合、归档互跳、后台刷新、删除/移动/过期目标、取消、按键和输入法，以及 30/60/80/120 列布局及相关界面快照。旧 TUI 在列表按 `Ctrl+T` 加载新构建。
 
 ## Claude 外部钩子缺失的处理
 
