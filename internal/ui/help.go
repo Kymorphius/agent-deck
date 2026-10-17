@@ -286,7 +286,7 @@ func (h *HelpOverlay) View() string {
 	if cfg, _ := session.LoadUserConfig(); cfg != nil && !cfg.GetShowNotes() {
 		notesKey = ""
 	}
-	editPathsKey := h.key(hotkeyEditPaths, "Ctrl+L") // matrix/hardened: p is the pinned-view primary key.
+	editPathsKey := h.key(hotkeyEditPaths, "Alt+L") // matrix/hardened: Ctrl+L switches status views.
 	editSessionKey := h.key(hotkeyEditSession, "P")
 	worktreeSetupKey := h.key(hotkeyWorktreeSetup, "b")
 	worktreeKey := h.key(hotkeyWorktreeFinish, "W")
@@ -459,8 +459,10 @@ func (h *HelpOverlay) View() string {
 		{
 			title: "SEARCH & FILTER",
 			items: [][2]string{
-				{searchKey, "Fuzzy search: title, group, project, tool"},         // matrix/hardened
-				{h.key(hotkeyGroupSearch, "alt+s"), "Find group by name / path"}, // matrix/hardened
+				{searchKey, "Fuzzy search: title, group, project, tool"},                    // matrix/hardened
+				{h.key(hotkeyGroupSearch, "alt+s"), "Find group by name / path"},            // matrix/hardened
+				{h.key(hotkeyPreviousView, "Ctrl+H"), "Previous status view (wrap around)"}, // matrix/hardened
+				{h.key(hotkeyNextView, "Ctrl+L"), "Next status view (wrap around)"},         // matrix/hardened
 				{FilterKeyError, "Filter abnormal (errors + interruptions)"},
 				{FilterKeyActive, "Filter open (hide abnormal)"},
 				{FilterKeyInterrupted, "Filter interrupted turns ↯"}, // matrix/hardened

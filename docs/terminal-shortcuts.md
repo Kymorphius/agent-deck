@@ -152,6 +152,23 @@ The trigger is configured under `[hotkeys]` as `switch_session` (must be a
 `ctrl+<letter>` chord); it is unbound by default and never overrides the
 detach key.
 
+## Previous and next status views
+
+<!-- matrix/hardened: list-only navigation alongside the existing direct status shortcuts. -->
+Press **Ctrl+H** / **Ctrl+L** in the session list to move left / right through
+**All → Running → Waiting → Idle → Abnormal → Open → Archived → All**.
+The cycle wraps in both directions and visits views even when they are empty.
+The existing **Shift+1…6**, **0**, and **~** shortcuts remain available.
+From the interrupted-turn drill-down (`~`), left / right moves to Idle / Open,
+using Abnormal as its place in the cycle. Open uses the configured exclusions;
+the extra hide-stopped step remains on `%`.
+
+These keys preserve the current grouped, pinned or Recent presentation, time
+filter and group scope. Text inputs, dialogs and attached terminals keep their
+own key handling. Multi-repo path editing now defaults to **Alt+L**.
+Use `[hotkeys].previous_view`, `next_view`, and `edit_paths` to rebind each action,
+or set a value to `""` to disable it.
+
 ## Recent interactions list
 
 <!-- matrix/hardened: use the persistent interaction timestamp, independent of agent output. -->

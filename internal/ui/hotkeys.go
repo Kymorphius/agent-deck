@@ -27,6 +27,8 @@ const (
 	hotkeySkillsManager    = "skills_manager"
 	hotkeyTogglePreview    = "toggle_preview"
 	hotkeyCycleGroupView   = "cycle_group_view"
+	hotkeyPreviousView     = "previous_view"      // matrix/hardened: cycle status views without shifted number keys.
+	hotkeyNextView         = "next_view"          // matrix/hardened: cycle status views without shifted number keys.
 	hotkeyTogglePinnedView = "toggle_pinned_view" // matrix/hardened: direct access to pinned sessions.
 	hotkeyToggleRecentView = "toggle_recent_view" // matrix/hardened: direct access to recent user interactions.
 	hotkeyCycleTimeFilter  = "cycle_time_filter"
@@ -140,6 +142,8 @@ var hotkeyActionOrder = []string{
 	hotkeySkillsManager,
 	hotkeyTogglePreview,
 	hotkeyCycleGroupView,
+	hotkeyPreviousView,     // matrix/hardened
+	hotkeyNextView,         // matrix/hardened
 	hotkeyTogglePinnedView, // matrix/hardened
 	hotkeyToggleRecentView, // matrix/hardened
 	hotkeyCycleTimeFilter,
@@ -205,6 +209,8 @@ var defaultHotkeyBindings = map[string]string{
 	hotkeySkillsManager:    "s",
 	hotkeyTogglePreview:    "v",
 	hotkeyCycleGroupView:   "t",
+	hotkeyPreviousView:     "ctrl+h", // matrix/hardened: move left through the Shift+number status views.
+	hotkeyNextView:         "ctrl+l", // matrix/hardened: move right through the Shift+number status views.
 	hotkeyTogglePinnedView: "p",      // matrix/hardened: plain p opens pinned sessions; control/Option aliases remain.
 	hotkeyToggleRecentView: "ctrl+e", // matrix/hardened: recent view is list-only; Shift+O keeps preview orientation.
 	hotkeyCycleTimeFilter:  "*",
@@ -223,7 +229,7 @@ var defaultHotkeyBindings = map[string]string{
 	hotkeyExecShell:        "E",
 	hotkeyOpenShellHere:    "H",
 	hotkeyEditNotes:        "e",
-	hotkeyEditPaths:        "ctrl+l", // matrix/hardened: keep multi-repo paths accessible after p moves to pinned view.
+	hotkeyEditPaths:        "alt+l", // matrix/hardened: keep path editing accessible while Ctrl+L switches views.
 	hotkeyEditSession:      "P",
 	hotkeyWorktreeSetup:    "b",
 	hotkeyWorktreeFinish:   "W",
@@ -325,6 +331,24 @@ func resolveHotkeys(overrides map[string]string) map[string]string {
 	for action := range defaultDisabledHotkeys {
 		if _, overridden := canonicalOverrides[action]; !overridden {
 			delete(bindings, action)
+		}
+	}
+
+	// matrix/hardened: new navigation defaults must not steal an existing
+	// explicit binding, notably edit_paths = "ctrl+l" from older builds.
+	for _, action := range []string{hotkeyPreviousView, hotkeyNextView} {
+		if _, overridden := canonicalOverrides[action]; overridden {
+			continue
+		}
+		for other, key := range canonicalOverrides {
+			if other == action {
+				continue
+			}
+			for _, alias := range explicitHotkeyAliases(key) {
+				if alias == bindings[action] {
+					delete(bindings, action)
+				}
+			}
 		}
 	}
 

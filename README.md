@@ -121,7 +121,7 @@ agent-deck web                    # Start web UI on http://127.0.0.1:8420
 
 ### Key Shortcuts
 
-<!-- matrix/hardened: o opens, F9 returns, p toggles pinned view, Ctrl+E toggles recent view, numeric l selects and numeric h collapses. -->
+<!-- matrix/hardened: Ctrl+H/L cycle status views, Alt+L edits paths; o opens, F9 returns, p toggles pinned view, Ctrl+E toggles recent view, numeric l selects and numeric h collapses. -->
 | Key | Action |
 |-----|--------|
 | `o` / `Enter` | Attach to session |
@@ -132,7 +132,8 @@ agent-deck web                    # Start web UI on http://127.0.0.1:8420
 | `p` / `Ctrl+P` / `Alt+P` (`Option+P` on macOS) | Toggle pinned-only view |
 | `Ctrl+E` | Toggle 最近 / Recent, latest user interaction first |
 | `t` | Cycle normal / active / populated / pinned / recent views |
-| `Ctrl+L` | Edit multi-repo paths |
+| `Ctrl+H` / `Ctrl+L` | Previous / next status view (wrap around) |
+| `Alt+L` | Edit multi-repo paths |
 | `n` | New session |
 | `f` / `F` | Fork (quick / dialog) |
 | `A` / `Shift+U` | Archive / unarchive session |

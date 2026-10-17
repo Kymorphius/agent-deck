@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.90`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.91`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -792,6 +792,14 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 - **matrix/hardened:** 交互扫描在目录发现完成后才开始 150 ms / 32 MB 解析预算，避免历史文件多时每次预算提前耗尽、游标永远不前进。CLI/backfill 保留原有预算语义。
 - **matrix/hardened:** 请求可取消，重复刷新隔离旧结果、状态、预览和后台计时器；已提交的新内容无需等全部积压完成即可搜索。预览与状态各自拒收较早快照，索引锁短暂竞争最多重试三次。状态读取改走 reader，避免等待单一 writer。
 - 验证使用第 4 节隔离入口，覆盖目录发现超过预算仍推进、追加真实 transcript 后搜索与预览更新、并发回调顺序、取消、范围和选择保留、锁竞争、宽度与界面快照。大积压仍需分批处理；后台续扫保留 busy/load gate。旧 TUI 在列表按 `Ctrl+T` 重载。
+
+## 77. Ctrl+H/L 左右切换状态视图
+
+`1.16.26+matrix.91` 在主列表新增 `Ctrl+H` 上一个、`Ctrl+L` 下一个状态视图，按 `All → Running → Waiting → Idle → Abnormal → Open → Archived → All` 双向循环，保留 `Shift+数字`、`0` 与 `~` 的直接入口。
+
+- **matrix/hardened:** 循环顺序固定，空结果不回退；保留分组/置顶/最近展示模式、时间窗口和显式分组范围。普通列表沿用身份选择保持，Recent 仍从最新匹配行开始。`~` 是异常的中断细分，左右按 Abnormal 的位置导航；Open 的隐藏停止子步继续由 `%` 控制。
+- **matrix/hardened:** `[hotkeys].previous_view` / `next_view` 支持重绑和置空；默认路径编辑从旧 `Ctrl+L` 移到 `Alt+L`（更新第 58 节的历史默认）。已有显式 `edit_paths = "ctrl+l"` 等自定义绑定优先，冲突的新增默认入口不启用，帮助也不显示失效动作。文字输入、弹窗、insert mode 和已连接终端沿用各自按键路由。
+- 验证使用第 4 节隔离入口：双向回绕、空结果、选择/范围、Recent、直接入口、重绑/禁用/冲突与文本编辑测试，以及相关快捷键、帮助、筛选与键盘协议的 race 回归。安装后旧 TUI 在列表按 `Ctrl+T` 加载新构建，AI pane 无需重启。
 
 ## Claude 外部钩子缺失的处理
 
