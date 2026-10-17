@@ -570,7 +570,13 @@ func (r *SSHRunner) consumeLastStderr() []byte {
 // PTY in sync when the local terminal is resized, and sends SIGWINCH to
 // self on detach so Bubble Tea re-queries the terminal size.
 func (r *SSHRunner) Attach(sessionID string) error {
-	return r.attachInteractive("session", "attach", sessionID)
+	// matrix/hardened: Ctrl+V pastes this machine's clipboard image
+	// (matrix_remote_image.go).
+	cmd, transport, err := r.attachCommand("session", "attach", sessionID)
+	if err != nil {
+		return err
+	}
+	return runRemoteAttachWithImagePaste(cmd, transport, r.clipboardImagePaster(sessionID))
 }
 
 // RunInteractiveCreation uses the same PTY flow as ordinary remote attach.
@@ -639,6 +645,12 @@ func (r *SSHRunner) remoteHasMoshServer() bool {
 // runRemoteAttach runs an interactive transport command (ssh or mosh) in a
 // local PTY until it exits or the user detaches.
 func runRemoteAttach(cmd *exec.Cmd, transport string) error {
+	return runRemoteAttachWithImagePaste(cmd, transport, nil)
+}
+
+// runRemoteAttachWithImagePaste is runRemoteAttach with an optional Ctrl+V
+// image-paste hook (matrix/hardened, matrix_remote_image.go).
+func runRemoteAttachWithImagePaste(cmd *exec.Cmd, transport string, pasteImage func() ([]byte, bool)) error {
 	// Start SSH with a local PTY pre-sized to the controlling terminal so the
 	// remote tmux client connects full-width from frame one (#1167). A bare
 	// pty.Start creates the PTY at the 80x24 default, which can size the remote
@@ -702,7 +714,7 @@ func runRemoteAttach(cmd *exec.Cmd, transport string) error {
 	sigwinch <- syscall.SIGWINCH
 
 	detachCh := make(chan struct{})
-	input := sshAttachInput{writer: ptmx}
+	input := sshAttachInput{writer: ptmx, pasteImage: pasteImage} // matrix/hardened
 	outputDone := make(chan struct{})
 	output := &attachOutput{w: os.Stdout}
 
@@ -896,9 +908,20 @@ type sshAttachInput struct {
 	detachRequested atomic.Bool
 	// matrix/hardened: SSH and mosh share local F9/paste token recognition.
 	f9Input tmux.MatrixF9DetachInput
+	// matrix/hardened: returns the bytes to send for a lone Ctrl+V (a pasted
+	// image path), or false to forward the key; nil disables it.
+	pasteImage func() ([]byte, bool)
 }
 
 func (input *sshAttachInput) forward(data []byte) (bool, error) {
+	// matrix/hardened: a lone Ctrl+V outside a paste may paste a local
+	// clipboard image into the remote session (matrix_remote_image.go).
+	if input.pasteImage != nil && !input.f9Input.Protected() && matrixIsCtrlV(data) {
+		if pasted, ok := input.pasteImage(); ok {
+			_, err := input.writer.Write(pasted)
+			return false, err
+		}
+	}
 	// matrix/hardened: Alt+Q also detaches (tmux/matrix_alt_detach.go).
 	if !input.f9Input.Protected() && tmux.MatrixIsAltQDetach(data) {
 		input.detachRequested.Store(true)
