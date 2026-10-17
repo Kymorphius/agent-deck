@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/rivo/uniseg"
 	"github.com/sahilm/fuzzy"
 )
 
@@ -198,44 +199,115 @@ func (s *GroupSearch) updateResults() {
 	s.cursor = max(min(s.cursor, len(s.results)-1), 0)
 }
 
+// matrix/hardened: columns describe the group without repeating its name or
+// remote namespace; legacy aliases retain their complete relative path.
+func groupSearchColumns(item GroupSearchItem) (name, path, host string) {
+	host = item.Remote
+	if host == "" {
+		host = "本机"
+	}
+	path = groupSearchRelativePath(item)
+	parent, leaf := "", path
+	if last := strings.LastIndexByte(path, '/'); last >= 0 {
+		parent, leaf = path[:last], path[last+1:]
+	}
+	name = item.Name
+	if name == "" {
+		name = leaf
+	}
+	if normalizeGroupSearch(name) == normalizeGroupSearch(leaf) {
+		path = parent
+	}
+	if path == "" {
+		path = "—"
+	}
+	return name, path, host
+}
+
+func groupSearchRelativePath(item GroupSearchItem) string {
+	path := item.Path
+	if item.Remote != "" {
+		prefix := "remotes/" + item.Remote
+		if path == prefix {
+			return ""
+		}
+		path = strings.TrimPrefix(path, prefix+"/")
+	}
+	return path
+}
+
+// matrix/hardened: keep every column aligned in terminal cells, including
+// Chinese names and emoji, and retain the device even on narrow screens.
+func groupSearchRow(name, path, host, prefix string, budget int) string {
+	dataWidth := max(budget-cellWidth(prefix), 1)
+	hostWidth := min(max(dataWidth/7, 8), 12)
+	if budget < 42 {
+		hostWidth = min(hostWidth, max(dataWidth-4, 1))
+		nameWidth := max(dataWidth-hostWidth-2, 1)
+		return prefix + fitCellWidth(cellTruncate(name, nameWidth, "…"), nameWidth) + "  " + fitCellWidth(cellTruncate(host, hostWidth, "…"), hostWidth)
+	}
+	nameWidth := max(dataWidth*38/100, 1)
+	pathWidth := max(dataWidth-nameWidth-hostWidth-4, 1)
+	return prefix + fitCellWidth(cellTruncate(name, nameWidth, "…"), nameWidth) + "  " +
+		fitCellWidth(cellTruncate(path, pathWidth, "…"), pathWidth) + "  " +
+		fitCellWidth(cellTruncate(host, hostWidth, "…"), hostWidth)
+}
+
+// matrix/hardened: the fixed selected identity keeps the distinguishing path
+// suffix visible even when a narrow table has to hide its path column.
+func groupSearchIdentityText(item GroupSearchItem, width int) string {
+	_, _, host := groupSearchColumns(item)
+	identity := host + " · " + groupSearchRelativePath(item)
+	if cellWidth(identity) <= width {
+		return identity
+	}
+	if width <= 1 {
+		return cellTruncate(identity, width, "…")
+	}
+	leftWidth := (width - 1) / 2
+	rightWidth := width - leftWidth - 1
+	clusters := uniseg.NewGraphemes(identity)
+	var suffix []string
+	for clusters.Next() {
+		suffix = append(suffix, clusters.Str())
+	}
+	start, used := len(suffix), 0
+	for start > 0 && used+cellWidth(suffix[start-1]) <= rightWidth {
+		start--
+		used += cellWidth(suffix[start])
+	}
+	return cellTruncate(identity, leftWidth, "") + "…" + strings.Join(suffix[start:], "")
+}
+
 // View fits the locator to the same responsive frame used by session search.
-// matrix/hardened: keep host/path metadata on a separate line so duplicate
-// names remain distinguishable, and scroll the complete result set.
+// matrix/hardened: a single row per group lets terminal height determine the
+// visible result count; only this locator expands on wider terminals.
 func (s *GroupSearch) View() string {
 	if !s.visible {
 		return ""
 	}
 	overlayWidth := searchOverlayWidth(s.width)
+	if s.width >= 70 {
+		overlayWidth = min(96, s.width-10)
+	}
 	contentWidth := overlayWidth - overlayStyle.GetHorizontalFrameSize()
 	innerWidth := max(contentWidth-searchBoxStyle.GetHorizontalFrameSize(), 10)
 	s.input.Width = max(innerWidth-lipgloss.Width(s.input.Prompt), 1)
 	header := lipgloss.NewStyle().Foreground(ColorAccent).Bold(true).Render("🔍 Group Search")
 	searchBox := searchBoxStyle.Width(innerWidth).Render(s.input.View())
 
-	const window = 10
-	start := max(s.cursor-window+1, 0)
-	end := min(start+window, len(s.results))
-	rows := make([]string, 0, end-start)
-	for i := start; i < end; i++ {
-		item := s.results[i]
-		host := item.Remote
-		if host == "" {
-			host = "本机"
-		}
-		name := item.Name
-		if name == "" {
-			name = item.Path
-		}
+	budget := max(contentWidth-resultItemStyle.GetHorizontalFrameSize(), 1)
+	columns := lipgloss.NewStyle().Foreground(ColorComment).Render(resultItemStyle.Render(groupSearchRow("分组", "路径", "设备", "  ", budget)))
+	rows := make([]string, 0, len(s.results))
+	for i, item := range s.results {
+		name, path, host := groupSearchColumns(item)
 		prefix := "  "
 		style := resultItemStyle
 		if i == s.cursor {
 			prefix = "› "
 			style = selectedResultStyle
 		}
-		budget := max(contentWidth-style.GetHorizontalFrameSize(), 1)
-		name = cellTruncate(prefix+name, budget, "…")
-		metadata := cellTruncate("  "+host+" · "+item.Path, budget, "…")
-		rows = append(rows, style.Render(name+"\n"+metadata))
+		rows = append(rows, style.Render(groupSearchRow(name, path, host, prefix, budget)))
 	}
 	if len(rows) == 0 {
 		rows = []string{"No groups found"}
@@ -244,14 +316,19 @@ func (s *GroupSearch) View() string {
 	if len(s.results) > 0 {
 		count = fmt.Sprintf("%d/%d groups", s.cursor+1, len(s.results))
 	}
+	identity := ""
+	if selected, ok := s.Selected(); ok {
+		identity = groupSearchIdentityText(selected, contentWidth)
+	}
 	keys := renderDialogFooterRows(contentWidth, 2, "  ",
 		[]string{"[Enter] Locate", "[↑↓] Move", "[Esc] Cancel"}, 1)
 	sections := dialogSections{
-		head:  []string{header, "", searchBox, ""},
+		head:  []string{header, searchBox, columns},
 		body:  rows,
-		focus: s.cursor - start,
+		focus: s.cursor,
 		foot: []string{
 			lipgloss.NewStyle().Foreground(ColorComment).Render(count),
+			lipgloss.NewStyle().Foreground(ColorComment).Render(identity),
 			lipgloss.NewStyle().Foreground(ColorComment).Render(glueBracketHintGroups(keys)),
 		},
 	}

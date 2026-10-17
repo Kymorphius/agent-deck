@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/bubbles/cursor"
 	tea "github.com/charmbracelet/bubbletea"
@@ -194,10 +195,139 @@ func TestMatrixGroupSearchNamesAndHostsAreVisible(t *testing.T) {
 		{Name: "Ops", Path: "remotes/dev/Tools/Ops", Remote: "dev"},
 	})
 	view := strings.ReplaceAll(stripAnsi(s.View()), "\u00a0", " ")
-	for _, want := range []string{"Group Search", "本机 · Tools/Ops", "本机 · Other/Ops", "dev · remotes/dev/Tools/Ops", "1/3 groups", "[Enter] Locate", "[Esc] Cancel"} {
+	for _, want := range []string{"Group Search", "本机 · Tools/Ops", "1/3 groups", "[Enter] Locate", "[Esc] Cancel"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("group identity or controls missing %q:\n%s", want, view)
 		}
+	}
+	for _, identity := range [][3]string{{"Ops", "Tools", "本机"}, {"Ops", "Other", "本机"}, {"Ops", "Tools", "dev"}} {
+		if !matrixGroupSearchHasRow(view, identity[:]...) {
+			t.Errorf("group name, parent and device must share one row: %v:\n%s", identity, view)
+		}
+	}
+	if strings.Contains(view, "remotes/dev/") {
+		t.Fatalf("remote namespace should not duplicate the device column:\n%s", view)
+	}
+}
+
+func matrixGroupSearchHasRow(view string, fields ...string) bool {
+	for _, line := range strings.Split(stripAnsi(view), "\n") {
+		if strings.Contains(line, " · ") {
+			continue // The fixed identity is separate from the table itself.
+		}
+		all := true
+		for _, field := range fields {
+			all = all && strings.Contains(line, field)
+		}
+		if all {
+			return true
+		}
+	}
+	return false
+}
+
+// matrix/hardened: wider screens should use their height for results instead
+// of repeating each identity on two rows or retaining the old ten-item cap.
+func TestMatrixGroupSearchWideScreenShowsTwentyGroups(t *testing.T) {
+	items := make([]GroupSearchItem, 40)
+	for i := range items {
+		items[i] = GroupSearchItem{Name: fmt.Sprintf("entry%02d", i), Path: fmt.Sprintf("Tools/entry%02d", i)}
+	}
+	s := NewGroupSearch()
+	s.SetSize(120, 40)
+	s.Show(items)
+	view := stripAnsi(s.View())
+	visible := 0
+	for _, line := range strings.Split(view, "\n") {
+		if strings.Contains(line, "entry") && strings.Contains(line, "本机") && !strings.Contains(line, " · ") {
+			visible++
+		}
+	}
+	if visible < 20 {
+		t.Fatalf("120x40 should show at least twenty complete group rows, got %d:\n%s", visible, view)
+	}
+}
+
+func TestMatrixGroupSearchRootAndLegacyAliasesKeepIdentity(t *testing.T) {
+	s := NewGroupSearch()
+	s.SetSize(120, 40)
+	s.Show([]GroupSearchItem{
+		{Name: "RootOnly", Path: "RootOnly"},
+		{Name: "Ops", Path: "Tools/LegacyA"},
+		{Name: "Ops", Path: "Tools/LegacyB"},
+		{Name: "Ops", Path: "remotes/dev/Tools/LegacyA", Remote: "dev"},
+		{Name: "Agent Deck", Path: "Tools/Agent-Deck"},
+	})
+	view := stripAnsi(s.View())
+	for _, fields := range [][]string{{"RootOnly", "—", "本机"}, {"Ops", "Tools/LegacyA", "本机"}, {"Ops", "Tools/LegacyB", "本机"}, {"Ops", "Tools/LegacyA", "dev"}, {"Agent Deck", "Tools", "本机"}} {
+		if !matrixGroupSearchHasRow(view, fields...) {
+			t.Fatalf("distinct group identity lost from its table row: %v:\n%s", fields, view)
+		}
+	}
+	for _, line := range strings.Split(view, "\n") {
+		if strings.Contains(line, "RootOnly") && !strings.Contains(line, " · ") && strings.Count(line, "RootOnly") != 1 {
+			t.Fatalf("root name repeated as its path:\n%s", line)
+		}
+		if strings.Contains(line, "Agent Deck") && strings.Contains(line, "Agent-Deck") {
+			t.Fatalf("equivalent punctuation should not repeat the leaf:\n%s", line)
+		}
+	}
+	if strings.Contains(view, "remotes/dev/") {
+		t.Fatalf("remote prefix leaked into display paths:\n%s", view)
+	}
+}
+
+func TestMatrixGroupSearchUnicodeColumnsStayAligned(t *testing.T) {
+	s := NewGroupSearch()
+	s.SetSize(120, 40)
+	s.Show([]GroupSearchItem{
+		{Name: "中文🚀", Path: "父组/中文🚀", Remote: "dev"},
+		{Name: "👨‍👩‍👧‍👦家庭与很长很长很长很长很长很长的分组", Path: "父组/👨‍👩‍👧‍👦家庭与很长很长很长很长很长很长的分组", Remote: "dev"},
+		{Name: "1️⃣关键项目很长很长很长很长很长很长很长", Path: "父组/1️⃣关键项目很长很长很长很长很长很长很长", Remote: "dev"},
+	})
+	view := stripAnsi(s.View())
+	var pathColumn, hostColumn int
+	rows := 0
+	for _, line := range strings.Split(view, "\n") {
+		if !utf8.ValidString(line) || cellWidth(line) > 120 {
+			t.Fatalf("invalid or overflowing Unicode row:\n%s", line)
+		}
+		if !strings.Contains(line, "父组") || strings.Contains(line, " · ") {
+			continue
+		}
+		pathIndex, hostIndex := strings.Index(line, "父组"), strings.Index(line, "dev")
+		if hostIndex < 0 {
+			t.Fatalf("device lost after a long Unicode name:\n%s", line)
+		}
+		pathCell, hostCell := cellWidth(line[:pathIndex]), cellWidth(line[:hostIndex])
+		if rows == 0 {
+			pathColumn, hostColumn = pathCell, hostCell
+		} else if pathCell != pathColumn || hostCell != hostColumn {
+			t.Fatalf("Unicode shifted table columns: path %d/%d host %d/%d:\n%s", pathCell, pathColumn, hostCell, hostColumn, view)
+		}
+		rows++
+	}
+	if rows != 3 || !strings.Contains(view, "…") {
+		t.Fatalf("expected all three rows and truncation for long names:\n%s", view)
+	}
+}
+
+func TestMatrixGroupSearchNarrowFooterRetainsSelectedPathSuffix(t *testing.T) {
+	s := NewGroupSearch()
+	s.SetSize(30, 12)
+	s.Show([]GroupSearchItem{
+		{Name: "组一", Path: "remotes/dev/很长的共同路径/第一/组一", Remote: "dev"},
+		{Name: "组二", Path: "remotes/dev/很长的共同路径/第二/组二", Remote: "dev"},
+	})
+	for _, suffix := range []string{"第一/组一", "第二/组二"} {
+		view := stripAnsi(s.View())
+		if !strings.Contains(view, "dev · ") || !strings.Contains(view, suffix) || !strings.Contains(view, "…") || !strings.Contains(view, "[Esc]") {
+			t.Fatalf("narrow footer lost selected device/path identity or controls (%s):\n%s", suffix, view)
+		}
+		if matrixGroupSearchHasRow(view, "分组", "路径", "设备") {
+			t.Fatalf("narrow table should give name and device the available width:\n%s", view)
+		}
+		s.Update(tea.KeyMsg{Type: tea.KeyDown})
 	}
 }
 
