@@ -47,6 +47,25 @@ func (deps Deps) sessionStart(ctx context.Context, in SessionStartIn) (SessionSt
 	if err != nil {
 		return SessionStartOut{}, err
 	}
+	// matrix/hardened: automatic sleep has an exact-resume gate of its own.
+	if inst.IsAutoSleeping() || inst.AutoSleepPending() {
+		if in.Yolo {
+			return SessionStartOut{}, Errorf(CodeInvalid, "wake the sleeping session before changing launch options")
+		}
+		if _, err := session.WakeAutoSleepingSession(d.storage, inst); err != nil {
+			return SessionStartOut{}, Errorf(CodeInvalid, "%v", err)
+		}
+		if in.Message != "" {
+			if err := session.SendSessionMessageReliable(in.Profile, inst.ID, in.Message); err != nil {
+				return SessionStartOut{}, Errorf(CodeInvalid, "%v", err)
+			}
+		}
+		out := SessionStartOut{ID: inst.ID, Title: inst.Title, Group: inst.GroupPath, Instance: inst, Status: StartStatusStarted, Message: in.Message}
+		if tm := inst.GetTmuxSession(); tm != nil {
+			out.Tmux = tm.Name
+		}
+		return out, nil
+	}
 	if inst.Exists() {
 		return SessionStartOut{}, Errorf(CodeAlreadyRunning, "session '%s' is already running", inst.Title)
 	}

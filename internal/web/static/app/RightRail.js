@@ -166,7 +166,7 @@ export function RightRail() {
       </div>
       <div class="rail-body">
         ${panels.overview && html`
-          <${Card} title="OVERVIEW" badge=${session.status} testid="rail-card-overview">
+          <${Card} title="OVERVIEW" badge=${session.sleepPending ? 'sleep pending' : session.sleeping ? 'sleeping' : session.status} testid="rail-card-overview">
             <div class="kv"><span class="k">kind</span><span class="v">${session.kind}</span></div>
             <div class="kv"><span class="k">tool</span><span class="v">${session.tool || '—'}</span></div>
             ${session.model && html`

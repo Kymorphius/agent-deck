@@ -157,10 +157,26 @@ func (s *Server) handleSessionWS(w http.ResponseWriter, r *http.Request) {
 	})
 
 	var bridge *tmuxPTYBridge
+	sleeping := menuSession.Sleeping
+	pendingCols, pendingRows := 0, 0
+	// matrix/hardened: lazy bridges can be created after the first input. Close
+	// the final bridge, including one created after this connection was opened.
+	defer func() {
+		if bridge != nil {
+			bridge.Close()
+		}
+	}()
 	// matrix/hardened: a browser reconnect or passive terminal observer must
 	// not promote a conversation. Only successfully accepted user input does.
 	access := webSessionAccessRecorder{profile: snapshot.Profile, sessionID: sessionID}
-	if menuSession.TmuxSession != "" {
+	if menuSession.Sleeping {
+		message := "Session is sleeping. Type to resume."
+		if menuSession.SleepPending {
+			message = "Sleep cleanup is pending. Type to attempt safe resume."
+		}
+		_ = writer.WriteJSON(wsServerMessage{Type: "status", Event: "sleeping", Message: message, SessionID: sessionID, Time: time.Now().UTC()})
+	}
+	if menuSession.TmuxSession != "" && !menuSession.Sleeping {
 		bridge, err = newTmuxPTYBridge(menuSession.TmuxSession, menuSession.TmuxSocketName, sessionID, writer)
 		if err != nil {
 			logging.ForComponent(logging.CompWeb).Error("terminal_attach_failed",
@@ -187,7 +203,6 @@ func (s *Server) handleSessionWS(w http.ResponseWriter, r *http.Request) {
 				Time:      time.Now().UTC(),
 			})
 		} else {
-			defer bridge.Close()
 			_ = writer.WriteJSON(wsServerMessage{
 				Type:      "status",
 				Event:     "terminal_attached",
@@ -258,6 +273,34 @@ func (s *Server) handleSessionWS(w http.ResponseWriter, r *http.Request) {
 				})
 				continue
 			}
+			// matrix/hardened: a reconnect, ping, resize or empty input is not
+			// permission to resume a process. The read loop keeps nonempty input
+			// in order while wake waits for the actual composer to become ready.
+			if msg.Data == "" {
+				continue
+			}
+			if bridge == nil {
+				if waker, ok := s.mutator.(sessionSleepingWaker); ok {
+					name, socket, woke, wakeErr := waker.WakeSleepingSession(sessionID)
+					if wakeErr == nil && name != "" {
+						bridge, wakeErr = newTmuxPTYBridge(name, socket, sessionID, writer)
+					}
+					if wakeErr != nil {
+						_ = writer.WriteJSON(wsServerMessage{Type: "error", Code: "SESSION_WAKE_FAILED", Message: "failed to resume sleeping session: " + wakeErr.Error(), SessionID: sessionID, Time: time.Now().UTC()})
+						continue
+					}
+					if bridge != nil {
+						sleeping = false
+						if pendingCols >= 10 && pendingRows >= 3 {
+							_ = bridge.Resize(pendingCols, pendingRows)
+						}
+						_ = writer.WriteJSON(wsServerMessage{Type: "status", Event: "terminal_attached", SessionID: sessionID, Time: time.Now().UTC()})
+						if woke {
+							s.notifyMenuChanged()
+						}
+					}
+				}
+			}
 			if bridge == nil {
 				_ = writer.WriteJSON(wsServerMessage{
 					Type:      "error",
@@ -280,6 +323,12 @@ func (s *Server) handleSessionWS(w http.ResponseWriter, r *http.Request) {
 				access.acceptedInput(msg.Data)
 			}
 		case "resize":
+			// matrix/hardened: remember geometry while sleeping without waking
+			// or emitting a misleading missing-terminal error on each resize.
+			if sleeping && bridge == nil {
+				pendingCols, pendingRows = msg.Cols, msg.Rows
+				continue
+			}
 			if bridge == nil {
 				_ = writer.WriteJSON(wsServerMessage{
 					Type:      "error",

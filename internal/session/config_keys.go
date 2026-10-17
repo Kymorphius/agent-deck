@@ -31,6 +31,18 @@ type ConfigKey struct {
 func boolRef(b bool) *bool { return &b }
 
 var configKeys = []ConfigKey{
+	// matrix/hardened: safe sleep has its own opt-in, never a group queue cap.
+	{Key: "lifecycle.auto_sleep", Section: "Sessions", Label: "Sleep unused sessions", Help: "Release safely idle local Codex processes while retaining their conversations", Type: "bool",
+		get: func(c *UserConfig) any { return c.Lifecycle.AutoSleep },
+		set: func(c *UserConfig, v any) { c.Lifecycle.AutoSleep = v.(bool) }},
+	{Key: "lifecycle.sleep_after", Section: "Sessions", Label: "Sleep after", Help: "Grace period after completed work and last access, from 1m to 720h (default 1h)", Type: "string",
+		get: func(c *UserConfig) any {
+			if c.Lifecycle.SleepAfter == "" {
+				return "1h"
+			}
+			return c.Lifecycle.SleepAfter
+		},
+		set: func(c *UserConfig, v any) { c.Lifecycle.SleepAfter = v.(string) }},
 	// matrix/hardened: this collector switch is shared by CLI and hook paths.
 	{Key: "costs.auto_collect", Section: "Costs", Label: "Automatic collection", Help: "Collect transcript usage in the background; default off. Run costs sync for a manual update. Reload Agent Deck management windows after changing this setting.", Type: "bool", RestartRequired: true,
 		get: func(c *UserConfig) any { return c.Costs.GetAutoCollect() },
@@ -323,6 +335,12 @@ func SetConfigValue(name, raw string) (ConfigKey, any, error) {
 		cfg = &UserConfig{}
 	}
 	k.Set(cfg, v)
+	// matrix/hardened: reject a bad grace period before changing the file.
+	if k.Key == "lifecycle.sleep_after" {
+		if _, err := cfg.Lifecycle.SleepDuration(); err != nil {
+			return k, nil, err
+		}
+	}
 	if err := SaveUserConfig(cfg); err != nil {
 		return k, nil, err
 	}

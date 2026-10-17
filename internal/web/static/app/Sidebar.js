@@ -143,6 +143,7 @@ function SessionItem({ s, sel, rowKey, onSelect, showCols, depth, groupDepth }) 
         <span class="tt">${s.title}</span>
       </div>
       <div class="meta">
+        ${s.sleeping && html`<span class="tag">${s.sleepPending ? 'sleep pending' : 'sleeping'}</span>`}
         ${showCols.tool && s.tool && html`<span class="tag">${s.tool}</span>`}
         ${showCols.cost && s.cost > 0 && html`<span class="cost">$${s.cost.toFixed(2)}</span>`}
         <button class="row-chev" title="Details" onClick=${e => { e.stopPropagation(); setExp(v => !v) }}>

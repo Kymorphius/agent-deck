@@ -1,5 +1,6 @@
 // matrix/hardened: refresh the entry and cache its incremental menu dependency.
-const CACHE_VERSION = "agentdeck-shell-v25"
+// matrix/hardened: refresh terminal sleep/wake input handling in installed PWAs.
+const CACHE_VERSION = "agentdeck-shell-v26"
 const SHELL_CACHE = CACHE_VERSION
 const APP_SHELL_URLS = [
   "/",

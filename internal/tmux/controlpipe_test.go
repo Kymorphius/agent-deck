@@ -67,6 +67,22 @@ func TestControlPipe_ConnectAndClose(t *testing.T) {
 	assert.False(t, pipe.IsAlive())
 }
 
+// matrix/hardened: the real control client must be identifiable as a passive
+// observer, while capture and output events remain available.
+func TestMatrixControlPipeIsPassiveObserver(t *testing.T) {
+	name := createTestSessionStrict(t, "observer-flags")
+	pipe, err := NewControlPipe(name, "")
+	require.NoError(t, err)
+	defer pipe.Close()
+	flags, err := pipe.SendCommand("display-message -p '#{client_flags}'")
+	require.NoError(t, err)
+	assert.Contains(t, flags, "read-only")
+	assert.Contains(t, flags, "ignore-size")
+	assert.NotContains(t, flags, "no-output")
+	_, err = pipe.CapturePaneVia()
+	require.NoError(t, err)
+}
+
 func TestControlPipe_CapturePaneVia(t *testing.T) {
 	name := createTestSession(t, "capture")
 

@@ -79,6 +79,16 @@ func (deps Deps) sessionRestart(ctx context.Context, in SessionRestartIn) (Sessi
 		return SessionRestartOut{}, err
 	}
 	out := SessionRestartOut{ID: inst.ID, Title: inst.Title}
+	// matrix/hardened: restore the original sleeping thread without a second spawn.
+	if inst.IsAutoSleeping() || inst.AutoSleepPending() {
+		if len(in.Env) > 0 {
+			return SessionRestartOut{}, Errorf(CodeInvalid, "wake the sleeping session before changing its environment")
+		}
+		if _, err := session.WakeAutoSleepingSession(d.storage, inst); err != nil {
+			return SessionRestartOut{}, Errorf(CodeInvalid, "%v", err)
+		}
+		return out, nil
+	}
 
 	// Issue #30 freshness guard: keep a healthy, just-started scope intact.
 	if skip, reason := session.ShouldSkipRestart(inst, time.Now(), in.Force || len(in.Env) > 0); skip {

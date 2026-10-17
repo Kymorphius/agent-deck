@@ -1,0 +1,3 @@
+# matrix/hardened: Go flag help intentionally indents descriptions with spaces then a tab.
+help_session_output.stderr.golden whitespace=-space-before-tab
+help_session_sleep.stderr.golden whitespace=-space-before-tab

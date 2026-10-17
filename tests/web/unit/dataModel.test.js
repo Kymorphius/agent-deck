@@ -10,6 +10,24 @@ describe('menuModelSignal session projection', () => {
     sessionCostsSignal.value = {}
   })
 
+  // matrix/hardened: sleeping remains distinct from an ordinary stopped row
+  // through the projection consumed by the terminal and lifecycle labels.
+  it('preserves sleeping independently of stopped status and defaults old payloads to awake', async () => {
+    const { sessionsSignal } = await import(stateModulePath)
+    const { menuModelSignal } = await import(dataModelModulePath)
+    sessionsSignal.value = [
+      { type: 'session', session: { id: 'sleep', status: 'stopped', sleeping: true } },
+      { type: 'session', session: { id: 'manual', status: 'stopped' } },
+      { type: 'session', session: { id: 'pending', status: 'stopped', sleeping: true, sleepPending: true } },
+    ]
+    const byID = new Map(menuModelSignal.value.sessions.map(s => [s.id, s]))
+    expect(byID.get('sleep').sleeping).toBe(true)
+    expect(byID.get('sleep').status).toBe('stopped')
+    expect(byID.get('manual').sleeping).toBe(false)
+    expect(byID.get('pending').sleeping).toBe(true)
+    expect(byID.get('pending').sleepPending).toBe(true)
+  })
+
   it('carries backend canFork independently of tool name', async () => {
     const { sessionsSignal } = await import(stateModulePath)
     const { menuModelSignal } = await import(dataModelModulePath)

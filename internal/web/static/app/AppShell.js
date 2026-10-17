@@ -94,7 +94,7 @@ function WorkHead() {
         <span class="cur">${session.title}</span>
         <span class="sid" title=${session.id}>${session.id.slice(0, 8)}</span>
       </div>
-      <span class=${`status-chip ${session.status}`}><span class="d"/>${session.status}</span>
+      <span class=${`status-chip ${session.status}`}><span class="d"/>${session.sleepPending ? 'sleep pending' : session.sleeping ? 'sleeping' : session.status}</span>
       ${modelLabel && html`<span class="status-chip model" title=${session.modelId || modelLabel}>${modelLabel}</span>`}
       <span class="spacer"/>
       ${canMutate && html`

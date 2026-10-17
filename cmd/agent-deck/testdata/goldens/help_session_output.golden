@@ -1,0 +1,14 @@
+Usage: agent-deck session output [id|title] [options]
+
+Get the last response from a session. If no ID is provided, auto-detects current session.
+
+Options:
+
+Output budget: default text output (also with --pane) strips ANSI escapes and is capped at
+--max-tokens (default 25000, about 4 bytes per token). Longer output keeps its beginning and end
+around an explicit "output omitted" seam and ends with the path of the full output retained on
+disk. --json, -q/--quiet and --copy always carry the complete, unstripped source.
+
+Change detection: --json carries content_version when the response is parsed from one
+transcript file. Pass it back with --if-version to get {"unchanged":true} (no content, not a
+logged read) while that file is unchanged; any change returns the full response and a new version.

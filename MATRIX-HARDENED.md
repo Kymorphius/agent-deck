@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.94`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.95`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -842,3 +842,28 @@ snapshots, compatibility, and validation boundaries.
 ## Claude 外部钩子缺失的处理
 
 **matrix/hardened:** 远程会话的 `SessionStart` 若报告外部脚本不存在，检查目标设备的有效 Claude 配置；该设备已有的第三方钩子不会因重新安装 Agent Deck 而消失。按 [外部钩子故障处理](docs/claude-hook-errors.md) 先完整备份，再精确清理失效引用，保留其他钩子，并区分配置读回与实际启动验证。此类设置修复不需要修改程序或升级构建版本。
+
+## 81. 安全休眠与按需恢复
+
+`1.16.26+matrix.95` 将已保存的对话与正在运行的 AI 进程分开。详细条件、
+过渡输入边界和验证步骤见 [会话休眠](docs/session-sleep.md)。
+
+- **matrix/hardened:** `[lifecycle] auto_sleep = true` 显式启用；
+  `sleep_after = "1h"` 为启用后的默认等待时间。当前仅接纳可精确恢复的本地
+  Codex 用户线程，其他工具及证据不完整的会话继续运行。它不修改分组并发上限。
+- 以正常原生回合结束、空输入框、无交互查看者/后台工作/待投递消息及完整进程
+  归属为前提；二次检查和 tmux 输入门闩保护停止边界。草稿、审批、陌生后代、
+  缺失收据或未知状态都不停止。原生记录超出扫描上限时同样跳过。
+- 停前耐久保存私有完整滚屏，确认所属进程退出后才记录休眠。失败保留 pending
+  信息，不盲目重试 kill。唤醒严格使用原生线程 ID；文件缺失、身份或启动路由
+  改变时报错，不会静默另开对话。
+- Enter/打开交互、attach、发送消息会恢复自动休眠会话；列表、历史、预览和
+  被动 WebSocket 连接不启动进程。手动停止保持已有语义。
+- TUI 和 headless Web 可承载控制器，同 profile 只有一个持锁者，每分钟有界
+  检查。管理进程全部退出后没有额外服务。共享 monitor 保持只读观察职责。
+- `session sleep --dry-run --json` 查看可休眠条件与跳过原因；
+  `session sleep <id>` 显式休眠满足条件的会话。配置可经
+  `config set lifecycle.auto_sleep true` 和 `config set lifecycle.sleep_after 1h` 修改。
+- 纯观察 ControlPipe 使用 `read-only,ignore-size` 并保留输出事件；KeySender
+  仍是可写交互客户端并阻止休眠。安装后重载管理 TUI 和 Web 才能取得新行为，
+  不要求重启正在工作的 AI 会话。

@@ -456,10 +456,12 @@ type Home struct {
 
 	// Background status worker (Priority 1C optimization)
 	// Moves status updates to a separate goroutine, completely decoupling from UI
-	statusTrigger       chan statusUpdateRequest // Triggers background status update
-	statusWorkerDone    chan struct{}            // Signals worker has stopped
-	lastFullStatusSweep atomic.Int64             // UnixNano timestamp of last periodic status batch (legacy field name)
-	lastPersistedStatus map[string]string        // instanceID -> last status written to SQLite
+	statusTrigger    chan statusUpdateRequest // Triggers background status update
+	statusWorkerDone chan struct{}            // Signals worker has stopped
+	// matrix/hardened: separate lifetime for the opt-in TUI/headless lifecycle owner.
+	autoSleepDone       chan struct{}
+	lastFullStatusSweep atomic.Int64      // UnixNano timestamp of last periodic status batch (legacy field name)
+	lastPersistedStatus map[string]string // instanceID -> last status written to SQLite
 	// lastPersistedAutoNameDesc tracks the last auto-name description written to
 	// SQLite per instance, so the background loop only issues a targeted write
 	// when the live Claude task description actually changes (mirrors
@@ -1039,6 +1041,9 @@ type Home struct {
 	insertModeRemoteName string
 	insertModeRemoteID   string
 	sessionExists        func(*session.Instance) bool
+	// matrix/hardened: per-model routing-test seam; production records access
+	// durably before opening and refuses interaction when persistence fails.
+	interactionAccess func(*session.Instance) error
 
 	// Insert-mode keystroke batching (#1094). Per-keystroke tmux send-keys
 	// invocations are too slow when typing fast. Runes are accumulated in
@@ -1505,6 +1510,19 @@ type deletedSessionEntry struct {
 func (h *Home) activateSelectedItem() (tea.Model, tea.Cmd) {
 	if h.cursor < len(h.flatItems) {
 		item := h.flatItems[h.cursor]
+		// matrix/hardened: explicit opening cancels an overlapping idle-sleep
+		// decision before any wake or terminal attach can run.
+		if item.Type == session.ItemTypeSession && item.Session != nil {
+			if err := h.matrixRecordOpenInteraction(item.Session); err != nil {
+				h.setError(err)
+				return h, nil
+			}
+		}
+		// matrix/hardened: opening an automatic sleeper resumes its exact
+		// conversation before the ordinary stopped/dead-pane restart path.
+		if item.Type == session.ItemTypeSession && item.Session != nil && (item.Session.IsAutoSleeping() || item.Session.AutoSleepPending()) {
+			return h, h.matrixWakeSelectedSession(item.Session, false)
+		}
 		if !h.embeddedLayout && (item.Type == session.ItemTypeSession || item.Type == session.ItemTypeWindow || item.Type == session.ItemTypeRemoteSession) {
 			return h, h.attachSelectedLegacy()
 		}
@@ -2356,6 +2374,13 @@ func NewHomeWithRuntimeSource(profile string, source session.RuntimeObservationS
 
 		go h.livePipeReconciler()
 		go h.statusWorker()
+		// matrix/hardened: sleeping also works in the headless Web host; this
+		// controller owns a separate storage handle and a per-profile lease.
+		h.autoSleepDone = make(chan struct{})
+		go func() {
+			defer close(h.autoSleepDone)
+			session.RunAutoSleepController(h.ctx, h.profile)
+		}()
 		h.startLogWorkers()
 	}
 
@@ -5687,7 +5712,17 @@ func (h *Home) fetchPreview(inst *session.Instance, key string, windowIndex int)
 	return func() tea.Msg {
 		var content string
 		var err error
-		if windowIndex >= 0 {
+		// matrix/hardened: sleep preserves a verified terminal artifact. Reading
+		// a preview never launches the stopped process to recreate its pane.
+		if inst.IsAutoSleeping() || inst.AutoSleepPending() {
+			content, err = session.ReadAutoSleepScrollback(inst)
+			if err != nil {
+				// matrix/hardened: an unavailable or changed artifact is visible
+				// while remaining a passive preview, never an implicit restart.
+				content = fmt.Sprintf("Saved terminal history unavailable: %v", err)
+				err = nil
+			}
+		} else if windowIndex >= 0 {
 			content, err = inst.PreviewWindowFull(windowIndex)
 		} else {
 			content, err = inst.PreviewFull()
@@ -6088,10 +6123,13 @@ func (h *Home) getSelectedSession() *session.Instance {
 }
 
 type sessionRenderState struct {
-	status    session.Status
-	substate  session.Substate // Honest Status v2: additive refinement (model-unavailable, auth-401, ...)
-	tool      string
-	paneTitle string // Current task description from tmux pane title (stripped of spinner/done markers)
+	status session.Status
+	// matrix/hardened: render automatic sleepers distinctly from manual stops.
+	matrixSleeping     bool
+	matrixSleepPending bool
+	substate           session.Substate // Honest Status v2: additive refinement (model-unavailable, auth-401, ...)
+	tool               string
+	paneTitle          string // Current task description from tmux pane title (stripped of spinner/done markers)
 	// matrix/hardened: archived rows are not counted as interrupted turns.
 	matrixArchived bool
 	// Row-label fields (#1753): the per-row render path used to read these
@@ -6268,6 +6306,8 @@ func (h *Home) refreshSessionRenderSnapshot(instances []*session.Instance) {
 		}
 		state := sessionRenderState{
 			status:             inst.GetStatusThreadSafe(),
+			matrixSleeping:     inst.IsAutoSleeping() || inst.AutoSleepPending(),
+			matrixSleepPending: inst.AutoSleepPending(),
 			substate:           inst.CachedSubstate(),
 			tool:               inst.GetToolThreadSafe(),
 			archivedSuperseded: inst.IsArchived() && inst.SupersededBy != "",
@@ -6334,13 +6374,15 @@ func (h *Home) getSessionRenderState(inst *session.Instance) sessionRenderState 
 	// snapshot refresh has not seen yet, never the steady-state whole list.
 	account := inst.GetAccountThreadSafe()
 	return sessionRenderState{
-		status:         inst.GetStatusThreadSafe(),
-		tool:           inst.GetToolThreadSafe(),
-		account:        account,
-		accountDisplay: newAccountPresentation(account, h.accountSlotsConfigured.Load()),
-		title:          inst.GetTitleThreadSafe(),
-		autoName:       inst.GetAutoName(),
-		autoNameDesc:   inst.GetAutoNameDescription(),
+		status:             inst.GetStatusThreadSafe(),
+		matrixSleeping:     inst.IsAutoSleeping() || inst.AutoSleepPending(),
+		matrixSleepPending: inst.AutoSleepPending(),
+		tool:               inst.GetToolThreadSafe(),
+		account:            account,
+		accountDisplay:     newAccountPresentation(account, h.accountSlotsConfigured.Load()),
+		title:              inst.GetTitleThreadSafe(),
+		autoName:           inst.GetAutoName(),
+		autoNameDesc:       inst.GetAutoNameDescription(),
 	}
 }
 
@@ -8876,6 +8918,9 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// always carry the receipt needed to state verified versus pending.
 		h.setError(fmt.Errorf("account switched to %q — %s", msg.account, msg.summary))
 		return h, nil
+
+	case matrixAutoWokeMsg:
+		return h.matrixAutoWakeFinished(msg)
 
 	case sessionRestartedMsg:
 		if msg.err != nil {
@@ -13679,6 +13724,14 @@ func (h *Home) attachSelectedLegacy() tea.Cmd {
 		if item.Session == nil {
 			return nil
 		}
+		if err := h.matrixRecordOpenInteraction(item.Session); err != nil {
+			h.setError(err)
+			return nil
+		}
+		// matrix/hardened: Alt+Enter uses the same exact-resume gate as Enter.
+		if item.Session.IsAutoSleeping() || item.Session.AutoSleepPending() {
+			return h.matrixWakeSelectedSession(item.Session, true)
+		}
 		if !h.sessionExistsForUI(item.Session) {
 			if !h.hasActiveAnimation(item.Session.ID) {
 				h.resumingSessions[item.Session.ID] = time.Now()
@@ -14240,6 +14293,15 @@ func (h *Home) performFinalShutdown(shutdownPool bool) tea.Cmd {
 		}
 		// Signal background worker to stop
 		h.cancel()
+		// matrix/hardened: cancellation stops future sleep decisions. A bounded
+		// owned-process cleanup may finish after this wait using its own DB.
+		if h.autoSleepDone != nil {
+			select {
+			case <-h.autoSleepDone:
+			case <-time.After(5 * time.Second):
+				uiLog.Warn("auto_sleep_controller_stop_timeout")
+			}
+		}
 		// Wait for background worker to finish (prevents race on shutdown)
 		if h.statusWorkerDone != nil {
 			select {
@@ -17943,7 +18005,16 @@ func (h *Home) restartSession(inst *session.Instance) tea.Cmd {
 			return sessionRestartedMsg{sessionID: id, err: err}
 		}
 
-		unarchived, err := restartWithArchiveTransition(current, h.persistArchived, current.Restart)
+		// matrix/hardened: explicit restart of a sleeping row resumes the saved
+		// native thread. Fresh restart remains refused by the core sleep gate.
+		restart := current.Restart
+		if current.IsAutoSleeping() || current.AutoSleepPending() {
+			restart = func() error {
+				_, err := session.WakeAutoSleepingSession(h.storage, current)
+				return err
+			}
+		}
+		unarchived, err := restartWithArchiveTransition(current, h.persistArchived, restart)
 		if err == nil {
 			if fitErr := fitRestartedPreview(current, previewSize); fitErr != nil {
 				uiLog.Debug("restart_preview_resize_failed", slog.String("session", id), slog.Any("error", fitErr))
@@ -18280,6 +18351,12 @@ func (h *Home) restartRemoteSession(remoteName, sessionID, title string) tea.Cmd
 
 // attachSession attaches to a session using custom PTY with Ctrl+Q detection
 func (h *Home) attachSession(inst *session.Instance) tea.Cmd {
+	// matrix/hardened: direct switch/reattach paths also register interaction
+	// before terminal configuration or an overlapping sleep can stop the pane.
+	if err := h.matrixRecordOpenInteraction(inst); err != nil {
+		h.setError(err)
+		return nil
+	}
 	tmuxSess := inst.GetTmuxSession()
 	if tmuxSess == nil {
 		return nil
@@ -22738,8 +22815,15 @@ func (h *Home) renderSessionItem(
 	}
 
 	tool := toolStyle.Render(" " + instTool)
+	// matrix/hardened: the classic row otherwise has only a stopped glyph.
+	if instState.matrixSleeping {
+		tool = toolStyle.Render(" ["+matrixSessionStatusLabel(instStatus, true, instState.matrixSleepPending)+"]") + tool
+	}
 	if (listWidth > 0 && listWidth < 40) || h.toolBadgeHidden(instTool) {
 		tool = ""
+		if instState.matrixSleeping {
+			tool = toolStyle.Render(" [" + matrixSessionStatusLabel(instStatus, true, instState.matrixSleepPending) + "]")
+		}
 	}
 
 	// Supervisor badge for the maestro row.
@@ -23954,7 +24038,7 @@ func (h *Home) renderSessionInfoCard(inst *session.Instance, width, height int) 
 		statusColor = ColorTextDim
 	}
 	statusStyle := lipgloss.NewStyle().Foreground(statusColor)
-	b.WriteString(fmt.Sprintf("%s %s\n", labelStyle.Render("Status:"), statusStyle.Render(string(cardStatus))))
+	b.WriteString(fmt.Sprintf("%s %s\n", labelStyle.Render("Status:"), statusStyle.Render(matrixSessionStatusLabel(cardStatus, inst.IsAutoSleeping(), inst.AutoSleepPending()))))
 
 	// Tool
 	b.WriteString(fmt.Sprintf("%s %s\n", labelStyle.Render("Tool:"), valueStyle.Render(cardTool)))
@@ -24148,6 +24232,15 @@ func (h *Home) renderPreviewPane(width, height int) string {
 		)
 	}
 	selectedStatus := selected.GetStatusThreadSafe()
+	// matrix/hardened: show preserved scrollback, rather than the generic
+	// stopped-process action card, without waking the saved conversation.
+	if selected.IsAutoSleeping() || selected.AutoSleepPending() {
+		h.previewCacheMu.RLock()
+		preview := h.previewCache[pvKey]
+		h.previewCacheMu.RUnlock()
+		label := matrixSessionStatusLabel(selectedStatus, selected.IsAutoSleeping(), selected.AutoSleepPending())
+		return renderEmbeddedTerminal(selected.Title, label+" · Enter to safely resume", selected.Tool, preview, width, height, h.previewScrollOffset)
+	}
 	if h.embeddedLayout && selectedStatus != session.StatusStopped && selectedStatus != session.StatusError {
 		h.previewCacheMu.RLock()
 		preview := h.previewCache[pvKey]
@@ -26032,7 +26125,11 @@ func (h *Home) openScrollbackPager(sessionID string) tea.Cmd {
 	title := strings.TrimSpace(inst.Title)
 	h.scrollbackPager.Show(title, sessionID, h.width, h.height)
 	return func() tea.Msg {
-		content, err := tmuxSess.CaptureHistoryLines(scrollbackCaptureLines)
+		// matrix/hardened: the full-history pager preserves earlier sleep
+		// artifacts after wake; ordinary detached preview remains the live pane.
+		content, err := matrixScrollbackWithSavedHistory(inst, func() (string, error) {
+			return tmuxSess.CaptureHistoryLines(scrollbackCaptureLines)
+		})
 		return scrollbackContentMsg{sessionID: sessionID, content: content, err: err}
 	}
 }

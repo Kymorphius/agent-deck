@@ -52,6 +52,8 @@ func handleSession(profile string, args []string) {
 		} else {
 			handleSessionStop(profile, args[1:])
 		}
+	case "sleep": // matrix/hardened: safe reclamation, separate from manual stop.
+		handleSessionSleep(profile, args[1:])
 	case "remove":
 		handleSessionRemove(profile, args[1:])
 	case "cleanup", "prune":
@@ -157,6 +159,7 @@ func printSessionHelp() {
 	fmt.Println("Commands:")
 	fmt.Println("  start <id>              Start a session's tmux process")
 	fmt.Println("  stop <id>               Stop/kill session process")
+	fmt.Println("  sleep [--dry-run] [id]  Sleep a safely idle session, or inspect eligibility") // matrix/hardened
 	fmt.Println("  remove <id>             Remove session from registry (stopped/error only; --force to bypass)")
 	fmt.Println("  cleanup [--days N]      Purge dead sessions idle N+ days (dry-run unless --yes)")
 	fmt.Println("  archive <id|title>      Stop session and hide it from active lists (retained in storage)")
@@ -308,6 +311,27 @@ func handleSessionStart(profile string, args []string) {
 		}
 		os.Exit(1)
 		return // unreachable, satisfies staticcheck SA5011
+	}
+
+	// matrix/hardened: explicit start of a sleeping session resumes exactly
+	// once; the ordinary builder must not silently create a fresh thread.
+	if inst.IsAutoSleeping() || inst.AutoSleepPending() {
+		if *yoloMode {
+			out.Error("wake the sleeping session before changing launch options", ErrCodeInvalidOperation)
+			os.Exit(1)
+		}
+		if _, err := session.WakeAutoSleepingSession(storage, inst); err != nil {
+			out.Error(err.Error(), ErrCodeInvalidOperation)
+			os.Exit(1)
+		}
+		if initialMessage != "" {
+			if err := session.SendSessionMessageReliable(profile, inst.ID, initialMessage); err != nil {
+				out.Error(err.Error(), ErrCodeInvalidOperation)
+				os.Exit(1)
+			}
+		}
+		out.Success(fmt.Sprintf("Woke session: %s", inst.Title), map[string]interface{}{"success": true, "id": inst.ID, "title": inst.Title, "status": "started"})
+		return
 	}
 
 	// Check if already running
@@ -863,6 +887,20 @@ func handleSessionRestart(profile string, args []string) {
 		}
 		os.Exit(1)
 		return // unreachable, satisfies staticcheck SA5011
+	}
+
+	// matrix/hardened: a sleeping session is restored, not restarted twice.
+	if inst.IsAutoSleeping() || inst.AutoSleepPending() {
+		if len(envFlags) > 0 {
+			out.Error("wake the sleeping session before changing its environment", ErrCodeInvalidOperation)
+			os.Exit(1)
+		}
+		if _, err := session.WakeAutoSleepingSession(storage, inst); err != nil {
+			out.Error(err.Error(), ErrCodeInvalidOperation)
+			os.Exit(1)
+		}
+		out.Success(fmt.Sprintf("Woke session: %s", inst.Title), map[string]interface{}{"success": true, "id": inst.ID, "title": inst.Title})
+		return
 	}
 
 	// Issue #30: freshness guard. Skip the restart (keep the current tmux
@@ -1518,7 +1556,7 @@ func handleSessionAttach(profile string, args []string) {
 	identifier := fs.Arg(0)
 
 	// Load sessions
-	_, instances, _, err := loadSessionData(profile)
+	storage, instances, _, err := loadSessionData(profile)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
@@ -1535,6 +1573,22 @@ func handleSessionAttach(profile string, args []string) {
 		return // unreachable, satisfies staticcheck SA5011
 	}
 
+	// matrix/hardened: only an intentional interactive visit wakes an automatic
+	// sleeper; piping attach must not leave a newly started process behind.
+	if !stdinStdoutIsTerminal() {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", errAttachNoTTY)
+		os.Exit(1)
+	}
+	if err := inst.MarkAccessedForInteraction(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: cannot attach before recording access: %v\n", err)
+		os.Exit(1)
+	}
+	if inst.IsAutoSleeping() || inst.AutoSleepPending() {
+		if _, err := session.WakeAutoSleepingSession(storage, inst); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: failed to wake session: %v\n", err)
+			os.Exit(1)
+		}
+	}
 	// Check if session exists
 	if !inst.Exists() {
 		fmt.Fprintf(os.Stderr, "Error: session '%s' is not running\n", inst.Title)
@@ -3233,6 +3287,16 @@ func handleSessionSend(profile string, args []string) {
 				out.Error(err.Error(), ErrCodeInvalidOperation)
 				os.Exit(1)
 			}
+			// matrix/hardened: validate the send before resuming a sleeper. A
+			// manual stopped session retains the queue's existing refusal.
+			if err := inst.MarkAccessedForInteraction(); err != nil {
+				out.Error(fmt.Sprintf("cannot send before recording access: %v", err), ErrCodeInvalidOperation)
+				os.Exit(1)
+			}
+			if _, err := session.WakeAutoSleepingSession(storage, inst); err != nil {
+				out.Error(fmt.Sprintf("failed to wake session: %v", err), ErrCodeInvalidOperation)
+				os.Exit(1)
+			}
 			ledgerSender := senderID
 			if *noTag {
 				ledgerSender = "" // --no-tag: never attributed to an inherited session
@@ -3253,6 +3317,17 @@ func handleSessionSend(profile string, args []string) {
 	}
 
 	// Check if session is running
+	// matrix/hardened: resuming is an input action, never a side effect of
+	// reading session state. Even --no-wait must protect a cold composer's input.
+	if err := inst.MarkAccessedForInteraction(); err != nil {
+		out.Error(fmt.Sprintf("cannot send before recording access: %v", err), ErrCodeInvalidOperation)
+		os.Exit(1)
+	}
+	woke, err := session.WakeAutoSleepingSession(storage, inst)
+	if err != nil {
+		out.Error(fmt.Sprintf("failed to wake session: %v", err), ErrCodeInvalidOperation)
+		os.Exit(1)
+	}
 	if !inst.Exists() {
 		out.Error(fmt.Sprintf("session '%s' is not running", inst.Title), ErrCodeInvalidOperation)
 		os.Exit(1)
@@ -3342,7 +3417,7 @@ func handleSessionSend(profile string, args []string) {
 		status, statusErr := fetchHookDrivenStatus(profile, inst.ID)
 		busyAcceptsInput = statusErr == nil && status == "running"
 	}
-	if !*noWait && !busyAcceptsInput {
+	if woke || (!*noWait && !busyAcceptsInput) {
 		if err := send.WaitForAgentReady(tmuxSess, inst.Tool, *timeout, send.PromptGates{
 			ClaudeComposer: session.IsClaudeCompatible(inst.Tool),
 			CodexPrompt:    session.IsCodexCompatible(inst.Tool),
@@ -6253,6 +6328,8 @@ func handleSessionOutput(profile string, args []string) {
 	// response". The local TUI preview uses capture-pane; remote sessions
 	// fetched via SSH need this same content to render claude-formatted output.
 	paneFlag := fs.Bool("pane", false, "Return tmux capture-pane content (ANSI stripped in default text mode)")
+	// matrix/hardened: saved history remains explicitly readable after wake.
+	savedPane := fs.Bool("saved-pane", false, "Return retained terminal history from automatic sleep without waking the session")
 	primaryPane := fs.Bool("primary", false, "With --pane, capture the managed first window")
 	maxTokens := fs.Int("max-tokens", defaultOutputMaxTokens, "Maximum default text-output budget in approximate tokens (head+tail; full text retained on disk)")
 	// #2481: conditional read for pollers. With the content_version of an
@@ -6295,8 +6372,12 @@ func handleSessionOutput(profile string, args []string) {
 		out.Error("--primary requires --pane", ErrCodeInvalidOperation)
 		os.Exit(1)
 	}
-	if *ifVersion != "" && (!*jsonOutput || quietMode || *paneFlag || *copyFlag) {
-		out.Error("--if-version requires --json and cannot be combined with -q, --pane or --copy", ErrCodeInvalidOperation)
+	if *savedPane && *primaryPane {
+		out.Error("--saved-pane cannot be combined with --primary", ErrCodeInvalidOperation)
+		os.Exit(1)
+	}
+	if *ifVersion != "" && (!*jsonOutput || quietMode || *paneFlag || *savedPane || *copyFlag) {
+		out.Error("--if-version requires --json and cannot be combined with -q, --pane, --saved-pane or --copy", ErrCodeInvalidOperation)
 		os.Exit(1)
 	}
 
@@ -6342,10 +6423,14 @@ func handleSessionOutput(profile string, args []string) {
 	// tmux pane capture so remote previews can render the same claude-formatted
 	// content the local preview shows. We still emit a ResponseOutput-shaped
 	// JSON so the wire format is unchanged.
-	if *paneFlag {
+	if *paneFlag || *savedPane {
 		var paneContent string
 		var paneErr error
-		if *primaryPane {
+		// matrix/hardened: saved pane history remains readable during sleep;
+		// output and remote previews never resume the stopped agent process.
+		if *savedPane || inst.IsAutoSleeping() || inst.AutoSleepPending() {
+			paneContent, paneErr = session.ReadAutoSleepScrollback(inst)
+		} else if *primaryPane {
 			paneContent, paneErr = inst.PreviewPrimaryFull()
 		} else {
 			paneContent, paneErr = inst.PreviewFull()
@@ -6354,13 +6439,17 @@ func handleSessionOutput(profile string, args []string) {
 			out.Error(fmt.Sprintf("failed to capture pane: %v", paneErr), ErrCodeInvalidOperation)
 			os.Exit(1)
 		}
-		emitted := boundSessionOutputOrExit(out, profile, inst.ID, "pane", paneContent, *maxTokens, boundAgentOutput)
+		role := "pane"
+		if *savedPane {
+			role = "saved-pane"
+		}
+		emitted := boundSessionOutputOrExit(out, profile, inst.ID, role, paneContent, *maxTokens, boundAgentOutput)
 		jsonData := map[string]interface{}{
 			"success":       true,
 			"session_id":    inst.ID,
 			"session_title": inst.Title,
 			"tool":          inst.Tool,
-			"role":          "pane",
+			"role":          role,
 			"content":       emitted,
 		}
 		if quietMode {

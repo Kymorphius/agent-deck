@@ -140,7 +140,9 @@ func ownProcessGroupID(cmd *exec.Cmd) int {
 }
 
 func newControlPipeOnce(sessionName, socketName string) (*ControlPipe, error) {
-	cmd := tmuxExec(socketName, "-u", "-C", "attach-session", "-t", sessionName)
+	// matrix/hardened: this pipe only observes output and issues read queries.
+	// Keep output events, but never count it as an interactive/size-owning viewer.
+	cmd := tmuxExec(socketName, "-u", "-C", "attach-session", "-E", "-f", "read-only,ignore-size", "-t", sessionName)
 	// Put in own process group so we can kill the entire group on shutdown
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 

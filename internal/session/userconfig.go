@@ -70,6 +70,8 @@ func (h HealthSettings) SessionEventsEnabled() bool {
 
 type UserConfig struct {
 	Health HealthSettings `toml:"health,omitempty"`
+	// matrix/hardened: preserve the explicit safe-sleep policy on config saves.
+	Lifecycle LifecycleSettings `toml:"lifecycle,omitempty"`
 
 	// DefaultTool is the pre-selected AI tool when creating new sessions
 	// Valid values: "claude", "gemini", "opencode", "codex", "pi", or any custom tool name

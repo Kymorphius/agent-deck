@@ -162,8 +162,8 @@ func TestServiceWorkerServed(t *testing.T) {
 	if !strings.Contains(rr.Body.String(), "CACHE_VERSION") {
 		t.Fatalf("expected service worker payload, got: %s", rr.Body.String())
 	}
-	// matrix/hardened: refresh the entry together with its new reducer dependency.
-	if !strings.Contains(rr.Body.String(), `agentdeck-shell-v25`) || !strings.Contains(rr.Body.String(), `/static/app/menuDelta.js`) {
+	// matrix/hardened: refresh the entry with the sleeping terminal input path.
+	if !strings.Contains(rr.Body.String(), `agentdeck-shell-v26`) || !strings.Contains(rr.Body.String(), `/static/app/menuDelta.js`) {
 		t.Fatalf("expected bumped service worker cache version, got: %s", rr.Body.String())
 	}
 }

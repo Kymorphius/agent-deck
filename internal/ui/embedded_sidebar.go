@@ -241,7 +241,8 @@ func (h *Home) renderEmbeddedSessionItem(
 		statusStyle = SessionStatusWaiting
 	}
 
-	statusText := string(state.status)
+	// matrix/hardened: an automatic sleeper can resume; it is not a manual stop.
+	statusText := matrixSessionStatusLabel(state.status, state.matrixSleeping, state.matrixSleepPending)
 	if statusText == "" {
 		statusText = string(session.StatusIdle)
 	}
