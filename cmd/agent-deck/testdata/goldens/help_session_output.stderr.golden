@@ -1,0 +1,17 @@
+  -copy
+    	Copy output to system clipboard
+  -if-version string
+    	With --json: answer {"unchanged":true} without content when the response source still has this content_version
+  -json
+    	Output as JSON
+  -max-tokens int
+    	Maximum default text-output budget in approximate tokens (head+tail; full text retained on disk) (default 25000)
+  -pane
+    	Return tmux capture-pane content (ANSI stripped in default text mode)
+  -primary
+    	With --pane, capture the managed first window
+  -q	Minimal output (short)
+  -quiet
+    	Minimal output
+  -saved-pane
+    	Return retained terminal history from automatic sleep without waking the session

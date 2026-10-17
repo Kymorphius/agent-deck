@@ -87,6 +87,10 @@ type MenuSession struct {
 	// drift. The web MCP pane reads this instead of guessing from the name.
 	MCPSupported bool           `json:"mcpSupported"`
 	Status       session.Status `json:"status"`
+	// matrix/hardened: preserve automatic sleep separately from manual stop.
+	Sleeping bool `json:"sleeping,omitempty"`
+	// matrix/hardened: pending cleanup is recoverable only after ownership proof.
+	SleepPending bool `json:"sleepPending,omitempty"`
 	// Substate is the additive Honest-Status-v2 refinement of Status
 	// (e.g. "model-unavailable", "auth-401", "idle-at-empty-prompt"). It
 	// explains WHY a session is in its coarse status so consumers like the
@@ -474,6 +478,8 @@ func toMenuSession(inst *session.Instance) *MenuSession {
 		CanFork:            inst.CanFork(),
 		MCPSupported:       session.ToolSupportsMCPManager(inst.GetToolThreadSafe()),
 		Status:             inst.GetStatusThreadSafe(),
+		Sleeping:           inst.IsAutoSleeping() || inst.AutoSleepPending(),
+		SleepPending:       inst.AutoSleepPending(),
 		Substate:           string(inst.CachedSubstate()),
 		SubstateDetail:     inst.SubstateDetail(),
 		BackgroundWork:     inst.BackgroundWorkJSON(),

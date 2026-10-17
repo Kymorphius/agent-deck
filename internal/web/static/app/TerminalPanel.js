@@ -207,6 +207,7 @@ export function TerminalPanel() {
       reconnectAttempt: 0,
       wsReconnectEnabled: true,
       terminalAttached: false,
+      sleeping: false, // matrix/hardened: only a server sleep event permits input before attach.
     }
     ctxRef.current = ctx
 
@@ -218,7 +219,8 @@ export function TerminalPanel() {
         if (!container.offsetWidth || !container.offsetHeight) return
         fitAddon.fit()
         const { cols, rows } = terminal
-        if (cols >= 10 && rows >= 3 && ctx.ws && ctx.ws.readyState === WebSocket.OPEN && ctx.terminalAttached) {
+        // matrix/hardened: sleeping geometry is cached server-side without wake.
+        if (cols >= 10 && rows >= 3 && ctx.ws && ctx.ws.readyState === WebSocket.OPEN && (ctx.terminalAttached || ctx.sleeping)) {
           ctx.ws.send(JSON.stringify({ type: 'resize', cols, rows }))
         }
       }, delayMs)
@@ -274,7 +276,9 @@ export function TerminalPanel() {
     // sendInput is the single guarded path to the pane -- every producer
     // (onData, the key remapper, paste) funnels through it.
     const sendInput = (data) => {
-      if (!ctx.ws || ctx.ws.readyState !== WebSocket.OPEN || !ctx.terminalAttached || readOnlySignal.value) return
+      // matrix/hardened: the first real input wakes a sleeper; passive socket
+      // reconnect and geometry updates continue to require an attached pane.
+      if (!ctx.ws || ctx.ws.readyState !== WebSocket.OPEN || (!ctx.terminalAttached && !ctx.sleeping) || readOnlySignal.value) return
       ctx.ws.send(JSON.stringify({ type: 'input', data }))
     }
     const inputDisposable = terminal.onData(sendInput)
@@ -334,6 +338,7 @@ export function TerminalPanel() {
     function connectWS(reconnecting) {
       if (ctx.ws) { ctx.ws.close(); ctx.ws = null }
       ctx.terminalAttached = false
+      ctx.sleeping = false
       ctx.wsReconnectEnabled = true
       wsStateSignal.value = 'connecting'
 
@@ -364,6 +369,11 @@ export function TerminalPanel() {
                 wsStateSignal.value = 'connected'
               } else if (payload.event === 'terminal_attached') {
                 ctx.terminalAttached = true
+                ctx.sleeping = false
+                scheduleFitAndResize(0)
+              } else if (payload.event === 'sleeping') {
+                ctx.sleeping = true
+                terminal.writeln('\r\n' + (payload.message || 'Session is sleeping. Type to resume.') + '\r\n')
                 scheduleFitAndResize(0)
               } else if (payload.event === 'session_closed') {
                 ctx.terminalAttached = false

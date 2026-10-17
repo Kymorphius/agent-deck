@@ -172,6 +172,11 @@ func (m *WebMutator) StartSession(id string) error {
 	if inst == nil {
 		return fmt.Errorf("session not found: %s", id)
 	}
+	// matrix/hardened: explicit Start resumes a sleeping original instead of
+	// creating a fresh conversation. The shared helper checks durable state.
+	if woke, err := m.matrixWakeForExplicitStart(inst); woke || err != nil {
+		return err
+	}
 	return inst.Start()
 }
 
@@ -203,6 +208,10 @@ func (m *WebMutator) RestartSession(id string) error {
 	m.h.instancesMu.RUnlock()
 	if inst == nil {
 		return fmt.Errorf("session not found: %s", id)
+	}
+	// matrix/hardened: Restart on an automatic sleeper is exact resume too.
+	if woke, err := m.matrixWakeForExplicitStart(inst); woke || err != nil {
+		return err
 	}
 	return inst.Restart()
 }

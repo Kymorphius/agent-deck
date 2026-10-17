@@ -66,6 +66,9 @@ type InstanceData struct {
 	// not a typed SQL column. Zero means unknown (old record or never
 	// started).
 	LastStartedAt time.Time `json:"last_started_at,omitempty"`
+	// matrix/hardened: sleep marker is carried through lite/full hydration.
+	AutoSleep        *AutoSleepState   `json:"matrix_auto_sleep,omitempty"`
+	AutoSleepHistory []*AutoSleepState `json:"matrix_auto_sleep_history,omitempty"`
 	// GenericSessionID is the custom [tools.*] conversation id (extras zone),
 	// with the tool/location scope it is only resumable under.
 	GenericSessionID       string    `json:"generic_session_id,omitempty"`
@@ -1114,6 +1117,13 @@ func instanceToRow(inst *Instance) (*statedb.InstanceRow, error) {
 	// `status --stale` (and ShouldSkipRestart's freshness guard) see a real
 	// value from a fresh CLI process instead of always-zero.
 	toolData = WriteLastStartedAtToToolData(toolData, inst.LastStartedAt)
+	// matrix/hardened: absent state is not an implicit clear from a stale writer.
+	inst.mu.RLock()
+	autoSleep, autoSleepCleared := cloneAutoSleepState(inst.AutoSleep), inst.autoSleepCleared
+	autoSleepHistory := cloneAutoSleepHistory(inst.AutoSleepHistory)
+	inst.mu.RUnlock()
+	toolData = WriteAutoSleepStateToToolData(toolData, autoSleep, autoSleepCleared)
+	toolData = WriteAutoSleepHistoryToToolData(toolData, autoSleepHistory)
 	// Custom [tools.*] conversation id — reboot-safe resume when resume_flag set.
 	// intentionalClear makes sticky MergeToolDataExtras honor operator clears
 	// without breaking stale-empty full-table saves (see generic_session_persist.go).
@@ -1321,6 +1331,8 @@ func (s *Storage) LoadLite() ([]*InstanceData, []*GroupData, error) {
 			ContextLevel:              ReadContextLevelFromToolData(r.ToolData),
 			ClaudeSessionIDUnverified: ReadClaudeSessionUnverifiedFromToolData(r.ToolData),
 			LastStartedAt:             ReadLastStartedAtFromToolData(r.ToolData),
+			AutoSleep:                 ReadAutoSleepStateFromToolData(r.ToolData),   // matrix/hardened
+			AutoSleepHistory:          ReadAutoSleepHistoryFromToolData(r.ToolData), // matrix/hardened
 			GenericSessionID:          ReadGenericSessionIDFromToolData(r.ToolData),
 			GenericDetectedAt:         ReadGenericDetectedAtFromToolData(r.ToolData),
 			GenericSessionTool:        genericScopeTool(r.ToolData),
@@ -1466,6 +1478,8 @@ func (s *Storage) LoadWithGroupsSnapshot() ([]*Instance, []*GroupData, *statedb.
 			ContextLevel:              ReadContextLevelFromToolData(r.ToolData),
 			ClaudeSessionIDUnverified: ReadClaudeSessionUnverifiedFromToolData(r.ToolData),
 			LastStartedAt:             ReadLastStartedAtFromToolData(r.ToolData),
+			AutoSleep:                 ReadAutoSleepStateFromToolData(r.ToolData),   // matrix/hardened
+			AutoSleepHistory:          ReadAutoSleepHistoryFromToolData(r.ToolData), // matrix/hardened
 			GenericSessionID:          ReadGenericSessionIDFromToolData(r.ToolData),
 			GenericDetectedAt:         ReadGenericDetectedAtFromToolData(r.ToolData),
 			GenericSessionTool:        genericScopeTool(r.ToolData),
@@ -1780,6 +1794,8 @@ func (s *Storage) convertToInstances(data *StorageData) ([]*Instance, []*GroupDa
 			IdentityInjectionDisabled:    instData.IdentityInjectionDisabled,
 			ContextLevel:                 instData.ContextLevel,
 			LastStartedAt:                instData.LastStartedAt,
+			AutoSleep:                    cloneAutoSleepState(instData.AutoSleep),          // matrix/hardened
+			AutoSleepHistory:             cloneAutoSleepHistory(instData.AutoSleepHistory), // matrix/hardened
 			GenericSessionID:             instData.GenericSessionID,
 			GenericDetectedAt:            instData.GenericDetectedAt,
 			GenericSessionTool:           instData.GenericSessionTool,

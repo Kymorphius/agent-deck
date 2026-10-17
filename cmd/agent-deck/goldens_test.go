@@ -81,6 +81,8 @@ var excludedCommands = []excludedCommand{
 	{"session context", "walks the real host CLAUDE.md/AGENTS.md memory hierarchy outside the sandbox (see session_context_golden_test.go)"},
 	{"session start", "starts a real tmux process; covered instead by the storage-bytes goldens (deliverable 2)"},
 	{"session stop", "stops a real tmux process; covered instead by the storage-bytes goldens (deliverable 2)"},
+	// matrix/hardened: only help is safe here; sleep retires a real owned process.
+	{"session sleep", "stops a real owned agent process and persists its terminal history"},
 	{"session restart", "restarts a real tmux process; covered instead by the storage-bytes goldens (deliverable 2)"},
 	{"session fork", "spawns a new tmux session"},
 	{"session attach", "requires an interactive TTY attach to tmux"},
@@ -260,7 +262,8 @@ func helpSpecs() []goldenSpec {
 	}
 
 	subcommands := []string{
-		"session start", "session stop", "session restart", "session fork", "session attach",
+		// matrix/hardened: freeze sleep usage and retained-history output flags.
+		"session start", "session stop", "session sleep", "session restart", "session fork", "session attach", "session output",
 		"session show", "session viewers", "session context",
 		"fleet status", "fleet recover",
 		"mcp list", "mcp attached", "mcp attach", "mcp detach",

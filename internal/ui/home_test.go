@@ -2813,6 +2813,12 @@ func TestRenderHelpBarCursorNegativeNoPanic(t *testing.T) {
 // newTestHomeWithItems creates a Home with flatItems populated, initial loading disabled, and sized.
 func newTestHomeWithItems(width, height int, items []session.Item) *Home {
 	home := NewHome()
+	// matrix/hardened: routing fixtures do not persist their synthetic rows.
+	// Durable-interaction tests clear this per-model seam and use real storage.
+	home.interactionAccess = func(inst *session.Instance) error {
+		inst.MarkAccessed()
+		return nil
+	}
 	home.width = width
 	home.height = height
 	home.initialLoading = false

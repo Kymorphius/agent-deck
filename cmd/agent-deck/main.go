@@ -45,7 +45,7 @@ import (
 )
 
 // matrix/hardened: identifies our hardened build.
-var Version = "1.16.26+matrix.94" // matrix/hardened: correct filesystem units and preserve guest memory scope; overridden via -ldflags.
+var Version = "1.16.26+matrix.95" // matrix/hardened: safe idle sleep and exact native conversation wake; overridden via -ldflags.
 
 // Table column widths for list command output
 const (

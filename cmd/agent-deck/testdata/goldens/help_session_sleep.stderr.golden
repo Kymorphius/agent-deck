@@ -1,0 +1,5 @@
+Usage of session sleep:
+  -dry-run
+    	Check eligibility without stopping any process
+  -json
+    	Print structured eligibility results

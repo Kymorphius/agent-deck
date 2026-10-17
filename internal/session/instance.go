@@ -317,10 +317,14 @@ type Instance struct {
 	lastOpenCodeScanAt time.Time // Rate-limits OpenCode session-discovery scans
 
 	// Codex CLI integration
-	CodexSessionID  string    `json:"codex_session_id,omitempty"`
-	CodexDetectedAt time.Time `json:"codex_detected_at,omitempty"`
-	CodexStartedAt  int64     `json:"-"` // Unix millis when we started Codex (for session matching, not persisted)
-	lastCodexScanAt time.Time // Rate-limits expensive ~/.codex/sessions scans
+	// matrix/hardened: durable sleep is separate from an ordinary manual stop.
+	AutoSleep        *AutoSleepState   `json:"matrix_auto_sleep,omitempty"`
+	AutoSleepHistory []*AutoSleepState `json:"matrix_auto_sleep_history,omitempty"`
+	autoSleepCleared bool
+	CodexSessionID   string    `json:"codex_session_id,omitempty"`
+	CodexDetectedAt  time.Time `json:"codex_detected_at,omitempty"`
+	CodexStartedAt   int64     `json:"-"` // Unix millis when we started Codex (for session matching, not persisted)
+	lastCodexScanAt  time.Time // Rate-limits expensive ~/.codex/sessions scans
 	// Usage-limit detection (#1802), all guarded by i.mu.
 	// lastUsageLimitScanAt throttles the transcript read (records scan START).
 	// usageLimitedCached memoises the verdict for that window, and
@@ -1133,16 +1137,57 @@ func (inst *Instance) SetToolThreadSafe(t string) {
 // the attach path (see attachSession's no-synchronous-save note); one
 // UPDATE is not.
 func (inst *Instance) MarkAccessed() {
+	// matrix/hardened: visits may race background preview and sleep qualification.
+	inst.mu.Lock()
 	inst.LastAccessedAt = time.Now()
+	accessedAt := inst.LastAccessedAt
+	inst.mu.Unlock()
 	// matrix/hardened: targeted writes stay in the instance owning profile.
 	if db := inst.stateDB(); db != nil {
-		if err := db.WriteLastAccessed(inst.ID, inst.LastAccessedAt); err != nil {
+		if err := db.WriteLastAccessed(inst.ID, accessedAt); err != nil {
 			sessionLog.Debug("last_accessed_persist_failed",
 				slog.String("instance", inst.ID),
 				slog.String("error", err.Error()),
 			)
 		}
 	}
+}
+
+// MarkAccessedForInteraction publishes a strict owning-profile activity fence.
+// matrix/hardened: an attach/send that cannot persist this timestamp must stop;
+// the idle lifecycle rechecks the durable value before disabling any pane.
+func (inst *Instance) MarkAccessedForInteraction() error {
+	if inst == nil {
+		return fmt.Errorf("interaction session is missing")
+	}
+	// matrix/hardened: an interaction arriving behind a sleep transaction must
+	// observe its committed marker before choosing attach versus exact wake.
+	release, err := acquireInstanceSpawnLock(inst.ID)
+	if err != nil {
+		return err
+	}
+	defer release()
+	inst.mu.Lock()
+	now := time.Now()
+	inst.LastAccessedAt = now
+	id := inst.ID
+	inst.mu.Unlock()
+	db := inst.restartDB.Load()
+	if db == nil {
+		return fmt.Errorf("interaction owning storage is unavailable")
+	}
+	if err = db.WriteLastAccessedForInteraction(id, now); err != nil {
+		return fmt.Errorf("persist interaction activity: %w", err)
+	}
+	row, err := db.LoadInstanceByID(id)
+	if err != nil {
+		return err
+	}
+	if row == nil {
+		return fmt.Errorf("interaction session row no longer exists")
+	}
+	syncAutoSleepModelFromRow(inst, row)
+	return nil
 }
 
 // GetLastActivityTime returns when the session was last active (content changed)
@@ -2646,7 +2691,8 @@ func (i *Instance) buildCodexCommand(baseCommand string) string {
 	// flipping the session back to error in an infinite loop. Drop the
 	// stale ID, clear the .sid sidecar so the next hook tick rebinds
 	// cleanly, and spawn fresh.
-	if i.CodexSessionID != "" && !codexRolloutExistsInHome(i.CodexSessionID, codexHome) {
+	// matrix/hardened: a slept identity must fail resume rather than silently start fresh.
+	if i.CodexSessionID != "" && !i.hasAutoSleepState() && !codexRolloutExistsInHome(i.CodexSessionID, codexHome) {
 		sessionLog.Warn("codex_resume_stale_sid_dropped",
 			slog.String("instance_id", i.ID),
 			slog.String("title", i.Title),
@@ -2667,7 +2713,8 @@ func (i *Instance) buildCodexCommand(baseCommand string) string {
 	// thread's full context into a fresh thread_source=user thread that
 	// accepts input; the live-process probe then rebinds the instance to the
 	// fork's new id. See codex_subagent_gate.go.
-	if i.CodexSessionID != "" && codexSessionNeedsFork(i.CodexSessionID, codexHome) {
+	// matrix/hardened: waking never substitutes a fork for the original user thread.
+	if i.CodexSessionID != "" && !i.hasAutoSleepState() && codexSessionNeedsFork(i.CodexSessionID, codexHome) {
 		sessionLog.Warn("codex_subagent_binding_forked",
 			slog.String("instance_id", i.ID),
 			slog.String("title", i.Title),
@@ -5292,6 +5339,10 @@ func (i *Instance) ensureClaudeSessionIDFromDiskForRestart() {
 // matrix/hardened: the shared body also accepts an admission acquired before
 // RestartFresh teardown; fork dispatch retains the same guarded branches.
 func (i *Instance) Start() error {
+	// matrix/hardened: sleeping sessions must use exact, validated native resume.
+	if i.hasAutoSleepState() {
+		return fmt.Errorf("session is auto-sleeping; wake it through WakeAutoSleepingSession")
+	}
 	// matrix/hardened: do not turn a native descriptor into a POSIX/tmux launch.
 	if err := i.terminalLaunchGuard(); err != nil {
 		return err
@@ -5304,6 +5355,12 @@ func (i *Instance) Start() error {
 // matrix/hardened: RestartFresh passes its already admitted launch while holding
 // the spawn lock, so teardown cannot be followed by a second budget charge.
 func (i *Instance) startWithClaudeAdmission(admission *claudeLaunchAdmission, lockHeld bool) (returnErr error) {
+	// matrix/hardened: exact sleep identity cannot degrade to a fresh/fork launch.
+	if i.hasAutoSleepState() {
+		if err := validateAutoSleepResume(i); err != nil {
+			return err
+		}
+	}
 	// matrix/hardened: internal callers must also stop before admission or locks.
 	if err := i.terminalLaunchGuard(); err != nil {
 		return err
@@ -5320,6 +5377,10 @@ func (i *Instance) startWithClaudeAdmission(admission *claudeLaunchAdmission, lo
 		defer release()
 		if spawnedSince(i.ID, beforeLock) {
 			return nil
+		}
+		// matrix/hardened: a stale in-memory model cannot bypass a newly persisted sleep.
+		if err := i.guardAutoSleepOrdinaryLaunch(); err != nil {
+			return err
 		}
 	}
 	if i.tmuxSession == nil {
@@ -5703,6 +5764,10 @@ func (i *Instance) startWithClaudeAdmission(admission *claudeLaunchAdmission, lo
 // `launch -m "..."` racing with a poller-triggered Start() must not
 // produce two parallel tmux sessions.
 func (i *Instance) StartWithMessage(message string) (returnErr error) {
+	// matrix/hardened: avoid bypassing the exact-resume sleep lifecycle.
+	if i.hasAutoSleepState() {
+		return fmt.Errorf("session is auto-sleeping; wake it before sending a message")
+	}
 	// matrix/hardened: raw terminal transport is not a native launch/message plan.
 	if err := i.terminalLaunchGuard(); err != nil {
 		return err
@@ -5720,6 +5785,10 @@ func (i *Instance) StartWithMessage(message string) (returnErr error) {
 	defer release()
 	if spawnedSince(i.ID, beforeLock) {
 		return nil
+	}
+	// matrix/hardened: check the durable marker after taking the spawn lock.
+	if err := i.guardAutoSleepOrdinaryLaunch(); err != nil {
+		return err
 	}
 	if i.tmuxSession == nil {
 		return fmt.Errorf("tmux session not initialized")
@@ -10144,9 +10213,19 @@ func (i *Instance) RetireServiceUnit(own tmux.ServiceUnitOwnership) tmux.Service
 
 // Kill terminates the tmux session and cleans up sandbox container if present.
 func (i *Instance) Kill() error {
+	// matrix/hardened: manual stop and idle sleep/wake share one spawn boundary.
+	release, err := acquireInstanceSpawnLock(i.ID)
+	if err != nil {
+		return err
+	}
+	defer release()
 	// matrix/hardened: a pre-mutation monitor probe cannot overwrite this action.
 	i.InvalidateRuntimeSnapshot()
-	return i.killInternal(false)
+	if err := i.killInternal(false); err != nil {
+		return err
+	}
+	// matrix/hardened: a deliberate manual stop must not later wake automatically.
+	return i.clearAutoSleepAfterManualStop()
 }
 
 // KillAndWait is the synchronous companion to Kill. It performs the
@@ -10157,9 +10236,19 @@ func (i *Instance) Kill() error {
 // variant — see issue #59 (v1.7.68). The TUI and web callers can
 // keep using Kill for the non-blocking path.
 func (i *Instance) KillAndWait() error {
+	// matrix/hardened: manual stop and idle sleep/wake share one spawn boundary.
+	release, err := acquireInstanceSpawnLock(i.ID)
+	if err != nil {
+		return err
+	}
+	defer release()
 	// matrix/hardened: a pre-mutation monitor probe cannot overwrite this action.
 	i.InvalidateRuntimeSnapshot()
-	return i.killInternal(true)
+	if err := i.killInternal(true); err != nil {
+		return err
+	}
+	// matrix/hardened: retain sleep marker when teardown failed.
+	return i.clearAutoSleepAfterManualStop()
 }
 
 func (i *Instance) killInternal(sync bool) error {
@@ -10359,6 +10448,10 @@ func (i *Instance) restart(env map[string]string) (returnErr error) {
 		return lockErr
 	}
 	defer release()
+	// matrix/hardened: automatic sleep can only resume the exact saved conversation.
+	if err := i.guardAutoSleepOrdinaryLaunch(); err != nil {
+		return err
+	}
 	// A one-shot environment request is explicit operator intent. If another
 	// spawn won while this call waited for the lock, restart that fresh process
 	// so the requested environment is not silently discarded.
@@ -11063,6 +11156,10 @@ func (i *Instance) RestartFresh() error {
 		return lockErr
 	}
 	defer release()
+	// matrix/hardened: automatic sleep can only resume the exact saved conversation.
+	if err := i.guardAutoSleepOrdinaryLaunch(); err != nil {
+		return err
+	}
 	if err := i.guardOwnedProcessesBeforeSpawn("restart"); err != nil {
 		return err
 	}

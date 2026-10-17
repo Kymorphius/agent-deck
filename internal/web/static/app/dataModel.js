@@ -58,6 +58,9 @@ export function projectSession(item) {
     // payload predating the field does not hide the MCP pane.
     mcpSupported: s.mcpSupported !== false,
     status: s.status || 'idle',
+    // matrix/hardened: sleep is resumable lifecycle state, separate from stop.
+    sleeping: !!s.sleeping,
+    sleepPending: !!s.sleepPending,
     branch: s.branch || '—',
     path: s.projectPath || '',
     cost: 0,            // hydrated separately via sessionCostsSignal
