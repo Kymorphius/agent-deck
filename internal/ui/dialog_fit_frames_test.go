@@ -315,10 +315,12 @@ func TestSettingsPanelFitsScreen(t *testing.T) {
 		s.SetSize(sz[0], sz[1])
 		s.Show()
 		assertDialogFits(t, s.View(), sz[0], sz[1], "Settings", "THEME", "j/k Navigate", "Esc Close")
-		// The last setting scrolls into view with the box still whole and
-		// the help bar still pinned.
-		s.cursor = int(settingsCount) - 1
+		// matrix/hardened: keep privacy covered independently of the appended
+		// AI update action; both rows must remain reachable with pinned help.
+		s.cursor = int(SettingPrivacy)
 		assertDialogFits(t, s.View(), sz[0], sz[1], "Usage data", "j/k Navigate", "Esc Close")
+		s.cursor = int(SettingAIUpdates)
+		assertDialogFits(t, s.View(), sz[0], sz[1], "Manage AI updates", "j/k Navigate", "Esc Close")
 	}
 }
 

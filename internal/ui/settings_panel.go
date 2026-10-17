@@ -57,10 +57,11 @@ const (
 	SettingEmbeddedTerminal
 	SettingSidebarDensity
 	SettingPrivacy
+	SettingAIUpdates // matrix/hardened: explicit local AI update management
 )
 
 // Total number of navigable settings.
-const settingsCount = 40 // matrix/hardened: include the local-search preference
+const settingsCount = 41 // matrix/hardened: append AI updates without renumbering existing settings
 
 // SettingsPanel displays and edits user configuration
 type SettingsPanel struct {
@@ -118,6 +119,7 @@ type SettingsPanel struct {
 	sidebarDensity         int // index into sidebarDensityValues
 	pendingToolVisibility  bool
 	pendingPrivacy         bool   // Enter/Space on the Privacy row: home opens consent or turns it off
+	pendingAIUpdates       bool   // matrix/hardened: opens the local AI updates panel
 	privacyTickLabel       string // daily tick acknowledgment, read on Show
 	privacyLabel           string // "on (full)" / "off", read from telemetry state on Show
 
@@ -626,6 +628,11 @@ func (s *SettingsPanel) Update(msg tea.KeyMsg) (*SettingsPanel, tea.Cmd, bool) {
 		valueChanged = s.adjustValue(1)
 
 	case " ":
+		if SettingType(s.cursor) == SettingAIUpdates { // matrix/hardened
+			s.pendingAIUpdates = true
+			s.Hide()
+			break
+		}
 		if SettingType(s.cursor) == SettingPrivacy {
 			s.pendingPrivacy = true
 			s.Hide()
@@ -634,7 +641,10 @@ func (s *SettingsPanel) Update(msg tea.KeyMsg) (*SettingsPanel, tea.Cmd, bool) {
 		valueChanged = s.toggleValue()
 
 	case "enter":
-		if SettingType(s.cursor) == SettingPrivacy {
+		if SettingType(s.cursor) == SettingAIUpdates { // matrix/hardened
+			s.pendingAIUpdates = true
+			s.Hide()
+		} else if SettingType(s.cursor) == SettingPrivacy {
 			s.pendingPrivacy = true
 			s.Hide()
 		} else if s.isTextSetting() {
@@ -666,6 +676,14 @@ func (s *SettingsPanel) ConsumePrivacyRequest() bool {
 	}
 	s.pendingPrivacy = false
 	return true
+}
+
+// ConsumeAIUpdatesRequest consumes the explicit settings action only.
+// matrix/hardened: opening settings itself never checks AI releases.
+func (s *SettingsPanel) ConsumeAIUpdatesRequest() bool {
+	requested := s.pendingAIUpdates
+	s.pendingAIUpdates = false
+	return requested
 }
 
 // telemetryPrivacyLabel renders the Privacy row value from telemetry state.
@@ -1330,6 +1348,15 @@ func (s *SettingsPanel) View() string {
 	content.WriteString("  " + labelStyle.Render(line) + "\n")
 	content.WriteString(dimStyle.Render("    "+s.privacyTickLabel) + "\n\n")
 
+	// matrix/hardened: append a local, explicitly opened AI update manager.
+	content.WriteString(sectionStyle.Render("AI UPDATES"))
+	content.WriteString("\n")
+	line = "Manage AI updates…  (Enter to open)"
+	if s.cursor == int(SettingAIUpdates) {
+		line = highlightStyle.Render(line)
+	}
+	content.WriteString("  " + labelStyle.Render(line) + "\n\n")
+
 	// MCP & TOOLS
 	content.WriteString(sectionStyle.Render("MCP SERVERS & CUSTOM TOOLS"))
 	content.WriteString("\n")
@@ -1425,6 +1452,7 @@ func (s *SettingsPanel) View() string {
 			70, // SettingEmbeddedTerminal (INTERFACE section)
 			71, // SettingSidebarDensity
 			76, // SettingPrivacy (PRIVACY section)
+			80, // SettingAIUpdates (matrix/hardened: AI UPDATES section)
 		}
 		cursorLine := rowOf[cursorToLine[s.cursor]]
 

@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.86`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.87`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -767,6 +767,15 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 - 状态、归档、分组范围与时间窗口继续组合；「最近」中的时间窗口和行内时间都使用交互时间。没有匹配时保持空视图，显示返回入口。所选模式沿用 `ui_state.group_view_mode`，重开后恢复。
 - **matrix/hardened:** `list --json` 增加 `last_accessed_at`，供远程列表合并排序；旧远端未报告时不猜测时间，需要更新目标端后才能纳入「最近」。保持原同步频率，不增加后台扫描或定时器。
 - 验证使用第 4 节隔离入口，覆盖混合主机倒序、折叠与子会话、固定和状态干扰、筛选组合、稳定同时间排序、窗口跟随、真实快捷键和持久化、交互写入与背景不写入、宽度与空列表。安装后旧 TUI 在列表按 `Ctrl+T` 重载；AI pane 无需重启。
+
+## 74. Codex 共享后台的延后更新
+
+`1.16.26+matrix.87` 在 `S` 设置末尾新增 **AI UPDATES**，检查、安装与重启分别操作。CLI 为 `agent-deck ai-update status|check|install|restart`，重启要求 `--yes`。用法和初版支持范围见 [AI 工具更新](docs/ai-updates.md)。
+
+- **matrix/hardened:** 安装完整官方包时保留旧 release，不发信号、不停止或重启后台；当前任务继续用旧版，下次后台真正启动时使用新选择。再次打开客户端可能复用旧后台。
+- **matrix/hardened:** 显式安装同时关闭原生自动更新并固定选择；持原生生命周期与安装器兼容锁，覆盖文件锁及目录 fallback，移除 eligibility marker，防止已排队的原生更新器随后自行重启。没有默认检查、轮询或新增系统定时器。
+- 仅对已核对的 `0.163.0` 运行后台、完整 CLI 与专用 daemon 包支持延后安装；未知后台或更新器拒绝盲选。`Restart` 是另一个可能中断所有共享任务的原生操作，界面必须另按 `y` 确认。
+- 验证使用第 4 节隔离入口，覆盖完整包与校验失败、安全解包、设置保留、原生锁互斥、安装不重启、实际版本读回、UI 异步状态与设置页布局；旧 TUI 在列表按 `Ctrl+T` 加载新面板。
 
 ## Claude 外部钩子缺失的处理
 
