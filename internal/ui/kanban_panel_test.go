@@ -432,3 +432,27 @@ func TestKanbanReviewAcceptAndSendBack(t *testing.T) {
 		t.Fatalf("v: %+v %v", w, f.last())
 	}
 }
+
+// matrix/hardened: o opens the dispatched task's Multica issue.
+func TestKanbanOpensMulticaIssue(t *testing.T) {
+	f := kanbanEntry()
+	link := `{\"v\":1,\"mode\":\"single\",\"workspaceId\":\"w\",\"root\":{\"id\":\"r\",\"identifier\":\"MC-3\",\"status\":\"in_progress\",\"url\":\"http://h/matrix/issues/r\"},\"children\":[],\"taskStatus\":\"待办\",\"syncedAt\":1}`
+	snap := strings.Replace(kanbanSnapshot, `"name":"写周报","fields":{"任务｜状态":"待办"`, `"name":"写周报","fields":{"任务｜状态":"待办","任务｜Multica 关联":"`+link+`"`, 1)
+	f.answer = func(req map[string]any) string { return snap }
+	p := openKanban(t, f, nil)
+	var opened []string
+	p.env.open = func(url string) error { opened = append(opened, url); return nil }
+	selectTask(t, p, "t1")
+	if p.cols[p.col].Lane != "doing" {
+		t.Fatalf("an in-progress issue puts the card in 进行中, got %s", p.cols[p.col].Lane)
+	}
+	p.Update(kanbanKey("o"))
+	if len(opened) != 1 || opened[0] != "http://h/matrix/issues/r" || !strings.Contains(p.notice, "MC-3") {
+		t.Fatalf("opened %v notice %q", opened, p.notice)
+	}
+	selectTask(t, p, "t4")
+	p.Update(kanbanKey("o"))
+	if len(opened) != 1 || !strings.Contains(p.notice, "not been dispatched") {
+		t.Fatalf("undispatched: %v %q", opened, p.notice)
+	}
+}

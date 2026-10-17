@@ -326,6 +326,10 @@ func handleTasksAction(kind string, args []string) {
 		out.Error(tasksErrorText(err), tasksErrorCode(err))
 		os.Exit(1)
 	}
+	// matrix/hardened: a decision on a dispatched task reaches Multica now.
+	if t.Multica != nil && (kind == "done" || kind == "review" || kind == "reject") {
+		client.TriggerMulticaSync()
+	}
 	out.Success(fmt.Sprintf("%s: %s", kind, t.Name), map[string]any{"success": true, "action": kind, "taskId": t.ID})
 }
 

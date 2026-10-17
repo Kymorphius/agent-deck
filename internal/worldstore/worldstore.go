@@ -182,6 +182,8 @@ type MulticaIssue struct {
 	ID         string `json:"id"`
 	Identifier string `json:"identifier"`
 	Status     string `json:"status"`
+	// URL is the issue's web address (root only, when World Store recorded it).
+	URL string `json:"url,omitempty"`
 }
 
 // MulticaLink is the parsed 任务｜Multica 关联 value.
@@ -286,6 +288,7 @@ type Runner func(ctx context.Context, stdin []byte) (stdout []byte, err error)
 // Client talks to World Store through personal-panel's AI data entry.
 type Client struct {
 	run          Runner
+	entry, node  string // matrix/hardened: the real entry, for TriggerMulticaSync
 	now          func() time.Time
 	ReadTimeout  time.Duration
 	WriteTimeout time.Duration
@@ -328,7 +331,31 @@ func New(cfg Config) (*Client, error) {
 	if node == "" {
 		node = "node"
 	}
-	return NewWithRunner(execRunner(node, entry)), nil
+	c := NewWithRunner(execRunner(node, entry))
+	c.entry, c.node = entry, node
+	return c, nil
+}
+
+// TriggerMulticaSync starts one round of World Store's Multica sync
+// (personal-panel scripts/multica.cjs, next to the bridge) in the background,
+// so an acceptance made here reaches Multica now instead of on the next
+// fallback poll. matrix/hardened: fire-and-forget; the script takes its own
+// lock and logs its own failures. Reports whether it was started.
+func (c *Client) TriggerMulticaSync() bool {
+	if c == nil || c.entry == "" {
+		return false
+	}
+	script := filepath.Join(filepath.Dir(c.entry), "multica.cjs")
+	if st, err := os.Stat(script); err != nil || !st.Mode().IsRegular() {
+		return false
+	}
+	cmd := exec.Command(c.node, script, "sync")
+	cmd.Dir = filepath.Dir(filepath.Dir(c.entry))
+	if cmd.Start() != nil {
+		return false
+	}
+	go func() { _ = cmd.Wait() }()
+	return true
 }
 
 // NewWithRunner builds a client over any runner (tests use a fake).

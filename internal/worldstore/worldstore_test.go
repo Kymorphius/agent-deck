@@ -422,3 +422,23 @@ func TestMulticaLinkSummaryAndColumn(t *testing.T) {
 		t.Fatalf("single = %q", single.Summary())
 	}
 }
+
+// matrix/hardened: the sync trigger needs the real entry and the script next to it.
+func TestTriggerMulticaSyncNeedsTheScript(t *testing.T) {
+	if (&Client{}).TriggerMulticaSync() || NewWithRunner(nil).TriggerMulticaSync() {
+		t.Fatal("a client without a real entry must not start anything")
+	}
+	dir := t.TempDir()
+	c := &Client{entry: filepath.Join(dir, "worldstore-ai.cjs"), node: "true"}
+	if c.TriggerMulticaSync() {
+		t.Fatal("no multica.cjs next to the bridge, nothing to start")
+	}
+	_ = os.WriteFile(filepath.Join(dir, "multica.cjs"), nil, 0o644)
+	if !c.TriggerMulticaSync() {
+		t.Fatal("script present: the sync must start")
+	}
+	m := parseMultica(`{"v":1,"mode":"single","root":{"identifier":"MC-3","status":"todo","url":"http://h/matrix/issues/x"},"children":[]}`)
+	if m == nil || m.Root.URL != "http://h/matrix/issues/x" {
+		t.Fatalf("url = %+v", m)
+	}
+}
