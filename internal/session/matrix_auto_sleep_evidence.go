@@ -194,6 +194,29 @@ func matrixParseAutoSleepRollout(path, threadID string) (AutoSleepEvidence, stri
 		}
 		switch record.Type {
 		case "session_meta", "event_msg", "response_item", "turn_context", "compacted":
+		case "world_state":
+			var state struct {
+				Full  *bool                      `json:"full"`
+				State map[string]json.RawMessage `json:"state"`
+			}
+			if matrixAutoSleepDecodeMetadata(record.Payload, &state) != nil || state.Full == nil || state.State == nil {
+				return AutoSleepEvidence{}, "", errors.New("world-state record has an unsupported schema")
+			}
+			// A context baseline is legitimate history, but may describe work
+			// after the prior completion. Require a newer normal completion.
+			completed = false
+		case "inter_agent_communication_metadata":
+			var communication struct {
+				TriggerTurn *bool `json:"trigger_turn"`
+			}
+			if matrixAutoSleepDecodeMetadata(record.Payload, &communication) != nil || communication.TriggerTurn == nil {
+				return AutoSleepEvidence{}, "", errors.New("inter-agent metadata has an unsupported schema")
+			}
+			completed = false
+		case "token_usage_record":
+			if !matrixAutoSleepTokenMetadata(record.Payload, threadID, evidence.TurnID, completed) {
+				return AutoSleepEvidence{}, "", errors.New("token accounting metadata has an unsupported schema or identity")
+			}
 		default:
 			return AutoSleepEvidence{}, "", errors.New("rollout contains an unknown native record type")
 		}
@@ -213,6 +236,10 @@ func matrixParseAutoSleepRollout(path, threadID string) (AutoSleepEvidence, stri
 				evidence.TurnID, evidence.CompletedAt = ev.TurnID, at
 			case "token_count", "context_compacted":
 				// Non-action metadata may follow a durable normal completion.
+			case "thread_settings_applied":
+				if !matrixAutoSleepSettingsMetadata(record.Payload, threadID) {
+					return AutoSleepEvidence{}, "", errors.New("thread settings metadata has an unsupported schema or identity")
+				}
 			default:
 				// New input, a started/aborted turn, an approval, a tool event,
 				// or an unknown event cannot preserve a prior idle verdict.
@@ -245,6 +272,123 @@ func matrixParseAutoSleepRollout(path, threadID string) (AutoSleepEvidence, stri
 	return evidence, fmt.Sprintf("%d/%d/%x", before.Size(), before.ModTime().UnixNano(), hash.Sum(nil)), nil
 }
 
+// matrix/hardened: accepting a known metadata label is insufficient. Decode a
+// bounded, known schema recursively and fail closed on any new fields.
+func matrixAutoSleepDecodeMetadata(data []byte, target any) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	return decoder.Decode(target)
+}
+
+type matrixAutoSleepTokenCounts struct {
+	Input       *int64 `json:"input_tokens"`
+	CachedInput *int64 `json:"cached_input_tokens"`
+	CacheWrite  *int64 `json:"cache_write_input_tokens"`
+	Output      *int64 `json:"output_tokens"`
+	Reasoning   *int64 `json:"reasoning_output_tokens"`
+	Total       *int64 `json:"total_tokens"`
+}
+
+func (counts *matrixAutoSleepTokenCounts) valid() bool {
+	if counts == nil {
+		return false
+	}
+	for _, value := range []*int64{counts.Input, counts.CachedInput, counts.Output, counts.Reasoning, counts.Total} {
+		if value == nil || *value < 0 {
+			return false
+		}
+	}
+	return counts.CacheWrite == nil || *counts.CacheWrite >= 0
+}
+
+func matrixAutoSleepTokenMetadata(data []byte, threadID, completedTurn string, completed bool) bool {
+	var accounting struct {
+		ThreadID    string                      `json:"thread_id"`
+		SessionID   string                      `json:"session_id"`
+		TurnID      string                      `json:"turn_id"`
+		RootTurnID  string                      `json:"root_turn_id"`
+		ResponseID  string                      `json:"response_id"`
+		Usage       *matrixAutoSleepTokenCounts `json:"usage"`
+		TurnUsage   *matrixAutoSleepTokenCounts `json:"turn_token_usage"`
+		ThreadUsage *matrixAutoSleepTokenCounts `json:"thread_token_usage"`
+	}
+	return matrixAutoSleepDecodeMetadata(data, &accounting) == nil &&
+		accounting.ThreadID == threadID && accounting.SessionID == threadID &&
+		accounting.TurnID != "" && accounting.RootTurnID == accounting.TurnID && accounting.ResponseID != "" &&
+		(!completed || accounting.TurnID == completedTurn) && accounting.Usage.valid() && accounting.TurnUsage.valid() && accounting.ThreadUsage.valid()
+}
+
+func matrixAutoSleepSettingsMetadata(data []byte, threadID string) bool {
+	var settings struct {
+		Type           string `json:"type"`
+		ThreadID       string `json:"thread_id"`
+		ThreadSettings *struct {
+			Model            string   `json:"model"`
+			Provider         string   `json:"model_provider_id"`
+			CWD              string   `json:"cwd"`
+			ApprovalPolicy   string   `json:"approval_policy"`
+			Reviewer         string   `json:"approvals_reviewer"`
+			ServiceTier      *string  `json:"service_tier"`
+			ReasoningEffort  *string  `json:"reasoning_effort"`
+			ReasoningSummary *string  `json:"reasoning_summary"`
+			Personality      *string  `json:"personality"`
+			WorkspaceRoots   []string `json:"runtime_workspace_roots"`
+			DisabledPlugins  []string `json:"disabled_plugin_ids"`
+			Permission       *struct {
+				Type string `json:"type"`
+			} `json:"permission_profile"`
+			ActivePermission *struct {
+				ID      string  `json:"id"`
+				Extends *string `json:"extends"`
+			} `json:"active_permission_profile"`
+			Collaboration *struct {
+				Mode     string `json:"mode"`
+				Settings *struct {
+					Model        string  `json:"model"`
+					Effort       *string `json:"reasoning_effort"`
+					Instructions *string `json:"developer_instructions"`
+				} `json:"settings"`
+			} `json:"collaboration_mode"`
+		} `json:"thread_settings"`
+	}
+	if matrixAutoSleepDecodeMetadata(data, &settings) != nil || settings.Type != "thread_settings_applied" || settings.ThreadID != threadID || settings.ThreadSettings == nil {
+		return false
+	}
+	snapshot := settings.ThreadSettings
+	if snapshot.Model == "" || snapshot.Provider == "" || !filepath.IsAbs(snapshot.CWD) || snapshot.Permission == nil || snapshot.Permission.Type != "disabled" || snapshot.Collaboration == nil || snapshot.Collaboration.Settings == nil || snapshot.Collaboration.Settings.Model == "" {
+		return false
+	}
+	// Only the observed, no-sandbox snapshot shape is supported for now.
+	// Managed/external permission schemas remain unknown and block sleep.
+	switch snapshot.ApprovalPolicy {
+	case "never", "untrusted", "on-request", "on-failure":
+	default:
+		return false
+	}
+	switch snapshot.Reviewer {
+	case "user", "auto_review", "guardian_subagent":
+	default:
+		return false
+	}
+	if snapshot.Collaboration.Mode != "default" && snapshot.Collaboration.Mode != "plan" {
+		return false
+	}
+	if snapshot.ActivePermission != nil && snapshot.ActivePermission.ID == "" {
+		return false
+	}
+	for _, root := range snapshot.WorkspaceRoots {
+		if !filepath.IsAbs(root) {
+			return false
+		}
+	}
+	for _, plugin := range snapshot.DisabledPlugins {
+		if plugin == "" {
+			return false
+		}
+	}
+	return true
+}
+
 type matrixAutoSleepAgentCall struct{ kind, id string }
 type matrixAutoSleepAgents struct {
 	calls  map[string]matrixAutoSleepAgentCall
@@ -257,6 +401,7 @@ func (a *matrixAutoSleepAgents) observe(payload []byte) error {
 	var item struct {
 		Type      string          `json:"type"`
 		Name      string          `json:"name"`
+		Namespace string          `json:"namespace"`
 		CallID    string          `json:"call_id"`
 		Arguments string          `json:"arguments"`
 		Output    json.RawMessage `json:"output"`
@@ -264,15 +409,40 @@ func (a *matrixAutoSleepAgents) observe(payload []byte) error {
 	if json.Unmarshal(payload, &item) != nil || item.Type == "" {
 		return errors.New("rollout has an invalid response item")
 	}
+	if item.Type == "function_call" || item.Type == "custom_tool_call" {
+		// The task-path protocol has a separate namespace and different
+		// lifecycle/result shapes. This compatibility pass supports none of
+		// it, including currently unknown or future collaboration operations.
+		if item.Namespace == "collaboration" || strings.HasPrefix(item.Namespace, "collaboration.") || strings.HasPrefix(item.Name, "collaboration.") {
+			return errors.New("task-path native collaboration is unsupported for automatic sleep")
+		}
+		name := item.Name[strings.LastIndex(item.Name, ".")+1:]
+		switch name {
+		case "followup_task", "interrupt_agent", "send_message":
+			// These task-path operations can restart an already known native
+			// agent. Their effects cannot be washed away by a later parent
+			// completion, even when no spawn remains in this rollout.
+			return errors.New("task-path native collaboration is unsupported for automatic sleep")
+		case "spawn_agent", "close_agent", "wait_agent":
+			if item.Type != "function_call" || name != item.Name || item.Namespace != "" {
+				return errors.New("native collaboration namespace is unsupported for automatic sleep")
+			}
+		}
+	}
 	if item.Type == "function_call" && (item.Name == "spawn_agent" || item.Name == "close_agent" || item.Name == "wait_agent") {
 		if item.CallID == "" {
 			return errors.New("native agent call has no identity")
 		}
 		var args struct {
-			ID string `json:"id"`
+			ID       string          `json:"id"`
+			IDs      []string        `json:"ids"`
+			TaskName json.RawMessage `json:"task_name"`
 		}
 		if json.Unmarshal([]byte(item.Arguments), &args) != nil {
 			return errors.New("native agent call arguments are malformed")
+		}
+		if len(args.TaskName) != 0 || (item.Name == "wait_agent" && len(args.IDs) == 0) {
+			return errors.New("task-path native collaboration is unsupported for automatic sleep")
 		}
 		a.calls[item.CallID] = matrixAutoSleepAgentCall{item.Name, args.ID}
 	}

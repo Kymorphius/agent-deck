@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.95`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.96`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -867,3 +867,6 @@ snapshots, compatibility, and validation boundaries.
 - 纯观察 ControlPipe 使用 `read-only,ignore-size` 并保留输出事件；KeySender
   仍是可写交互客户端并阻止休眠。安装后重载管理 TUI 和 Web 才能取得新行为，
   不要求重启正在工作的 AI 会话。
+- **matrix/hardened:** `matrix.96` 校验当前原生统计/设置记录的有限结构；
+  world-state 与通信记录使旧完成证明失效。持有多个原生 writer 或无法验证
+  协作生命周期的旧会话仍跳过，不把子代理的完成文字当作进程退出证明。
