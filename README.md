@@ -365,10 +365,13 @@ Running many sessions? Socket pooling shares MCP processes across all sessions v
 Press **Alt+S** (macOS **Option+S**) to find a group by its name or path. Only groups appear, including empty groups, folded subgroups, and groups already loaded from remotes. Type `agent deck` or `adk` to find `Agent-Deck`, use **↑/↓**, then **Enter** to expand and locate the group. Host and path identify groups with the same name. Enter returns to an unfiltered grouped list while preserving an explicit `-g` scope; **Esc** cancels without changing the view. Rebind or disable it through `[hotkeys].group_search`.
 
 <!-- matrix/hardened: local search includes groups and separator-aware fuzzy matching. -->
-Press `/` to search managed sessions by title, group, project path, or tool. Spaces and punctuation are interchangeable (`agent deck` matches `agent-deck`), and ordered abbreviations such as `adk` also match. Literal matches rank first, followed by separator-normalized matches and then fuzzy matches. `Alt+/` restricts the same search to the current group's direct sessions. Type `waiting`, `running`, `idle`, `error`, or `stopped` to filter by status. `G` searches all indexed conversation content; `Alt+R` searches content only in managed sessions.
+Press `/` to search all managed local sessions by title, group, project path, or tool, including archived sessions. Selecting a result clears hiding view filters and reveals its group; archived results use the archived list without changing their archive state. **Alt+?** (`Alt+Shift+/`) searches only the current view and retains its filters on selection. **Alt+/** searches the current group's direct sessions. The overlay labels its scope; folded groups do not hide matching sessions. See [session search scopes](docs/session-search.md) for details and `[hotkeys].view_search` rebinding.
+
+<!-- matrix/hardened: shared matching rules across all three local scopes. -->
+Spaces and punctuation are interchangeable (`agent deck` matches `agent-deck`), and ordered abbreviations such as `adk` also match. Literal matches rank first, followed by separator-normalized matches and then fuzzy matches. Type `waiting`, `running`, `idle`, `error`, or `stopped` to filter by status within the selected scope. `G` searches all indexed conversation content; `Alt+R` searches content only in managed sessions.
 
 <!-- matrix/hardened: make local-search query retention an explicit preference. -->
-Local search (`/` and `Alt+/`) clears the previous query each time it opens by default. To keep the last query, open **Settings (`S`) → LOCAL SEARCH → Clear search on open (/)** and turn it off with **Space**, or set `[ui].clear_search_on_open = false`. The change takes effect on the next search without restarting.
+Local search (`/`, `Alt+?` and `Alt+/`) clears the previous query each time it opens by default. To keep the last query, open **Settings (`S`) → LOCAL SEARCH → Clear search on open (/)** and turn it off with **Space**, or set `[ui].clear_search_on_open = false`. The change takes effect on the next search without restarting.
 
 <!-- matrix/hardened: persistent recent interactions are separate from background agent activity. -->
 Press **Ctrl+E** in the session list to open **最近 / Recent**, with the sessions you most recently visited or sent input to first, across groups. Press it again to return to the normal grouped list. The order uses persisted `LastAccessedAt` (`last_accessed`) timestamps from user visits and accepted user input; background agent output does not move a session up. Sessions without a recorded interaction timestamp are omitted. Existing status, time, archive and group-scope filters still apply. The `t` view cycle also includes Recent. See [terminal shortcuts](docs/terminal-shortcuts.md#recent-interactions-list) for the input paths and remote compatibility.
@@ -389,6 +392,7 @@ Two tiers of keybindings move the cursor around the session list. The global tie
 | Global | `G` | Open global search across all Claude conversations |
 | Global | `1`–`9` | Jump to Nth root group header |
 | Global | `/` | Open fuzzy search across all sessions |
+| Current view | `Alt+?` (`Alt+Shift+/`) | Search local sessions matching the current view and filters |
 | **Group (current group only)** | `Alt+j` / `Alt+k` | Next / previous session in current group (skips group boundaries) |
 | Group | `Alt+1`–`Alt+9` | Jump to Nth session within the current group |
 | Group | `Alt+g` / `Alt+G` | First / last session in current group |

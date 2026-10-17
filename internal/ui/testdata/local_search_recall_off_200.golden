@@ -12,9 +12,9 @@
                                                                      │  config.toml); showing the local title search instead      │
                                                                      │    Tip: waiting / running / idle to filter by status       │
                                                                      │                                                            │
-                                                                     │    › heron-fix (claude)  my-sessions · ?                   │
-                                                                     │    1 result                                                │
+                                                                     │                                                            │
+                                                                     │    全部本机会话 · No results                               │
                                                                      │    [Enter] Select  [↑↓] Navigate                           │
-                                                                     │    [Tab] Global  [Esc] Cancel                              │
+                                                                     │    [Tab] Recall  [Esc] Cancel                              │
                                                                      │                                                            │
                                                                      ╰────────────────────────────────────────────────────────────╯

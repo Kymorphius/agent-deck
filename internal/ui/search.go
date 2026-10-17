@@ -43,6 +43,8 @@ type Search struct {
 	allItems       []*session.Instance
 	switchToGlobal bool   // Flag to signal switch to global search
 	scopedGroup    string // Non-empty => filter items to this exact GroupPath (v1.7.60)
+	viewFilter     func(*session.Instance) bool
+	scopeLabel     string // Display name of the current view; empty outside view scope.
 	notice         string // why G landed here instead of Recall; drawn under the input until Hide
 }
 
@@ -63,22 +65,28 @@ func NewSearch() *Search {
 	}
 }
 
-// SetItems sets the full list of items to search through. When a group scope
-// has been set via SetScopedGroup, items are filtered to that group before
-// storage so background reloads do not leak out-of-group sessions into a
-// scoped in-group search session.
+// SetItems sets the full list of items to search through. The active scope is
+// applied before storage so background reloads cannot leak hidden sessions
+// into a view-scoped or exact-group search. The current query stays intact.
 func (s *Search) SetItems(items []*session.Instance) {
-	if s.scopedGroup != "" {
-		filtered := make([]*session.Instance, 0, len(items))
-		for _, it := range items {
-			if it != nil && it.GroupPath == s.scopedGroup {
-				filtered = append(filtered, it)
-			}
+	filtered := make([]*session.Instance, 0, len(items))
+	for _, it := range items {
+		if it == nil {
+			continue
 		}
-		s.allItems = filtered
-	} else {
-		s.allItems = items
+		group := it.GroupPath
+		if group == "" {
+			group = session.DefaultGroupPath
+		}
+		if s.scopedGroup != "" && group != s.scopedGroup {
+			continue
+		}
+		if s.viewFilter != nil && !s.viewFilter(it) {
+			continue
+		}
+		filtered = append(filtered, it)
 	}
+	s.allItems = filtered
 	s.updateResults()
 }
 
@@ -92,6 +100,16 @@ func (s *Search) SetNotice(notice string) {
 // SetScopedGroup restricts SetItems to a single group path. Pass "" to clear.
 func (s *Search) SetScopedGroup(groupPath string) {
 	s.scopedGroup = groupPath
+	s.viewFilter = nil
+	s.scopeLabel = ""
+}
+
+// SetViewScope restricts subsequent SetItems calls to the current view.
+// The caller supplies the complete list again after changing scope.
+func (s *Search) SetViewScope(label string, filter func(*session.Instance) bool) {
+	s.scopedGroup = ""
+	s.viewFilter = filter
+	s.scopeLabel = strings.TrimSpace(label)
 }
 
 // SetSize sets the dimensions of the search overlay
@@ -123,11 +141,14 @@ func (s *Search) WantsSwitchToGlobal() bool {
 	return false
 }
 
-// Hide hides the search overlay and clears any group scope.
+// Hide hides the search overlay and clears its scope. Keep results intact so
+// the parent can read Selected after Enter closes the overlay.
 func (s *Search) Hide() {
 	s.visible = false
 	s.input.Blur()
 	s.scopedGroup = ""
+	s.viewFilter = nil
+	s.scopeLabel = ""
 	s.notice = ""
 }
 
@@ -243,10 +264,25 @@ func (s *Search) View() string {
 		resultRows = []string{""}
 	}
 
-	// Show count
+	// Keep the scope beside the count, pinned above the key hints. Long view
+	// and group labels are cell-truncated rather than wrapping over results.
+	scope := "全部本机会话"
+	if s.scopedGroup != "" {
+		scope = "当前分组 · " + s.scopedGroup
+	} else if s.viewFilter != nil {
+		scope = "当前视图"
+		if s.scopeLabel != "" {
+			scope += " · " + s.scopeLabel
+		}
+	}
+	countWidth := overlayWidth - overlayStyle.GetHorizontalFrameSize()
+	count := renderDialogFooterRows(countWidth, 2, " · ", []string{
+		"  " + cellTruncate(scope, max(countWidth-2, 1), "…"),
+		formatCount(len(s.results)),
+	})
 	countStr := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("241")).
-		Render("  " + formatCount(len(s.results)))
+		Render(count)
 
 	// Show filter hint when search is empty
 	hintStr := ""
@@ -274,7 +310,7 @@ func (s *Search) View() string {
 	// "[Esc] Cancel" never wraps onto a line of its own; [↑↓] Navigate drops
 	// out only when even two rows are too narrow.
 	keys := renderDialogFooterRows(overlayWidth-overlayStyle.GetHorizontalPadding(), 2, "  ",
-		[]string{"  [Enter] Select", "[↑↓] Navigate", "[Tab] Global", "[Esc] Cancel"}, 1)
+		[]string{"  [Enter] Select", "[↑↓] Navigate", "[Tab] Recall", "[Esc] Cancel"}, 1)
 	keysHint := lipgloss.NewStyle().
 		Foreground(ColorComment).
 		Render(glueBracketHintGroups(keys))

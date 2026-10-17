@@ -4,6 +4,11 @@ This page documents keyboard shortcuts that interact with agent-deck's
 tmux-backed session model — and the small set of platform / terminal
 quirks that can surprise users.
 
+## Search scope
+
+<!-- matrix/hardened: separate all-session, current-view, and current-group searches. -->
+`/` searches all managed local sessions and clears hiding view filters when a result is selected. `Alt+?` (`Alt+Shift+/`) searches only the current view and preserves its filters; `Alt+/` searches the selected group's direct local sessions. On macOS use `Option`; ordinary Option characters `¿` and `÷` also work. The overlay labels the active scope. See [session search scopes](session-search.md) for archive, folded groups and configuration details.
+
 ## Text selection and copying
 
 **Why dragging doesn't select text.** The agent-deck TUI starts with mouse
