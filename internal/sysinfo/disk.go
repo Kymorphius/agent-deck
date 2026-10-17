@@ -9,14 +9,26 @@ func collectDisk() DiskStat {
 		return DiskStat{}
 	}
 
-	totalBytes := stat.Blocks * uint64(stat.Bsize) // #nosec G115 -- statfs Bsize is positive on real filesystems
-	freeBytes := stat.Bavail * uint64(stat.Bsize)  // #nosec G115 -- statfs Bsize is positive on real filesystems; Bavail = available to non-root
+	return diskUsage(stat.Blocks, stat.Bavail, diskBlockSize(&stat))
+}
+
+// matrix/hardened: filesystem counters use the platform's allocation unit,
+// which can differ from its optimal I/O size. Reject invalid snapshots instead
+// of wrapping the byte counts or displaying an apparently healthy percentage.
+func diskUsage(blocks, available uint64, blockSize int64) DiskStat {
+	if blockSize <= 0 || blocks == 0 || available > blocks {
+		return DiskStat{}
+	}
+	unit := uint64(blockSize)
+	if blocks > ^uint64(0)/unit {
+		return DiskStat{}
+	}
+
+	totalBytes := blocks * unit
+	freeBytes := available * unit // Bavail remains space available to non-root.
 	usedBytes := totalBytes - freeBytes
 
-	var pct float64
-	if totalBytes > 0 {
-		pct = float64(usedBytes) / float64(totalBytes) * 100
-	}
+	pct := float64(usedBytes) / float64(totalBytes) * 100
 
 	return DiskStat{
 		Available:    true,

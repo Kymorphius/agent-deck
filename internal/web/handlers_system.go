@@ -27,13 +27,18 @@ func (s *Server) handleSystemStats(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if stats.Memory.Available {
-		resp["memory"] = map[string]any{
+		memory := map[string]any{
 			"used_bytes":    stats.Memory.UsedBytes,
 			"total_bytes":   stats.Memory.TotalBytes,
 			"usage_percent": stats.Memory.UsagePercent,
 			"used_human":    sysinfo.FormatBytes(stats.Memory.UsedBytes),
 			"total_human":   sysinfo.FormatBytes(stats.Memory.TotalBytes),
 		}
+		// matrix/hardened: preserve the legacy JSON shape unless a collector identifies scope.
+		if stats.Memory.Scope != "" {
+			memory["scope"] = stats.Memory.Scope
+		}
+		resp["memory"] = memory
 	}
 	if stats.Disk.Available {
 		resp["disk"] = map[string]any{

@@ -386,7 +386,12 @@ func remoteHostLoadLineFiltered(stats session.RemoteHostStats, fields []string, 
 			}
 		case session.PreviewFieldMemory:
 			if stats.MemAvailable {
-				parts = append(parts, sysinfo.FormatBytes(stats.MemUsedBytes)+"/"+sysinfo.FormatBytes(stats.MemTotalBytes))
+				// matrix/hardened: place scope before the values, retaining it in narrow headers/previews.
+				memory := sysinfo.FormatBytes(stats.MemUsedBytes) + "/" + sysinfo.FormatBytes(stats.MemTotalBytes)
+				if stats.MemScope == sysinfo.MemoryScopeGuest {
+					memory = "RAM guest " + memory
+				}
+				parts = append(parts, memory)
 			}
 		case session.PreviewFieldDisk:
 			if stats.DiskAvailable {

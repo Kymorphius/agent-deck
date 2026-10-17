@@ -1,8 +1,10 @@
 package sysinfo
 
 import (
+	"math"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -21,11 +23,21 @@ func collectMemory() MemStat {
 
 // collectMemLinux reads /proc/meminfo for MemTotal and MemAvailable.
 func collectMemLinux() MemStat {
-	data, err := os.ReadFile("/proc/meminfo")
+	return collectMemLinuxFrom("/proc")
+}
+
+// matrix/hardened: iSH exposes guest memory through meminfo, not host physical
+// RAM. Stat its explicit interface without reading private process/OOM details.
+func collectMemLinuxFrom(procRoot string) MemStat {
+	data, err := os.ReadFile(filepath.Join(procRoot, "meminfo"))
 	if err != nil {
 		return MemStat{}
 	}
-	return ParseMeminfo(string(data))
+	stat := ParseMeminfo(string(data))
+	if marker, err := os.Stat(filepath.Join(procRoot, "ish", "version")); err == nil && !marker.IsDir() {
+		stat.Scope = MemoryScopeGuest
+	}
+	return stat
 }
 
 // ParseMeminfo parses /proc/meminfo content. Exported for testing.
@@ -35,18 +47,18 @@ func ParseMeminfo(content string) MemStat {
 
 	for _, line := range strings.Split(content, "\n") {
 		if strings.HasPrefix(line, "MemTotal:") {
-			total = parseMeminfoValue(line)
-			foundTotal = true
+			total, foundTotal = parseMeminfoValue(line)
 		} else if strings.HasPrefix(line, "MemAvailable:") {
-			available = parseMeminfoValue(line)
-			foundAvailable = true
+			available, foundAvailable = parseMeminfoValue(line)
 		}
 		if foundTotal && foundAvailable {
 			break
 		}
 	}
 
-	if !foundTotal {
+	// matrix/hardened: incomplete or inconsistent snapshots are unavailable,
+	// rather than a fabricated 100% or unsigned underflow/overflow.
+	if !foundTotal || !foundAvailable || total == 0 || available > total || total > math.MaxUint64/1024 {
 		return MemStat{}
 	}
 
@@ -70,13 +82,13 @@ func ParseMeminfo(content string) MemStat {
 
 // parseMeminfoValue extracts the numeric value from a /proc/meminfo line.
 // Format: "MemTotal:       16384000 kB"
-func parseMeminfoValue(line string) uint64 {
+func parseMeminfoValue(line string) (uint64, bool) {
 	parts := strings.Fields(line)
-	if len(parts) < 2 {
-		return 0
+	if len(parts) != 3 || parts[2] != "kB" {
+		return 0, false
 	}
-	val, _ := strconv.ParseUint(parts[1], 10, 64)
-	return val
+	val, err := strconv.ParseUint(parts[1], 10, 64)
+	return val, err == nil
 }
 
 // collectMemDarwin uses sysctl hw.memsize and vm_stat to get memory info.

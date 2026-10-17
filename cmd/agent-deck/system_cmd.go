@@ -34,6 +34,7 @@ func handleSystem(args []string) {
 // — sysinfo.Collect() is the same one-shot snapshot the web UI's
 // /api/system/stats handler already serves, never a controller-side ssh to
 // /proc.
+// matrix/hardened: propagate resource scope so guest budgets are never presented as host RAM.
 type systemStatsJSON struct {
 	CPU *struct {
 		UsagePercent float64 `json:"usage_percent"`
@@ -44,6 +45,7 @@ type systemStatsJSON struct {
 		Load15 float64 `json:"load15"`
 	} `json:"load,omitempty"`
 	Memory *struct {
+		Scope        string  `json:"scope,omitempty"`
 		UsedBytes    uint64  `json:"used_bytes"`
 		TotalBytes   uint64  `json:"total_bytes"`
 		UsagePercent float64 `json:"usage_percent"`
@@ -147,9 +149,12 @@ func handleSystemStats(args []string) {
 	jsonOutput := fs.Bool("json", false, "Output as JSON")
 	_ = fs.Parse(args)
 
-	stats := sysinfo.Collect()
+	printSystemStats(sysinfo.Collect(), *jsonOutput)
+}
 
-	if !*jsonOutput {
+// matrix/hardened: render one snapshot consistently in the CLI and its remote wire format.
+func printSystemStats(stats sysinfo.Stats, jsonOutput bool) {
+	if !jsonOutput {
 		if stats.CPU.Available {
 			fmt.Printf("CPU:    %.0f%%\n", stats.CPU.UsagePercent)
 		}
@@ -157,7 +162,11 @@ func handleSystemStats(args []string) {
 			fmt.Printf("Load:   %.2f  %.2f  %.2f\n", stats.Load.Load1, stats.Load.Load5, stats.Load.Load15)
 		}
 		if stats.Memory.Available {
-			fmt.Printf("Memory: %s/%s (%.0f%%)\n", sysinfo.FormatBytes(stats.Memory.UsedBytes), sysinfo.FormatBytes(stats.Memory.TotalBytes), stats.Memory.UsagePercent)
+			label := "Memory"
+			if stats.Memory.Scope == sysinfo.MemoryScopeGuest {
+				label += " (guest)"
+			}
+			fmt.Printf("%s: %s/%s (%.0f%%)\n", label, sysinfo.FormatBytes(stats.Memory.UsedBytes), sysinfo.FormatBytes(stats.Memory.TotalBytes), stats.Memory.UsagePercent)
 		}
 		if stats.Disk.Available {
 			fmt.Printf("Disk:   %s/%s (%.0f%%)\n", sysinfo.FormatBytes(stats.Disk.UsedBytes), sysinfo.FormatBytes(stats.Disk.TotalBytes), stats.Disk.UsagePercent)
@@ -214,10 +223,11 @@ func handleSystemStats(args []string) {
 	}
 	if stats.Memory.Available {
 		out.Memory = &struct {
+			Scope        string  `json:"scope,omitempty"`
 			UsedBytes    uint64  `json:"used_bytes"`
 			TotalBytes   uint64  `json:"total_bytes"`
 			UsagePercent float64 `json:"usage_percent"`
-		}{UsedBytes: stats.Memory.UsedBytes, TotalBytes: stats.Memory.TotalBytes, UsagePercent: stats.Memory.UsagePercent}
+		}{Scope: stats.Memory.Scope, UsedBytes: stats.Memory.UsedBytes, TotalBytes: stats.Memory.TotalBytes, UsagePercent: stats.Memory.UsagePercent}
 	}
 	if stats.Disk.Available {
 		out.Disk = &struct {
