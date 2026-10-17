@@ -2952,6 +2952,10 @@ type RemoteSessionInfo struct {
 	// "" — see LastActivity below.
 	LastActivityAt string `json:"last_activity_at,omitempty"`
 
+	// matrix/hardened: user visits are distinct from background output. Omitted
+	// by older remotes or sessions that have never been visited.
+	LastAccessedAt string `json:"last_accessed_at,omitempty"`
+
 	// Viewers are the terminals attached to the session on the remote (its
 	// `list --json` viewers field): the "who else is viewing" indicator for
 	// a remote row. nil means the remote did not say (an agent-deck older

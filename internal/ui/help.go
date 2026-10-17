@@ -237,6 +237,11 @@ func (h *HelpOverlay) View() string {
 			}
 		}
 	}
+	// matrix/hardened: recent view follows remaps and hides an unreachable binding after a conflict.
+	recentViewKey := h.key(hotkeyToggleRecentView, "Ctrl+E")
+	if h.hotkeys != nil && h.hotkeyLookup[recentViewKey] != defaultHotkeyBindings[hotkeyToggleRecentView] {
+		recentViewKey = ""
+	}
 	searchKey := h.key(hotkeySearch, "/")
 	settingsKey := h.key(hotkeySettings, "S")
 	helpKey := h.key(hotkeyHelp, "?")
@@ -462,8 +467,9 @@ func (h *HelpOverlay) View() string {
 				{"/waiting", "Filter waiting"},
 				{"/running", "Filter running"},
 				{"/idle", "Filter idle"},
-				{groupViewKey, "Cycle view: active-on-top / populated-on-top / pinned"}, // matrix/hardened
-				{pinnedViewKey, "Toggle pinned-only view"},                              // matrix/hardened
+				{groupViewKey, "Cycle view: normal / active / populated / pinned / recent"}, // matrix/hardened
+				{pinnedViewKey, "Toggle pinned-only view"},                                  // matrix/hardened
+				{recentViewKey, "Toggle 最近 / Recent view (latest first)"},                   // matrix/hardened
 				{timeFilterKey, "Cycle time filter: today / 3 / 7 / 30 days / all"},
 			},
 		},

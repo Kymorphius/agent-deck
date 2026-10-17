@@ -77,6 +77,7 @@ type SessionRow struct {
 	CodexSessionID    string         `json:"codex_session_id,omitempty"`
 	ResolvedCodexHome string         `json:"resolved_codex_home,omitempty"`
 	LastActivityAt    string         `json:"last_activity_at,omitempty" doc:"live"`
+	LastAccessedAt    string         `json:"last_accessed_at,omitempty"` // matrix/hardened: persisted user visits for recent lists.
 	Viewers           *[]tmux.Viewer `json:"viewers,omitempty" doc:"live; absent when tmux could not be asked"`
 
 	// BackgroundWork is the in-flight background work behind substate
@@ -130,6 +131,11 @@ func sessionList(ctx context.Context, in SessionListIn) (SessionListOut, error) 
 
 // staticSessionRow fills the stored fields only; no tmux or pane access.
 func staticSessionRow(inst *session.Instance, instances []*session.Instance, profile string) SessionRow {
+	// matrix/hardened: an unvisited session has no interaction time to rank.
+	accessedAt := ""
+	if !inst.LastAccessedAt.IsZero() {
+		accessedAt = inst.LastAccessedAt.Format(time.RFC3339Nano)
+	}
 	return SessionRow{
 		ID:                inst.ID,
 		ParentSessionID:   inst.ParentSessionID,
@@ -148,6 +154,7 @@ func staticSessionRow(inst *session.Instance, instances []*session.Instance, pro
 		SSHRemotePath:     inst.SSHRemotePath,
 		CodexSessionID:    inst.CodexSessionID,
 		ResolvedCodexHome: inst.ResolvedCodexHome(),
+		LastAccessedAt:    accessedAt, // matrix/hardened
 	}
 }
 

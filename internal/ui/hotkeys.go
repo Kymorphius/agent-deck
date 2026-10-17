@@ -28,6 +28,7 @@ const (
 	hotkeyTogglePreview    = "toggle_preview"
 	hotkeyCycleGroupView   = "cycle_group_view"
 	hotkeyTogglePinnedView = "toggle_pinned_view" // matrix/hardened: direct access to pinned sessions.
+	hotkeyToggleRecentView = "toggle_recent_view" // matrix/hardened: direct access to recent user interactions.
 	hotkeyCycleTimeFilter  = "cycle_time_filter"
 	hotkeyMarkUnread       = "mark_unread"
 	hotkeyQuickApprove     = "quick_approve"
@@ -140,6 +141,7 @@ var hotkeyActionOrder = []string{
 	hotkeyTogglePreview,
 	hotkeyCycleGroupView,
 	hotkeyTogglePinnedView, // matrix/hardened
+	hotkeyToggleRecentView, // matrix/hardened
 	hotkeyCycleTimeFilter,
 	hotkeyMarkUnread,
 	hotkeyQuickApprove,
@@ -203,7 +205,8 @@ var defaultHotkeyBindings = map[string]string{
 	hotkeySkillsManager:    "s",
 	hotkeyTogglePreview:    "v",
 	hotkeyCycleGroupView:   "t",
-	hotkeyTogglePinnedView: "p", // matrix/hardened: plain p opens pinned sessions; control/Option aliases remain.
+	hotkeyTogglePinnedView: "p",      // matrix/hardened: plain p opens pinned sessions; control/Option aliases remain.
+	hotkeyToggleRecentView: "ctrl+e", // matrix/hardened: recent view is list-only; Shift+O keeps preview orientation.
 	hotkeyCycleTimeFilter:  "*",
 	hotkeyMarkUnread:       "u",
 	hotkeyQuickApprove:     "a",

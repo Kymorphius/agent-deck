@@ -42,6 +42,23 @@ func attachInstanceInteractive(inst *session.Instance) error {
 	if tmuxSession == nil {
 		return fmt.Errorf("no tmux session for '%s'", inst.Title)
 	}
+	// matrix/hardened: rejected/stale attach attempts are not recent visits.
+	if !tmuxSession.Exists() {
+		return fmt.Errorf("session '%s' is not running", inst.Title)
+	}
 	detachByte := ui.ResolvedDetachByte(session.GetHotkeyOverrides())
-	return tmuxSession.Attach(context.Background(), detachByte)
+	return attachWithRecentAccess(inst, func() error {
+		return tmuxSession.Attach(context.Background(), detachByte)
+	})
+}
+
+// matrix/hardened: CLI and remote interactive visits use the same durable
+// timestamps as TUI visits, including the user's successful return to the list.
+func attachWithRecentAccess(inst *session.Instance, attach func() error) error {
+	inst.MarkAccessed()
+	if err := attach(); err != nil {
+		return err
+	}
+	inst.MarkAccessed()
+	return nil
 }

@@ -1722,8 +1722,10 @@ func (s *StateDB) WriteLastActivityAt(id string, at time.Time, expectedTouch ...
 // before the TUI exits.
 func (s *StateDB) WriteLastAccessed(id string, at time.Time) error {
 	return withBusyRetry(func() error {
+		// matrix/hardened: asynchronous visits from another terminal/browser
+		// may finish out of order; an older write cannot rewind recent activity.
 		_, err := s.db.Exec(
-			`UPDATE instances SET last_accessed = ? WHERE id = ?`,
+			`UPDATE instances SET last_accessed = MAX(COALESCE(last_accessed, 0), ?) WHERE id = ?`,
 			at.Unix(), id,
 		)
 		return err

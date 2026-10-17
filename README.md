@@ -121,7 +121,7 @@ agent-deck web                    # Start web UI on http://127.0.0.1:8420
 
 ### Key Shortcuts
 
-<!-- matrix/hardened: o opens, F9 returns, p toggles pinned view, numeric l selects and numeric h collapses. -->
+<!-- matrix/hardened: o opens, F9 returns, p toggles pinned view, Ctrl+E toggles recent view, numeric l selects and numeric h collapses. -->
 | Key | Action |
 |-----|--------|
 | `o` / `Enter` | Attach to session |
@@ -130,6 +130,8 @@ agent-deck web                    # Start web UI on http://127.0.0.1:8420
 | `12l` / `:12l` | Go to list line 12 without opening |
 | `12h` / `:12h` | Collapse group / parent at list line 12 |
 | `p` / `Ctrl+P` / `Alt+P` (`Option+P` on macOS) | Toggle pinned-only view |
+| `Ctrl+E` | Toggle 最近 / Recent, latest user interaction first |
+| `t` | Cycle normal / active / populated / pinned / recent views |
 | `Ctrl+L` | Edit multi-repo paths |
 | `n` | New session |
 | `f` / `F` | Fork (quick / dialog) |
@@ -366,6 +368,14 @@ Press `/` to search managed sessions by title, group, project path, or tool. Spa
 
 <!-- matrix/hardened: make local-search query retention an explicit preference. -->
 Local search (`/` and `Alt+/`) clears the previous query each time it opens by default. To keep the last query, open **Settings (`S`) → LOCAL SEARCH → Clear search on open (/)** and turn it off with **Space**, or set `[ui].clear_search_on_open = false`. The change takes effect on the next search without restarting.
+
+<!-- matrix/hardened: persistent recent interactions are separate from background agent activity. -->
+Press **Ctrl+E** in the session list to open **最近 / Recent**, with the sessions you most recently visited or sent input to first, across groups. Press it again to return to the normal grouped list. The order uses persisted `LastAccessedAt` (`last_accessed`) timestamps from user visits and accepted user input; background agent output does not move a session up. Sessions without a recorded interaction timestamp are omitted. Existing status, time, archive and group-scope filters still apply. The `t` view cycle also includes Recent. See [terminal shortcuts](docs/terminal-shortcuts.md#recent-interactions-list) for the input paths and remote compatibility.
+
+```toml
+[hotkeys]
+toggle_recent_view = "ctrl+e" # Set to another key, or "" to disable the direct shortcut.
+```
 
 ### Keyboard navigation (v1.7.60)
 
