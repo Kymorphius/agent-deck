@@ -11,7 +11,7 @@
   │   Type to search; titles, hints and tags   ││                                                                    │
   │ rank first                                 ││                                                                    │
   │ [↑↓] Select  [Enter] Open  [Tab] Local     ││                                                                    │
-  │ [ ] scroll preview   [Esc] Cancel          ││                                                                    │
+  │ [Ctrl+R/F5] Refresh  [Esc] Cancel          ││                                                                    │
   │                                            ││                                                                    │
   │                                            ││                                                                    │
   │                                            ││                                                                    │

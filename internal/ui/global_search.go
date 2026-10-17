@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"github.com/asheshgoplani/agent-deck/internal/recall/ingest"
 	"github.com/asheshgoplani/agent-deck/internal/recall/query"
 	"github.com/asheshgoplani/agent-deck/internal/recall/reader"
+	"github.com/asheshgoplani/agent-deck/internal/recall/store"
 	"github.com/asheshgoplani/agent-deck/internal/session"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -105,13 +107,16 @@ type globalSearchDebounceMsg struct {
 
 // recallPreviewMsg delivers the preview of one session.
 type recallPreviewMsg struct {
-	sessID int64
-	detail query.Detail
-	err    error
+	epoch    uint64 // matrix/hardened: previews belong to one refresh cycle.
+	revision uint64 // matrix/hardened: discard previews read before committed progress.
+	sessID   int64
+	detail   query.Detail
+	err      error
 }
 
 // recallRefreshMsg reports one bounded sweep pass.
 type recallRefreshMsg struct {
+	epoch uint64 // matrix/hardened
 	res   ingest.Result
 	err   error
 	gated bool
@@ -119,12 +124,17 @@ type recallRefreshMsg struct {
 
 // recallStatusMsg delivers the index summary for the header.
 type recallStatusMsg struct {
-	status query.Status
-	err    error
+	epoch    uint64 // matrix/hardened
+	revision uint64 // matrix/hardened: status reads can complete out of order.
+	status   query.Status
+	err      error
 }
 
 // recallCatchUpMsg fires after recallCatchUpDelay: run the next gated pass.
-type recallCatchUpMsg struct{}
+type recallCatchUpMsg struct {
+	epoch   uint64
+	ungated bool // matrix/hardened: bounded retry of the explicit opening/manual pass.
+}
 
 // GlobalSearch is the Recall search overlay.
 type GlobalSearch struct {
@@ -139,12 +149,23 @@ type GlobalSearch struct {
 	query         string
 	searching     bool
 	searchErr     string
+	searchDirty   bool // matrix/hardened: rerun after committed progress without starving a slow read.
+	resultQuery   string
 	candidates    int
 	ceilingHit    bool
 	// matrix/hardened: nil means every conversation; otherwise the current
 	// profile's owners are an immutable scope for this opening of Recall.
 	managed    *query.ManagedScope
 	generation uint64
+	// matrix/hardened: cancel abandoned work and isolate every refresh cycle,
+	// independently of the query generation which changes while typing.
+	epoch           uint64
+	ctx             context.Context
+	cancel          context.CancelFunc
+	searchCancel    context.CancelFunc
+	previewRevision uint64
+	statusRevision  uint64
+	lockRetries     int // matrix/hardened: let a canceled sweep release its lock before retrying.
 
 	source   RecallSource
 	status   query.Status
@@ -195,6 +216,7 @@ func (gs *GlobalSearch) ShowManaged(scope query.ManagedScope) tea.Cmd {
 }
 
 func (gs *GlobalSearch) show(scope *query.ManagedScope) tea.Cmd {
+	gs.restartRequests()
 	gs.managed = scope
 	gs.generation++
 	gs.input.Placeholder = "Search every conversation on this machine..."
@@ -210,6 +232,7 @@ func (gs *GlobalSearch) show(scope *query.ManagedScope) tea.Cmd {
 	gs.previewScroll = 0
 	gs.searching = false
 	gs.searchErr = ""
+	gs.searchDirty = false // matrix/hardened
 	gs.query = ""
 	gs.refresh = ""
 	gs.preview = map[int64]query.Detail{}
@@ -234,6 +257,10 @@ func (gs *GlobalSearch) WantsSwitchToLocal() bool {
 // Hide hides the overlay and ends the catch-up chain: a tick that
 // outlives the overlay finds sweeping false and runs nothing.
 func (gs *GlobalSearch) Hide() {
+	// matrix/hardened: a hidden overlay must not keep queued database work.
+	if gs.cancel != nil {
+		gs.cancel()
+	}
 	gs.visible = false
 	gs.sweeping = false
 	gs.input.Blur()
@@ -254,18 +281,26 @@ func (gs *GlobalSearch) Selected() *GlobalSearchResult {
 }
 
 func (gs *GlobalSearch) statusCmd() tea.Cmd {
-	src := gs.source
+	src, parent, epoch := gs.source, gs.ctx, gs.epoch
+	gs.statusRevision++ // matrix/hardened: retain only the latest status request.
+	revision := gs.statusRevision
 	return func() tea.Msg {
-		st, err := src.Status(context.Background())
-		return recallStatusMsg{status: st, err: err}
+		// matrix/hardened: busy reads report a failure instead of waiting forever.
+		ctx, cancel := context.WithTimeout(parent, 5*time.Second)
+		defer cancel()
+		st, err := src.Status(ctx)
+		return recallStatusMsg{epoch: epoch, revision: revision, status: st, err: err}
 	}
 }
 
 func (gs *GlobalSearch) refreshCmd(gated bool) tea.Cmd {
-	src := gs.source
+	src, parent, epoch := gs.source, gs.ctx, gs.epoch
 	return func() tea.Msg {
-		res, err := src.Refresh(context.Background(), gated)
-		return recallRefreshMsg{res: res, err: err, gated: gated}
+		// matrix/hardened: the ingest budget also needs a cancellable outer limit.
+		ctx, cancel := context.WithTimeout(parent, 10*time.Second)
+		defer cancel()
+		res, err := src.Refresh(ctx, gated)
+		return recallRefreshMsg{epoch: epoch, res: res, err: err, gated: gated}
 	}
 }
 
@@ -273,29 +308,81 @@ func (gs *GlobalSearch) searchCmd(q string) tea.Cmd {
 	src := gs.source
 	// matrix/hardened: capture the opening/query scope before the async command.
 	scope, generation := gs.managed, gs.generation
+	// matrix/hardened: obsolete searches must release their read connection.
+	if gs.searchCancel != nil {
+		gs.searchCancel()
+	}
+	ctx, cancel := context.WithCancel(gs.ctx)
+	gs.searchCancel = cancel
 	return func() tea.Msg {
+		ctx, timeoutCancel := context.WithTimeout(ctx, 5*time.Second)
+		defer timeoutCancel()
+		defer cancel()
 		var res query.SearchResult
 		var err error
 		if scope != nil {
-			res, err = src.SearchManaged(context.Background(), q, recallResultLimit, *scope)
+			res, err = src.SearchManaged(ctx, q, recallResultLimit, *scope)
 		} else {
-			res, err = src.Search(context.Background(), q, recallResultLimit)
+			res, err = src.Search(ctx, q, recallResultLimit)
 		}
 		return globalSearchResultsMsg{query: q, generation: generation, res: res, err: err}
 	}
 }
 
 func (gs *GlobalSearch) previewCmd(sessID int64) tea.Cmd {
-	src := gs.source
+	src, parent, epoch := gs.source, gs.ctx, gs.epoch
+	revision := gs.previewRevision // matrix/hardened
 	return func() tea.Msg {
-		d, err := src.Show(context.Background(), sessID, recallPreviewTurns)
-		return recallPreviewMsg{sessID: sessID, detail: d, err: err}
+		// matrix/hardened
+		ctx, cancel := context.WithTimeout(parent, 5*time.Second)
+		defer cancel()
+		d, err := src.Show(ctx, sessID, recallPreviewTurns)
+		return recallPreviewMsg{epoch: epoch, revision: revision, sessID: sessID, detail: d, err: err}
 	}
 }
 
 // catchUpCmd schedules the next gated pass after recallCatchUpDelay.
 func (gs *GlobalSearch) catchUpCmd() tea.Cmd {
-	return tea.Tick(recallCatchUpDelay, func(time.Time) tea.Msg { return recallCatchUpMsg{} })
+	return gs.refreshAfterCmd(true)
+}
+
+// matrix/hardened: a manual retry that races cancellation may briefly find the
+// old sweep holding its lock. Retry that one pass without entering a busy loop.
+func (gs *GlobalSearch) refreshAfterCmd(gated bool) tea.Cmd {
+	epoch := gs.epoch // matrix/hardened: an old timer cannot restart a new chain.
+	return tea.Tick(recallCatchUpDelay, func(time.Time) tea.Msg { return recallCatchUpMsg{epoch: epoch, ungated: !gated} })
+}
+
+// matrix/hardened: manual refresh replaces pending work while retaining the
+// query, managed scope and visible results so retries do not lose the user's place.
+func (gs *GlobalSearch) restartRequests() {
+	if gs.cancel != nil {
+		gs.cancel()
+	}
+	gs.epoch++
+	gs.ctx, gs.cancel = context.WithCancel(context.Background())
+	gs.searchCancel = nil
+	gs.lockRetries = 0 // matrix/hardened
+}
+
+func (gs *GlobalSearch) manualRefresh() tea.Cmd {
+	if gs.source == nil {
+		return nil
+	}
+	gs.restartRequests()
+	gs.generation++
+	gs.refresh, gs.searchErr = "", ""
+	gs.searchDirty = false // matrix/hardened
+	gs.sweeping = true
+	gs.preview = map[int64]query.Detail{}
+	gs.previewT = map[int64]bool{}
+	gs.previewE = map[int64]string{}
+	cmds := []tea.Cmd{gs.statusCmd(), gs.refreshCmd(false)}
+	gs.searching = gs.query != ""
+	if gs.searching {
+		cmds = append(cmds, gs.searchCmd(gs.query))
+	}
+	return tea.Batch(cmds...)
 }
 
 // requestPreview asks for the selected session's preview once.
@@ -315,14 +402,35 @@ func (gs *GlobalSearch) Update(msg tea.Msg) (*GlobalSearch, tea.Cmd) {
 	}
 	switch msg := msg.(type) {
 	case recallStatusMsg:
+		if msg.epoch != gs.epoch || msg.revision != gs.statusRevision {
+			return gs, nil // matrix/hardened: superseded refresh cycle.
+		}
 		if msg.err == nil {
 			gs.status, gs.hasStat = msg.status, true
 		}
 		return gs, nil
 
 	case recallRefreshMsg:
+		if msg.epoch != gs.epoch {
+			return gs, nil // matrix/hardened
+		}
 		gs.sweeping = false
+		cmds := []tea.Cmd{gs.statusCmd()}
+		// matrix/hardened: cached or late previews from before this commit
+		// must not hide newly indexed turns of the same conversation.
+		changed := msg.res.Parsed > 0 || msg.res.Missing > 0 || msg.res.Sessions > 0
+		if changed {
+			gs.previewRevision++
+			gs.preview = map[int64]query.Detail{}
+			gs.previewT = map[int64]bool{}
+			gs.previewE = map[int64]string{}
+		}
 		switch {
+		case !msg.gated && errors.Is(msg.err, store.ErrLocked) && gs.lockRetries < 3:
+			gs.lockRetries++
+			gs.sweeping = true
+			gs.refresh = "index busy; retrying refresh shortly..."
+			cmds = append(cmds, gs.refreshAfterCmd(false))
 		case msg.err != nil && recallSkipped(msg.err):
 			gs.refresh = "index not refreshed: " + msg.err.Error()
 		case msg.err != nil:
@@ -332,21 +440,28 @@ func (gs *GlobalSearch) Update(msg tea.Msg) (*GlobalSearch, tea.Cmd) {
 			// Continue in bounded passes, paced and through the gate,
 			// while the overlay is open.
 			gs.sweeping = true
-			return gs, tea.Batch(gs.catchUpCmd(), gs.statusCmd())
+			cmds = append(cmds, gs.catchUpCmd())
 		default:
 			gs.refresh = ""
 		}
-		cmds := []tea.Cmd{gs.statusCmd()}
+		// matrix/hardened: committed progress is searchable before the entire
+		// backlog finishes. Do not keep cancelling a slow query on empty passes.
 		if gs.query != "" {
-			cmds = append(cmds, gs.searchCmd(gs.query)) // re-run on the fresher index
+			if gs.searching {
+				gs.searchDirty = gs.searchDirty || changed
+			} else {
+				gs.searching = true
+				gs.generation++
+				cmds = append(cmds, gs.searchCmd(gs.query))
+			}
 		}
 		return gs, tea.Batch(cmds...)
 
 	case recallCatchUpMsg:
-		if !gs.sweeping || gs.source == nil {
+		if msg.epoch != gs.epoch || !gs.sweeping || gs.source == nil {
 			return gs, nil // closed and reopened meanwhile: Show restarted the chain
 		}
-		return gs, gs.refreshCmd(true)
+		return gs, gs.refreshCmd(!msg.ungated)
 
 	case globalSearchDebounceMsg:
 		if msg.generation == gs.generation && msg.query == strings.TrimSpace(gs.input.Value()) && msg.query != "" && gs.source != nil {
@@ -361,15 +476,35 @@ func (gs *GlobalSearch) Update(msg tea.Msg) (*GlobalSearch, tea.Cmd) {
 		}
 		gs.searching = false
 		if msg.err != nil {
+			// matrix/hardened: committed progress still needs its follow-up
+			// even if the older snapshot failed or timed out.
+			if gs.searchDirty {
+				gs.searchDirty = false
+				gs.searching = true
+				gs.searchErr = ""
+				gs.generation++
+				return gs, gs.searchCmd(gs.query)
+			}
 			gs.searchErr = msg.err.Error()
 			gs.results = nil
 			return gs, nil
 		}
 		gs.searchErr = ""
 		gs.applySearchResults(msg.res)
+		// matrix/hardened: a sweep may have committed while this read was
+		// running. Finish it first, then query the newer snapshot once.
+		if gs.searchDirty {
+			gs.searchDirty = false
+			gs.searching = true
+			gs.generation++
+			return gs, tea.Batch(gs.requestPreview(), gs.searchCmd(gs.query))
+		}
 		return gs, gs.requestPreview()
 
 	case recallPreviewMsg:
+		if msg.epoch != gs.epoch || msg.revision != gs.previewRevision {
+			return gs, nil // matrix/hardened
+		}
 		if msg.err != nil {
 			gs.previewE[msg.sessID] = msg.err.Error()
 		} else {
@@ -388,6 +523,8 @@ func (gs *GlobalSearch) Update(msg tea.Msg) (*GlobalSearch, tea.Cmd) {
 
 	case tea.KeyMsg:
 		switch msg.String() {
+		case "ctrl+r", "f5": // matrix/hardened: retry without closing Recall.
+			return gs, gs.manualRefresh()
 		case "esc":
 			gs.Hide()
 			return gs, nil
@@ -418,6 +555,11 @@ func (gs *GlobalSearch) Update(msg tea.Msg) (*GlobalSearch, tea.Cmd) {
 				return gs, cmd
 			}
 			gs.query = q
+			gs.searchDirty = false // matrix/hardened
+			// matrix/hardened: cancel before the debounce, including an empty query.
+			if gs.searchCancel != nil {
+				gs.searchCancel()
+			}
 			// matrix/hardened: even returning to the same text must reject an
 			// older in-flight result from before the intervening edits.
 			gs.generation++
@@ -454,6 +596,12 @@ func (gs *GlobalSearch) move(delta int) tea.Cmd {
 // applySearchResults converts ranked hits into rows. The order is the
 // query layer's (card hit, body hits, recency); the overlay never re-ranks.
 func (gs *GlobalSearch) applySearchResults(res query.SearchResult) {
+	// matrix/hardened: keep the selected conversation through background refresh.
+	var selectedID int64
+	if selected := gs.Selected(); selected != nil && gs.resultQuery == gs.query {
+		selectedID = selected.SessID
+	}
+	gs.resultQuery = gs.query
 	gs.results = make([]*GlobalSearchResult, 0, len(res.Hits))
 	for _, h := range res.Hits {
 		r := &GlobalSearchResult{
@@ -466,6 +614,12 @@ func (gs *GlobalSearch) applySearchResults(res query.SearchResult) {
 	}
 	gs.candidates, gs.ceilingHit = res.Candidates, res.CeilingHit
 	gs.cursor = 0
+	for i, result := range gs.results {
+		if result.SessID == selectedID {
+			gs.cursor = i
+			break
+		}
+	}
 	gs.previewScroll = 0
 }
 
@@ -596,9 +750,18 @@ func (gs *GlobalSearch) View() string {
 	if gs.managed != nil {
 		enterHint = "[Enter] Locate"
 	}
+	// matrix/hardened: keep a usable refresh hint at 60/80 columns.
+	refreshHint := "[Ctrl+R/F5] Refresh"
+	refreshSep := "  "
+	if keyWidth < 40 {
+		refreshHint = "[F5] Refresh"
+	}
+	if keyWidth < 28 {
+		refreshHint, refreshSep = "[F5]", " "
+	}
 	keys := lipgloss.NewStyle().Foreground(ColorComment).Render(
 		renderDialogFooter(keyWidth, "  ", []string{"[↑↓] Select", enterHint, "[Tab] Local"}, 0) + "\n" +
-			strings.TrimSpace(renderDialogFooter(keyWidth, "  ", []string{"[ ] scroll preview", " [Esc] Cancel"}, 0)))
+			strings.TrimSpace(renderDialogFooter(keyWidth, refreshSep, []string{refreshHint, "[Esc] Cancel", "[ ] scroll preview"}, 2)))
 	// The results scroll inside the pane around the cursor; the header, the
 	// query box and the key hints stay put.
 	sections := dialogSections{head: []string{left.String()}, foot: []string{"", keys}}

@@ -146,6 +146,7 @@ its own mouse capture regardless.
 |-----|--------|
 | `/` | Local search, fuzzy (**rebindable**) |
 | `G` | Recall search over every indexed conversation (Claude, Codex, pi, Gemini, OpenCode, Hermes); footer notice and local search when `[recall] enabled = false` |
+| `Ctrl+R` / `F5` (inside Recall) | Refresh the index, results and preview while retaining the current query and scope (matrix/hardened) |
 | `Tab` | Switch between local/global search |
 | `0` | Clear filter (show all) |
 | `!` / `Shift+1` | Filter: running only (toggle) |

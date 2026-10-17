@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.88`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.89`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -783,6 +783,14 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 
 - **matrix/hardened:** 普通分组只列父路径，顶级组显示 `—`；显示名称别名保留真实相对路径，远程设备单独列出，避免重复命名空间。窄窗口收起路径列，底部固定显示所选设备和完整相对路径，过长时从中间省略。
 - 验证使用第 4 节隔离入口，覆盖宽屏至少二十项、中文与 emoji 对齐、同名组身份、窄屏尾栏和所有结果逐项可达；搜索、快捷键和 Home 定位回归通过。旧 TUI 在列表按 `Ctrl+T` 加载新布局。
+
+## 76. Recall 新内容索引与手动刷新
+
+`1.16.26+matrix.89` 在 Recall 中新增 `Ctrl+R` / `F5`，保留关键词、已管理范围和当前会话，重新扫描索引、查询并加载预览。用法及积压边界见 [Recall](docs/recall.md#the-tui)。
+
+- **matrix/hardened:** 交互扫描在目录发现完成后才开始 150 ms / 32 MB 解析预算，避免历史文件多时每次预算提前耗尽、游标永远不前进。CLI/backfill 保留原有预算语义。
+- **matrix/hardened:** 请求可取消，重复刷新隔离旧结果、状态、预览和后台计时器；已提交的新内容无需等全部积压完成即可搜索。预览与状态各自拒收较早快照，索引锁短暂竞争最多重试三次。状态读取改走 reader，避免等待单一 writer。
+- 验证使用第 4 节隔离入口，覆盖目录发现超过预算仍推进、追加真实 transcript 后搜索与预览更新、并发回调顺序、取消、范围和选择保留、锁竞争、宽度与界面快照。大积压仍需分批处理；后台续扫保留 busy/load gate。旧 TUI 在列表按 `Ctrl+T` 重载。
 
 ## Claude 外部钩子缺失的处理
 

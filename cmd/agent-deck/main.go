@@ -45,7 +45,7 @@ import (
 )
 
 // matrix/hardened: identifies our hardened build.
-var Version = "1.16.26+matrix.88" // matrix/hardened: compact group search; overridden via -ldflags.
+var Version = "1.16.26+matrix.89" // matrix/hardened: refresh new Recall content; overridden via -ldflags.
 
 // Table column widths for list command output
 const (
