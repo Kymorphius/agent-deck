@@ -284,6 +284,195 @@ func TestMatrixAutoSleepNativeChildMustFinish(t *testing.T) {
 	}
 }
 
+// matrix/hardened: compatibility fixtures contain only synthetic metadata.
+// They establish both what may preserve completion and what must invalidate it.
+func matrixAutoSleepMetadataLine(t *testing.T, kind string, payload any, at time.Time) string {
+	t.Helper()
+	data, err := json.Marshal(map[string]any{"timestamp": at.Format(time.RFC3339Nano), "type": kind, "payload": payload})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}
+
+func matrixAutoSleepTokenFixture() map[string]any {
+	usage := func() map[string]any {
+		return map[string]any{"input_tokens": 10, "cached_input_tokens": 2, "cache_write_input_tokens": 0, "output_tokens": 3, "reasoning_output_tokens": 1, "total_tokens": 13}
+	}
+	return map[string]any{
+		"thread_id": matrixCodexThread, "session_id": matrixCodexThread, "turn_id": "turn-sleep", "root_turn_id": "turn-sleep", "response_id": "response-fixture",
+		"usage": usage(), "turn_token_usage": usage(), "thread_token_usage": usage(),
+	}
+}
+
+func matrixAutoSleepSettingsFixture(cwd string) map[string]any {
+	return map[string]any{
+		"type": "thread_settings_applied", "thread_id": matrixCodexThread,
+		"thread_settings": map[string]any{
+			"model": "model-fixture", "model_provider_id": "provider-fixture", "cwd": cwd,
+			"approval_policy": "never", "approvals_reviewer": "user", "permission_profile": map[string]any{"type": "disabled"},
+			"collaboration_mode":      map[string]any{"mode": "default", "settings": map[string]any{"model": "model-fixture", "reasoning_effort": "medium", "developer_instructions": nil}},
+			"runtime_workspace_roots": []string{cwd}, "disabled_plugin_ids": []string{}, "service_tier": "standard",
+		},
+	}
+}
+
+func TestMatrixAutoSleepKnownMetadataPreservesOrInvalidatesCompletion(t *testing.T) {
+	for _, kind := range []string{"world_state", "inter_agent_communication_metadata", "token_usage_record", "thread_settings_applied"} {
+		for _, finishAgain := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s-new-completion-%t", kind, finishAgain), func(t *testing.T) {
+				inst, path, at := matrixAutoSleepFixture(t)
+				payload := any(nil)
+				recordType := kind
+				switch kind {
+				case "world_state":
+					payload = map[string]any{"full": true, "state": map[string]any{"fixture_context": "snapshot"}}
+				case "inter_agent_communication_metadata":
+					payload = map[string]any{"trigger_turn": true}
+				case "token_usage_record":
+					payload = matrixAutoSleepTokenFixture()
+				case "thread_settings_applied":
+					recordType, payload = "event_msg", matrixAutoSleepSettingsFixture(inst.ProjectPath)
+				}
+				f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0600)
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, _ = f.WriteString(matrixAutoSleepMetadataLine(t, recordType, payload, at.Add(time.Millisecond)) + "\n")
+				if finishAgain {
+					_, _ = f.WriteString(matrixAutoSleepMetadataLine(t, "event_msg", map[string]any{"type": "task_complete", "turn_id": "turn-sleep"}, at.Add(2*time.Millisecond)) + "\n")
+				}
+				_ = f.Close()
+				proof, _, err := matrixAutoSleepRollout(path, matrixCodexThread)
+				want := finishAgain || kind == "token_usage_record" || kind == "thread_settings_applied"
+				if (err == nil) != want || want && proof.TurnID != "turn-sleep" {
+					t.Fatalf("kind=%s new-completion=%t proof=%+v err=%v", kind, finishAgain, proof, err)
+				}
+			})
+		}
+	}
+}
+
+func TestMatrixAutoSleepMetadataSchemaAndIdentityRefusals(t *testing.T) {
+	tests := []struct {
+		name, kind string
+		payload    func(string) map[string]any
+	}{
+		{"world missing full", "world_state", func(string) map[string]any { return map[string]any{"state": map[string]any{}} }},
+		{"world wrong state", "world_state", func(string) map[string]any { return map[string]any{"full": true, "state": "unknown"} }},
+		{"communication wrong flag", "inter_agent_communication_metadata", func(string) map[string]any { return map[string]any{"trigger_turn": "true"} }},
+		{"communication new field", "inter_agent_communication_metadata", func(string) map[string]any { return map[string]any{"trigger_turn": false, "new_action": true} }},
+	}
+	for _, field := range []string{"thread_id", "session_id", "turn_id", "root_turn_id"} {
+		field := field
+		tests = append(tests, struct {
+			name, kind string
+			payload    func(string) map[string]any
+		}{"accounting wrong " + field, "token_usage_record", func(string) map[string]any {
+			p := matrixAutoSleepTokenFixture()
+			p[field] = "different-identity"
+			return p
+		}})
+	}
+	for _, mutation := range []string{"missing usage", "negative count", "noninteger count", "unknown count", "unknown record field"} {
+		mutation := mutation
+		tests = append(tests, struct {
+			name, kind string
+			payload    func(string) map[string]any
+		}{mutation, "token_usage_record", func(string) map[string]any {
+			p := matrixAutoSleepTokenFixture()
+			switch mutation {
+			case "missing usage":
+				delete(p, "usage")
+			case "negative count":
+				p["usage"].(map[string]any)["input_tokens"] = -1
+			case "noninteger count":
+				p["usage"].(map[string]any)["input_tokens"] = 1.5
+			case "unknown count":
+				p["usage"].(map[string]any)["new_action"] = true
+			case "unknown record field":
+				p["new_action"] = true
+			}
+			return p
+		}})
+	}
+	for _, mutation := range []string{"wrong thread", "missing snapshot", "missing model", "relative cwd", "unknown permission", "unknown setting", "wrong roots", "missing collaboration"} {
+		mutation := mutation
+		tests = append(tests, struct {
+			name, kind string
+			payload    func(string) map[string]any
+		}{mutation, "event_msg", func(cwd string) map[string]any {
+			p := matrixAutoSleepSettingsFixture(cwd)
+			s := p["thread_settings"].(map[string]any)
+			switch mutation {
+			case "wrong thread":
+				p["thread_id"] = "different-identity"
+			case "missing snapshot":
+				delete(p, "thread_settings")
+			case "missing model":
+				delete(s, "model")
+			case "relative cwd":
+				s["cwd"] = "relative"
+			case "unknown permission":
+				s["permission_profile"] = map[string]any{"type": "managed"}
+			case "unknown setting":
+				s["new_action"] = true
+			case "wrong roots":
+				s["runtime_workspace_roots"] = []int{1}
+			case "missing collaboration":
+				delete(s, "collaboration_mode")
+			}
+			return p
+		}})
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			inst, path, at := matrixAutoSleepFixture(t)
+			f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0600)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, _ = f.WriteString(matrixAutoSleepMetadataLine(t, test.kind, test.payload(inst.ProjectPath), at) + "\n")
+			// A later normal parent completion cannot bless an unknown schema.
+			_, _ = f.WriteString(matrixAutoSleepMetadataLine(t, "event_msg", map[string]any{"type": "task_complete", "turn_id": "turn-sleep"}, at) + "\n")
+			_ = f.Close()
+			if _, _, err := matrixAutoSleepRollout(path, matrixCodexThread); err == nil {
+				t.Fatal("unsupported metadata became eligible")
+			}
+		})
+	}
+}
+
+func TestMatrixAutoSleepTaskPathCollaborationStaysUnsupported(t *testing.T) {
+	for _, test := range []struct {
+		name, namespace, tool, args, output string
+	}{
+		{"bare task spawn", "", "spawn_agent", `{"task_name":"worker_fixture","message":"fixture"}`, `{"task_name":"/root/worker_fixture"}`},
+		{"namespaced task spawn", "collaboration", "spawn_agent", `{"task_name":"worker_fixture","message":"fixture"}`, `{"task_name":"/root/worker_fixture"}`},
+		{"bare followup without prior spawn", "", "followup_task", `{"target":"/root/worker_fixture","message":"fixture"}`, `null`},
+		{"namespaced followup without prior spawn", "collaboration", "followup_task", `{"target":"/root/worker_fixture","message":"fixture"}`, `null`},
+		{"prefixed followup", "", "collaboration.followup_task", `{"target":"/root/worker_fixture","message":"fixture"}`, `null`},
+		{"task-path wait", "", "wait_agent", `{"timeout_ms":1000}`, `{"message":"fixture","timed_out":false}`},
+		{"new collaboration operation", "collaboration", "future_operation", `{}`, `null`},
+		{"versioned collaboration namespace", "collaboration.v2", "future_operation", `{}`, `null`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, path, at := matrixAutoSleepFixture(t)
+			f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0600)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, _ = f.WriteString(matrixAutoSleepMetadataLine(t, "response_item", map[string]any{"type": "function_call", "name": test.tool, "namespace": test.namespace, "arguments": test.args, "call_id": "fixture-call"}, at) + "\n")
+			_, _ = f.WriteString(matrixAutoSleepMetadataLine(t, "response_item", map[string]any{"type": "function_call_output", "call_id": "fixture-call", "output": test.output}, at) + "\n")
+			_, _ = f.WriteString(matrixAutoSleepMetadataLine(t, "event_msg", map[string]any{"type": "task_complete", "turn_id": "turn-sleep"}, at) + "\n")
+			_ = f.Close()
+			if _, _, err := matrixAutoSleepRollout(path, matrixCodexThread); err == nil {
+				t.Fatal("parent completion washed away unsupported collaboration")
+			}
+		})
+	}
+}
+
 type matrixAutoSleepFakeProber struct {
 	processes map[int]procowner.ProcInfo
 	changed   int

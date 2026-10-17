@@ -9,6 +9,10 @@
 disabled when omitted. It initially supports ordinary local Codex user threads;
 other tools and ambiguous sessions keep running.
 
+A process holding several native thread writers stays awake, even when some
+subagents show completed output. Their identity and lifecycle need independent
+proof; older collaboration sessions can therefore remain ineligible.
+
 The list entry, native conversation ID, transcript and project files survive
 sleep. Before stopping, Agent Deck writes the complete available tmux scrollback
 to a private artifact. A nonempty or unrecognized composer prevents sleep, so
