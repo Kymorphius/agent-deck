@@ -4,7 +4,7 @@ import { html } from 'htm/preact'
 import { useEffect, useRef, useCallback, useState } from 'preact/hooks'
 import { effect } from '@preact/signals'
 import { selectedIdSignal, sessionsSignal, authTokenSignal, wsStateSignal, readOnlySignal } from './state.js'
-import { apiFetch, uploadSessionImage } from './api.js'
+import { apiFetch, uploadSessionImage, signedIn } from './api.js'
 import { addToast } from './toasts.js'
 import { uploadImagesToPane, imageUploadingSignal, registerImagePicker } from './terminalImage.js'
 import { Terminal } from '@xterm/xterm'
@@ -352,6 +352,7 @@ export function TerminalPanel() {
       // (bare-addEventListener scanner uses a 300-char window).
       function onWsOpen() {
         if (ctx.ws !== ws) return
+        ws.matrixOpened = true
         if (ctx.reconnectTimer) { clearTimeout(ctx.reconnectTimer); ctx.reconnectTimer = null }
         ctx.reconnectAttempt = 0
         wsStateSignal.value = 'connected'
@@ -415,6 +416,23 @@ export function TerminalPanel() {
         if (ctx.ws !== ws) return
         ctx.ws = null
         ctx.terminalAttached = false
+        // matrix/hardened: a handshake refused before it opened may be a lost
+        // sign-in (401), which no number of retries fixes. Ask the API; on a
+        // 401 stop retrying and say how to sign in again instead of showing
+        // "connecting" forever.
+        if (!ws.matrixOpened && ctx.wsReconnectEnabled) {
+          signedIn().then((ok) => {
+            if (ok || ctx.ws || !ctx.wsReconnectEnabled) return
+            ctx.wsReconnectEnabled = false
+            if (ctx.reconnectTimer) { clearTimeout(ctx.reconnectTimer); ctx.reconnectTimer = null }
+            setFatalError({
+              code: 'AUTH_EXPIRED',
+              message: 'Sign-in expired',
+              hint: 'This browser no longer has its agent-deck sign-in. Open the page again with the link that carries ?token=…',
+            })
+            wsStateSignal.value = 'disconnected'
+          })
+        }
         if (ctx.wsReconnectEnabled) {
           scheduleReconnect()
           return
@@ -542,7 +560,7 @@ export function TerminalPanel() {
               <div style="font-size: 12.5px; color: var(--text); margin-top: 4px;">${fatalError.message}</div>
               ${fatalError.hint && html`<div style="font-size: 11.5px; color: var(--muted); margin-top: 6px;">${fatalError.hint}</div>`}
               <div style="display: flex; gap: 8px; margin-top: 10px;">
-                <button type="button" class="btn primary" onClick=${handleFatalRestart}>Restart session</button>
+                ${fatalError.code !== 'AUTH_EXPIRED' && html`<button type="button" class="btn primary" onClick=${handleFatalRestart}>Restart session</button>`}
                 <button type="button" class="btn ghost" onClick=${() => setFatalError(null)}>Dismiss</button>
               </div>
             </div>
