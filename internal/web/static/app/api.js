@@ -66,3 +66,16 @@ export async function uploadSessionImage(sessionId, file) {
   }
   return data.path
 }
+
+// matrix/hardened: signedIn reports whether the server still accepts this
+// page's credentials (bearer token in memory, else the sign-in cookie). It
+// resolves to false only on a definite 401; network trouble counts as signed
+// in, so a flaky link keeps the normal reconnect loop.
+export async function signedIn() {
+  try {
+    const res = await fetch('/api/menu', { headers: authHeaders() })
+    return res.status !== 401
+  } catch (_e) {
+    return true
+  }
+}

@@ -55,16 +55,35 @@ func (s *Server) authorize(r *http.Request, allowQueryToken bool) bool {
 	return false
 }
 
+// matrix/hardened: the sign-in cookie lives a year and is renewed on every
+// page load. As a session cookie (no expiry) it vanished whenever Android
+// reclaimed Chrome, and the next reload left a phone with a page shell whose
+// API and terminal calls all failed with 401 ("connecting to terminal").
+const tokenCookieMaxAge = 365 * 24 * 60 * 60
+
 func (s *Server) tokenCookie(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if s.cfg.Token != "" && secureEqual(r.URL.Query().Get("token"), s.cfg.Token) {
+		if s.cfg.Token != "" && (secureEqual(r.URL.Query().Get("token"), s.cfg.Token) || s.renewsTokenCookie(r)) {
 			http.SetCookie(w, &http.Cookie{ //nolint:gosec // G124: HttpOnly and SameSite=Strict are set; Secure follows TLS so plain-HTTP localhost keeps working
-				Name: "agentdeck_token", Value: s.cfg.Token, Path: "/",
+				Name: "agentdeck_token", Value: s.cfg.Token, Path: "/", MaxAge: tokenCookieMaxAge,
 				HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: r.TLS != nil,
 			})
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// renewsTokenCookie reports a page load (GET of the app shell) that already
+// carries a valid cookie, so the cookie's year starts again from today.
+func (s *Server) renewsTokenCookie(r *http.Request) bool {
+	if r.Method != http.MethodGet {
+		return false
+	}
+	if p := r.URL.Path; p != "/" && !strings.HasPrefix(p, "/s/") && !strings.HasPrefix(p, "/g/") {
+		return false
+	}
+	cookie, err := r.Cookie("agentdeck_token")
+	return err == nil && secureEqual(cookie.Value, s.cfg.Token)
 }
 
 func bearerToken(authHeader string) string {

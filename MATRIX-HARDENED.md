@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.96`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.97`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -870,3 +870,11 @@ snapshots, compatibility, and validation boundaries.
 - **matrix/hardened:** `matrix.96` 校验当前原生统计/设置记录的有限结构；
   world-state 与通信记录使旧完成证明失效。持有多个原生 writer 或无法验证
   协作生命周期的旧会话仍跳过，不把子代理的完成文字当作进程退出证明。
+
+## 82. 网页登录长效保持
+
+- **问题**：网页登录 cookie 原来是会话 cookie（不设过期）。安卓 Chrome 被系统回收后会清掉它，页面一刷新，内存里的令牌也没了：网页外壳照样打开，但接口和终端都返回 401，终端一直显示 "connecting to terminal"。切换 Wi-Fi/移动数据时最容易碰到。
+- **matrix/hardened:** `matrix.97` 起 cookie 有效期 365 天（`tokenCookieMaxAge`），仍是 HttpOnly、SameSite=Strict、TLS 下带 Secure；每次 GET 页面（`/`、`/s/…`、`/g/…`）且带着有效 cookie 时续期一年。API 请求、无效 cookie 不会发 cookie。换令牌后旧 cookie 自然失效。
+- 终端 WebSocket 握手在打开前就被拒时，前端用 `signedIn()`（`GET /api/menu`）确认是不是 401；是的话停止重连，显示 "Sign-in expired" 和用带 `?token=` 的链接重新打开的说明，不再显示 Restart。网络错误不算失效，照常重连。
+- **改动地图**：`internal/web/auth.go`（`tokenCookieMaxAge`、`renewsTokenCookie`）；`internal/web/static/app/api.js`（`signedIn`）；`internal/web/static/app/TerminalPanel.js`（`onWsClose` 的 401 判断、横幅按钮）。
+- **测试**：`internal/web/auth_cookie_matrix_test.go`。
