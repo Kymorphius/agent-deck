@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.97`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.98`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -878,3 +878,13 @@ snapshots, compatibility, and validation boundaries.
 - 终端 WebSocket 握手在打开前就被拒时，前端用 `signedIn()`（`GET /api/menu`）确认是不是 401；是的话停止重连，显示 "Sign-in expired" 和用带 `?token=` 的链接重新打开的说明，不再显示 Restart。网络错误不算失效，照常重连。
 - **改动地图**：`internal/web/auth.go`（`tokenCookieMaxAge`、`renewsTokenCookie`）；`internal/web/static/app/api.js`（`signedIn`）；`internal/web/static/app/TerminalPanel.js`（`onWsClose` 的 401 判断、横幅按钮）。
 - **测试**：`internal/web/auth_cookie_matrix_test.go`。
+
+## 83. 网页新建会话时询问是否创建目录
+
+- **问题**：TUI 新建会话时目录不存在会弹窗问要不要创建；网页走 `WebMutator.CreateSession`，没有这一步，直接拿不存在的目录去启动。
+- **matrix/hardened:** `matrix.98` 起 `WebMutator.CreateSession` 在拿存储事务锁之前解析路径并检查：不存在时返回 `session.MissingProjectDirError`，是普通文件时报错。`POST /api/sessions` 把它翻译成 409 `DIRECTORY_NOT_FOUND`，响应带解析后的绝对路径 `path`。请求带 `createDirectory: true` 时，接口层先 `MkdirAll(0755)` 再创建会话。
+- 网页新建对话框收到 409 后不弹全局提示，在对话框里显示缺失的路径和 "Create directory and start" 按钮；改动路径输入框会清掉这个提示。`apiFetch` 抛出的错误现在带 `code`/`status`/`data`，第 4 个参数 `{ quietCodes }` 可以屏蔽指定错误码的全局提示。
+- 测试替身和 e2e fixture 不检查磁盘，行为不变。
+- **改动地图**：`internal/session/projectpath.go`（`MissingProjectDirError`）；`internal/ui/web_mutator.go`（检查挪到事务锁之前）；`internal/web/api_types.go`（`CreateDirectory`、`ErrCodeDirectoryNotFound`）；`internal/web/handlers_sessions.go`（`createConfirmedDirectory`、`writeDirectoryNotFound`）；`internal/web/static/app/api.js`；`internal/web/static/app/CreateSessionDialog.js`。
+- **测试**：`internal/ui/web_mutator_matrix_missing_dir_test.go`、`internal/web/handlers_matrix_create_dir_test.go`、`tests/web/unit/createSessionMissingDir.test.js`。
+

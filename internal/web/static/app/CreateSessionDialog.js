@@ -25,6 +25,9 @@ export function CreateSessionDialog() {
   const [reasoningEffort, setReasoningEffort] = useState('')
   const [path, setPath] = useState('')
   const [error, setError] = useState(null)
+  // matrix/hardened: resolved path the server reported missing; the dialog
+  // offers to create it (the TUI's create-directory prompt).
+  const [missingDir, setMissingDir] = useState(null)
   const [submitting, setSubmitting] = useState(false)
   const [seededFor, setSeededFor] = useState(null)
 
@@ -52,6 +55,7 @@ export function CreateSessionDialog() {
     setReasoningEffort('')
     setTitle('')
     setError(null)
+    setMissingDir(null)
     setSeededFor(ctx.groupPath)
   }
 
@@ -60,20 +64,23 @@ export function CreateSessionDialog() {
   // preserved by placing this guard AFTER all useState calls.
   if (!mutationsEnabledSignal.value) return null
 
-  async function handleSubmit(e) {
-    e.preventDefault()
+  async function handleSubmit(e, createDirectory = false) {
+    if (e) e.preventDefault()
     setError(null)
+    setMissingDir(null)
     setSubmitting(true)
     try {
       const payload = { title, tool, projectPath: path }
+      if (createDirectory) payload.createDirectory = true
       if (ctx.groupPath) payload.groupPath = ctx.groupPath
       const modelId = selectedModelId()
       if (modelId) payload.modelId = modelId
       if (effectiveEffort) payload.reasoningEffort = effectiveEffort
-      await apiFetch('POST', '/api/sessions', payload)
+      await apiFetch('POST', '/api/sessions', payload, { quietCodes: ['DIRECTORY_NOT_FOUND'] })
       createSessionDialogSignal.value = null
     } catch (err) {
-      setError(err.message)
+      if (err.code === 'DIRECTORY_NOT_FOUND') setMissingDir(err.data?.path || path)
+      else setError(err.message)
     } finally {
       setSubmitting(false)
     }
@@ -124,7 +131,7 @@ export function CreateSessionDialog() {
           </div>
           <div class="field">
             <label>WORKING DIR</label>
-            <input required value=${path} onInput=${e => setPath(e.target.value)} placeholder="/absolute/path/to/project"/>
+            <input required value=${path} onInput=${e => { setPath(e.target.value); setMissingDir(null) }} placeholder="/absolute/path/to/project"/>
           </div>
           <div class="field">
             <label>TOOL</label>
@@ -169,6 +176,18 @@ export function CreateSessionDialog() {
                   <option key=${effort.value} value=${effort.value}>${effort.label} — ${effort.value}</option>
                 `)}
               </select>
+            </div>
+          `}
+          ${missingDir && html`
+            <div data-testid="create-missing-dir"
+                 style="font-size: 12px; color: var(--text); padding: 8px 10px; display: flex; flex-direction: column; gap: 8px;
+                        border: 1px solid rgba(224,175,104,0.4); border-radius: 4px; background: rgba(224,175,104,0.08);">
+              <div>This directory does not exist:</div>
+              <div style="font-family: var(--mono); font-size: 11.5px; word-break: break-all;">${missingDir}</div>
+              <div>
+                <button type="button" class="btn warn" disabled=${submitting}
+                        onClick=${() => handleSubmit(null, true)}>Create directory and start</button>
+              </div>
             </div>
           `}
           ${error && html`

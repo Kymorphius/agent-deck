@@ -14,6 +14,8 @@ const (
 	ErrCodeInternalError    = "INTERNAL_ERROR"
 	ErrCodeNotImplemented   = "NOT_IMPLEMENTED"
 	ErrCodeReadOnly         = "READ_ONLY"
+	// matrix/hardened: the project directory of a new session is missing.
+	ErrCodeDirectoryNotFound = "DIRECTORY_NOT_FOUND"
 )
 
 // CreateSessionRequest is the body for POST /api/sessions.
@@ -24,6 +26,9 @@ type CreateSessionRequest struct {
 	GroupPath       string `json:"groupPath,omitempty"`
 	ModelID         string `json:"modelId,omitempty"`
 	ReasoningEffort string `json:"reasoningEffort,omitempty"`
+	// matrix/hardened: CreateDirectory confirms creating a missing project
+	// directory, the web counterpart of the TUI's create-directory prompt.
+	CreateDirectory bool `json:"createDirectory,omitempty"`
 }
 
 // CreateGroupRequest is the body for POST /api/groups.

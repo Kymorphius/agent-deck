@@ -46,3 +46,13 @@ func ResolveProjectPath(path string) (string, error) {
 	}
 	return abs, nil
 }
+
+// matrix/hardened: MissingProjectDirError reports a new session's project
+// directory that does not exist. The web create path returns it instead of
+// starting the session somewhere else, so the browser can ask the user first,
+// as the TUI's create-directory prompt does.
+type MissingProjectDirError struct{ Path string }
+
+func (e *MissingProjectDirError) Error() string {
+	return "directory does not exist: " + e.Path
+}

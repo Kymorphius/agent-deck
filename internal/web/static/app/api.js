@@ -21,7 +21,10 @@ export function authHeaders(extra) {
   return headers
 }
 
-export async function apiFetch(method, path, body) {
+// matrix/hardened: a thrown error carries the API's error code, HTTP status
+// and body (err.code / err.status / err.data). opts.quietCodes lists codes the
+// caller handles itself, which then raise no global toast.
+export async function apiFetch(method, path, body, opts = {}) {
   const headers = authHeaders()
   let res
   try {
@@ -38,9 +41,14 @@ export async function apiFetch(method, path, body) {
   const data = await res.json()
   if (!res.ok) {
     const msg = data?.error?.message || res.statusText
+    const code = data?.error?.code
     // Only show toast for mutation errors (not GET requests, which are often background)
-    if (method !== 'GET') addToast(msg)
-    throw new Error(msg)
+    if (method !== 'GET' && !(opts.quietCodes || []).includes(code)) addToast(msg)
+    const err = new Error(msg)
+    err.code = code
+    err.status = res.status
+    err.data = data
+    throw err
   }
   return data
 }

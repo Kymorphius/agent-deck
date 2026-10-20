@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 
@@ -73,7 +74,15 @@ func (s *Server) handleSessionsCollection(w http.ResponseWriter, r *http.Request
 			writeAPIError(w, http.StatusBadRequest, ErrCodeBadRequest, err.Error())
 			return
 		}
+		if !createConfirmedDirectory(w, &req) {
+			return
+		}
 		sessionID, err := s.mutator.CreateSession(req.Title, req.Tool, req.ProjectPath, req.GroupPath, req.ModelID, req.ReasoningEffort)
+		var missing *session.MissingProjectDirError
+		if errors.As(err, &missing) {
+			writeDirectoryNotFound(w, missing.Path)
+			return
+		}
 		if err != nil {
 			writeAPIError(w, http.StatusInternalServerError, ErrCodeInternalError, err.Error())
 			return
@@ -457,4 +466,40 @@ func (s *Server) loadArchivedMenuSnapshot() (*MenuSnapshot, error) {
 		return loader.LoadArchivedMenuSnapshot()
 	}
 	return nil, fmt.Errorf("archived session list is not available")
+}
+
+// matrix/hardened: the TUI asks before starting a session in a directory that
+// does not exist; the web create path started it anyway. The mutator now
+// refuses a missing directory (session.MissingProjectDirError), which answers
+// 409 DIRECTORY_NOT_FOUND with the resolved path; the dialog asks the user and
+// resends with createDirectory, and the directory is made here before creating.
+type directoryNotFoundResponse struct {
+	Error apiError `json:"error"`
+	Path  string   `json:"path"`
+}
+
+func writeDirectoryNotFound(w http.ResponseWriter, path string) {
+	writeJSON(w, http.StatusConflict, directoryNotFoundResponse{
+		Error: apiError{Code: ErrCodeDirectoryNotFound, Message: "directory does not exist: " + path},
+		Path:  path,
+	})
+}
+
+// createConfirmedDirectory makes the project directory when the request
+// confirmed it. It writes the error response and returns false on failure.
+func createConfirmedDirectory(w http.ResponseWriter, req *CreateSessionRequest) bool {
+	if !req.CreateDirectory {
+		return true
+	}
+	dir, err := session.ResolveProjectPath(req.ProjectPath)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, ErrCodeBadRequest, err.Error())
+		return false
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		writeAPIError(w, http.StatusInternalServerError, ErrCodeInternalError, "create directory: "+err.Error())
+		return false
+	}
+	req.ProjectPath = dir
+	return true
 }

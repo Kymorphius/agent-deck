@@ -45,7 +45,7 @@ import (
 )
 
 // matrix/hardened: identifies our hardened build.
-var Version = "1.16.26+matrix.97" // matrix/hardened: long-lived web sign-in cookie; overridden via -ldflags.
+var Version = "1.16.26+matrix.98" // matrix/hardened: web create asks before making a missing directory; overridden via -ldflags.
 
 // Table column widths for list command output
 const (
