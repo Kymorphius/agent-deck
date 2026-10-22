@@ -12466,19 +12466,13 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return h, nil
 
 	case ",":
-		// Cycle pin: off → top → bottom → off (pin-sessions #1335).
+		// matrix/hardened: the comma shortcut toggles off ↔ top. Explicit
+		// bottom placement remains available through the session editor.
 		if h.cursor < len(h.flatItems) {
 			item := h.flatItems[h.cursor]
 			if item.Type == session.ItemTypeSession && item.Session != nil {
 				inst := item.Session
-				switch inst.Pin {
-				case session.PinNone:
-					inst.Pin = session.PinTop
-				case session.PinTop:
-					inst.Pin = session.PinBottom
-				case session.PinBottom:
-					inst.Pin = session.PinNone
-				}
+				inst.Pin = matrixNextPin(inst.Pin)
 				h.rebuildFlatItems()
 				h.moveCursorToSession(inst.ID)
 				h.saveInstances()

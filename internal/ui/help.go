@@ -401,7 +401,7 @@ func (h *HelpOverlay) View() string {
 				{reorderUpKeys, "Reorder up (auto-promote at edge)"},
 				{reorderDownKeys, "Reorder down (auto-promote at edge)"},
 				{indentKeys, "Indent / outdent (in group)"},
-				{pinKeys, "Pin (cycle off→top→bottom→off)"},
+				{pinKeys, "Toggle pin / unpin"}, // matrix/hardened: one press clears either existing pin position.
 				{forkKeys, "Fork session (Claude/Pi)"},
 				{inPlaceForkKey, "Fork session in same directory (no new worktree)"}, // matrix/hardened
 				{yoloKey, "Toggle YOLO mode"},

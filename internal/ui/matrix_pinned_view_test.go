@@ -217,30 +217,35 @@ func TestMatrixPinnedViewHotkeyFromOtherModes(t *testing.T) {
 }
 
 func TestMatrixPinnedViewUnpinLastSessionStaysEmpty(t *testing.T) {
-	home := matrixPinnedHome(t)
-	last := matrixPinnedInstance(t, home, "a1")
-	last.Pin = session.PinBottom
-	home.groupViewMode = session.GroupViewPinnedOnly
-	home.rebuildFlatItems()
-	home.cursor = sessionIndexByTitle(home, "a1")
-	home.Update(plainKeyMsg(','))
-	if last.Pin != session.PinNone {
-		t.Fatalf("unpin did not clear last pin: %q", last.Pin)
-	}
-	matrixAssertPinnedTitles(t, home)
-	if home.groupViewMode != session.GroupViewPinnedOnly || home.cursor != 0 {
-		t.Fatalf("unpin changed view or left invalid cursor: mode=%v cursor=%d", home.groupViewMode, home.cursor)
-	}
-	for _, key := range []tea.KeyMsg{{Type: tea.KeyHome}, {Type: tea.KeyEnd}, {Type: tea.KeyDown}, {Type: tea.KeyUp}} {
-		home.Update(key)
-		if home.cursor != 0 || len(home.flatItems) != 0 || home.groupViewMode != session.GroupViewPinnedOnly {
-			t.Fatalf("navigation changed the empty view: key=%q mode=%v cursor=%d rows=%d", key.String(), home.groupViewMode, home.cursor, len(home.flatItems))
-		}
-	}
-	// Empty pinned-only still receives the toggle and returns to the full list.
-	home.Update(tea.KeyMsg{Type: tea.KeyCtrlP})
-	if home.groupViewMode != session.GroupViewNormal || sessionIndexByTitle(home, "a1") < 0 {
-		t.Fatal("could not leave empty pinned-only through its hotkey")
+	// matrix/hardened: one comma removes either existing pin position.
+	for _, pin := range []session.PinMode{session.PinTop, session.PinBottom} {
+		t.Run(string(pin), func(t *testing.T) {
+			home := matrixPinnedHome(t)
+			last := matrixPinnedInstance(t, home, "a1")
+			last.Pin = pin
+			home.groupViewMode = session.GroupViewPinnedOnly
+			home.rebuildFlatItems()
+			home.cursor = sessionIndexByTitle(home, "a1")
+			home.Update(plainKeyMsg(','))
+			if last.Pin != session.PinNone {
+				t.Fatalf("unpin did not clear last pin: %q", last.Pin)
+			}
+			matrixAssertPinnedTitles(t, home)
+			if home.groupViewMode != session.GroupViewPinnedOnly || home.cursor != 0 {
+				t.Fatalf("unpin changed view or left invalid cursor: mode=%v cursor=%d", home.groupViewMode, home.cursor)
+			}
+			for _, key := range []tea.KeyMsg{{Type: tea.KeyHome}, {Type: tea.KeyEnd}, {Type: tea.KeyDown}, {Type: tea.KeyUp}} {
+				home.Update(key)
+				if home.cursor != 0 || len(home.flatItems) != 0 || home.groupViewMode != session.GroupViewPinnedOnly {
+					t.Fatalf("navigation changed the empty view: key=%q mode=%v cursor=%d rows=%d", key.String(), home.groupViewMode, home.cursor, len(home.flatItems))
+				}
+			}
+			// Empty pinned-only still receives the toggle and returns to the full list.
+			home.Update(tea.KeyMsg{Type: tea.KeyCtrlP})
+			if home.groupViewMode != session.GroupViewNormal || sessionIndexByTitle(home, "a1") < 0 {
+				t.Fatal("could not leave empty pinned-only through its hotkey")
+			}
+		})
 	}
 }
 

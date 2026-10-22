@@ -39,8 +39,10 @@ func matrixNextPin(pin session.PinMode) session.PinMode {
 	switch pin {
 	case session.PinNone:
 		return session.PinTop
-	case session.PinTop:
-		return session.PinBottom
+	case session.PinTop, session.PinBottom:
+		// matrix/hardened: the comma shortcut is a quick pin toggle. Explicit
+		// bottom placement remains available through the session editor.
+		return session.PinNone
 	default:
 		return session.PinNone
 	}

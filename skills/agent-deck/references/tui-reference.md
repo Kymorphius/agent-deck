@@ -85,7 +85,7 @@ panes are untouched: they receive the raw bytes exactly as typed.
 | `+` / `K` / `Shift+↑` | Move item up (auto-promotes a sub-session to top-level at the parent's first child) |
 | `-` / `J` / `Shift+↓` | Move item down (auto-promotes a sub-session to top-level at the parent's last child) |
 | `Shift+→` / `Shift+←` | Indent / outdent within current group (single-level nesting) |
-| `,` | Pin (cycles off -> top -> bottom -> off) |
+| `,` | Toggle pin / unpin: off -> top, top or bottom -> off; use `P` to explicitly choose Bottom <!-- matrix/hardened --> |
 | `f` / `F` | Quick fork / fork with options (Claude/OpenCode/Pi/Codex/Oh My Pi) (**rebindable**) |
 | `Alt+F` | Fork in the same directory, with no new worktree or branch (**rebindable** as `fork_in_place`) <!-- matrix/hardened --> |
 | `x` | Send output to another session (**rebindable**) |

@@ -500,13 +500,12 @@ func TestHomeRenameSessionComplete(t *testing.T) {
 	}
 }
 
-// TestHomePinCycleHotkey verifies that pressing ',' cycles the session
-// pin state PinNone → PinTop → PinBottom → PinNone.  Pin-sessions was
-// shipped in #1335; the hotkey is the TUI surface for quick cycling.
+// TestHomePinCycleHotkey verifies that pressing ',' toggles the session
+// pin state PinNone ↔ PinTop, and clears an existing PinBottom as well.
+// Explicit bottom placement remains available through the session editor.
 func TestHomePinCycleHotkey(t *testing.T) {
-	// RemoteSession items are ItemTypeRemoteSession and structurally
-	// cannot reach the pin-cycle path (handler gates on ItemTypeSession
-	// && item.Session != nil). No separate test is required.
+	// matrix/hardened: remote rows use the asynchronous set/show path and
+	// have dedicated confirmed-write coverage in matrix_remote_pin_test.go.
 	home := NewHome()
 	home.width = 100
 	home.height = 30
@@ -550,21 +549,32 @@ func TestHomePinCycleHotkey(t *testing.T) {
 	}
 	assertTargetSelected(h1, "after 1st press")
 
-	// Press ',' again: PinTop → PinBottom
+	// Press ',' again: PinTop → PinNone
 	model2, _ := h1.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{','}})
 	h2 := model2.(*Home)
-	if inst.Pin != session.PinBottom {
-		t.Errorf("after 2nd press: pin = %q, want %q", inst.Pin, session.PinBottom)
+	if inst.Pin != session.PinNone {
+		t.Errorf("after 2nd press: pin = %q, want %q", inst.Pin, session.PinNone)
 	}
 	assertTargetSelected(h2, "after 2nd press")
 
-	// Press ',' a third time: PinBottom → PinNone
+	// An existing explicit bottom pin is also cleared by the shortcut.
+	inst.Pin = session.PinBottom
+	h2.rebuildFlatItems()
+	h2.moveCursorToSession(inst.ID)
 	model3, _ := h2.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{','}})
 	h3 := model3.(*Home)
 	if inst.Pin != session.PinNone {
-		t.Errorf("after 3rd press: pin = %q, want %q", inst.Pin, session.PinNone)
+		t.Errorf("after clearing bottom: pin = %q, want %q", inst.Pin, session.PinNone)
 	}
-	assertTargetSelected(h3, "after 3rd press")
+	assertTargetSelected(h3, "after clearing bottom")
+
+	// Press ',' once more: PinNone → PinTop.
+	model4, _ := h3.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{','}})
+	h4 := model4.(*Home)
+	if inst.Pin != session.PinTop {
+		t.Errorf("after re-pinning: pin = %q, want %q", inst.Pin, session.PinTop)
+	}
+	assertTargetSelected(h4, "after re-pinning")
 }
 
 func TestHomeMoveSessionWithDuplicateGroupNamesUsesSelectedPath(t *testing.T) {

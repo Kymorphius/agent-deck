@@ -96,50 +96,72 @@ func TestMatrixRemotePinKeyboardCycleRequiresReadback(t *testing.T) {
 		{ID: id, Title: "remote pin", Group: "work", Status: "idle", Pin: matrixRemotePinPointer(session.PinNone)},
 	}}
 	home.rebuildFlatItems()
-	before := session.PinNone
-	for _, want := range []session.PinMode{session.PinTop, session.PinBottom, session.PinNone} {
-		matrixSelectRemotePin(t, home, "dev", id)
-		runner.calls = nil
-		runner.readback = matrixRemotePinReadback(t, id, want)
-		_, cmd := home.Update(plainKeyMsg(','))
-		if cmd == nil {
-			t.Fatalf("comma did not dispatch the %q -> %q remote pin change", before, want)
-		}
-		if got := matrixRemotePinInfo(t, home, "dev", id).PinPosition(); got != before {
-			t.Fatalf("remote pin changed optimistically: %q, want %q", got, before)
-		}
-		msg, ok := cmd().(matrixRemotePinResultMsg)
-		if !ok || msg.err != nil {
-			t.Fatalf("pin command result = %+v, result message = %v", msg, ok)
-		}
-		if got := matrixRemotePinInfo(t, home, "dev", id).PinPosition(); got != before {
-			t.Fatalf("readback patched UI before message dispatch: %q", got)
-		}
-		wantCalls := [][]string{{"session", "set", "--json", id, "pin", string(want)}, {"session", "show", "--json", id}}
-		if !reflect.DeepEqual(runner.calls, wantCalls) {
-			t.Fatalf("remote calls = %#v, want %#v", runner.calls, wantCalls)
-		}
-		// The returned refresh Cmd is deliberately left unexecuted: this test
-		// owns only fake set/show commands and must never contact a real host.
-		home.Update(msg)
-		if got := matrixRemotePinInfo(t, home, "dev", id).PinPosition(); got != want {
-			t.Fatalf("confirmed remote pin = %q, want %q", got, want)
-		}
-		if len(home.matrixRemotePinPending) != 0 {
-			t.Fatalf("completed pin left pending state: %v", home.matrixRemotePinPending)
-		}
-		if want == session.PinTop {
-			home.groupViewMode = session.GroupViewPinnedOnly
-			home.rebuildFlatItems()
-		} else if want == session.PinBottom {
-			item := home.flatItems[home.cursor]
-			if item.RemoteName != "dev" || item.RemoteSession == nil || item.RemoteSession.ID != id {
-				t.Fatal("confirmed remote pin change lost its selected host/session")
+	for _, tc := range []struct {
+		name       string
+		before     session.PinMode
+		want       session.PinMode
+		pinnedOnly bool
+	}{
+		{name: "none to top", before: session.PinNone, want: session.PinTop},
+		{name: "top to none in pinned view", before: session.PinTop, want: session.PinNone, pinnedOnly: true},
+		{name: "bottom to none", before: session.PinBottom, want: session.PinNone},
+		{name: "none to top again", before: session.PinNone, want: session.PinTop},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			current := matrixRemotePinInfo(t, home, "dev", id).PinPosition()
+			if current != tc.before {
+				home.remoteSessions["dev"][0].Pin = matrixRemotePinPointer(tc.before)
 			}
-		} else if len(home.flatItems) != 0 || home.cursor != 0 || home.groupViewMode != session.GroupViewPinnedOnly {
-			t.Fatalf("unpinning the last remote changed the empty view: rows=%d cursor=%d mode=%v", len(home.flatItems), home.cursor, home.groupViewMode)
-		}
-		before = want
+			if tc.pinnedOnly {
+				home.groupViewMode = session.GroupViewPinnedOnly
+			} else {
+				home.groupViewMode = session.GroupViewNormal
+			}
+			home.rebuildFlatItems()
+			matrixSelectRemotePin(t, home, "dev", id)
+			runner.calls = nil
+			runner.readback = matrixRemotePinReadback(t, id, tc.want)
+			_, cmd := home.Update(plainKeyMsg(','))
+			if cmd == nil {
+				t.Fatalf("comma did not dispatch the %q -> %q remote pin change", tc.before, tc.want)
+			}
+			if got := matrixRemotePinInfo(t, home, "dev", id).PinPosition(); got != tc.before {
+				t.Fatalf("remote pin changed optimistically: %q, want %q", got, tc.before)
+			}
+			msg, ok := cmd().(matrixRemotePinResultMsg)
+			if !ok || msg.err != nil {
+				t.Fatalf("pin command result = %+v, result message = %v", msg, ok)
+			}
+			if got := matrixRemotePinInfo(t, home, "dev", id).PinPosition(); got != tc.before {
+				t.Fatalf("readback patched UI before message dispatch: %q", got)
+			}
+			wantCalls := [][]string{{"session", "set", "--json", id, "pin", string(tc.want)}, {"session", "show", "--json", id}}
+			if !reflect.DeepEqual(runner.calls, wantCalls) {
+				t.Fatalf("remote calls = %#v, want %#v", runner.calls, wantCalls)
+			}
+			// The returned refresh Cmd is deliberately left unexecuted: this test
+			// owns only fake set/show commands and must never contact a real host.
+			home.Update(msg)
+			if got := matrixRemotePinInfo(t, home, "dev", id).PinPosition(); got != tc.want {
+				t.Fatalf("confirmed remote pin = %q, want %q", got, tc.want)
+			}
+			if len(home.matrixRemotePinPending) != 0 {
+				t.Fatalf("completed pin left pending state: %v", home.matrixRemotePinPending)
+			}
+			if tc.want == session.PinTop {
+				home.groupViewMode = session.GroupViewPinnedOnly
+				home.rebuildFlatItems()
+			} else if tc.before == session.PinTop && tc.want == session.PinNone {
+				if len(home.flatItems) != 0 || home.cursor != 0 || home.groupViewMode != session.GroupViewPinnedOnly {
+					t.Fatalf("unpinning the last remote changed the empty view: rows=%d cursor=%d mode=%v", len(home.flatItems), home.cursor, home.groupViewMode)
+				}
+			} else if tc.before == session.PinBottom {
+				item := home.flatItems[home.cursor]
+				if item.RemoteName != "dev" || item.RemoteSession == nil || item.RemoteSession.ID != id {
+					t.Fatal("confirmed remote pin change lost its selected host/session")
+				}
+			}
+		})
 	}
 }
 
@@ -251,45 +273,58 @@ func TestMatrixRemotePinOldHostAndRepointedResultAreRejected(t *testing.T) {
 }
 
 func TestMatrixRemotePinConfirmedStateSurvivesOlderPollAndQueuedPush(t *testing.T) {
-	home := matrixPinnedHome(t)
-	const id = "confirmed-pin"
-	runner := &matrixFakeRemotePinRunner{readback: matrixRemotePinReadback(t, id, session.PinTop)}
-	matrixArmRemotePinRunners(t, home, map[string]*matrixFakeRemotePinRunner{"dev": runner})
-	old := session.RemoteSessionInfo{ID: id, Title: "before pin", Status: "idle", Pin: matrixRemotePinPointer(session.PinNone)}
-	home.remoteSessions = map[string][]session.RemoteSessionInfo{"dev": {old}}
-	home.remoteFetchSeq = 7
-	home.rebuildFlatItems()
-	cmd := home.startMatrixRemotePin("dev", id, session.PinTop)
-	if cmd == nil {
-		t.Fatal("known remote pin did not dispatch")
-	}
-	home.Update(cmd())
-	// A poll begun before the mutation can finish after authoritative show.
-	// Its result must not send the newly pinned row back out of the view.
-	home.Update(remoteSessionsFetchedMsg{
-		gen: 7, pollName: "dev", pollConfig: home.remotePollConfig["dev"],
-		sessions: map[string][]session.RemoteSessionInfo{"dev": {old}},
-	})
-	if got := matrixRemotePinInfo(t, home, "dev", id).PinPosition(); got != session.PinTop {
-		t.Fatalf("older poll reverted the confirmed pin: %q", got)
-	}
-	queued := session.RemoteChange{Remote: "dev", HasData: true, Sessions: []session.RemoteSessionInfo{old}}
-	if !home.stalePushedChange(queued, time.Now()) {
-		t.Fatal("queued push contradicting a just-confirmed pin was accepted")
-	}
-	home.Update(remoteChangedMsg{remoteName: "dev", change: queued})
-	if got := matrixRemotePinInfo(t, home, "dev", id).PinPosition(); got != session.PinTop {
-		t.Fatalf("queued push reverted the confirmed pin: %q", got)
-	}
-	fresh := old
-	fresh.Title, fresh.Pin = "fresh pushed title", matrixRemotePinPointer(session.PinTop)
-	matching := session.RemoteChange{Remote: "dev", HasData: true, Sessions: []session.RemoteSessionInfo{fresh}}
-	if home.stalePushedChange(matching, time.Now()) {
-		t.Fatal("matching push was suppressed along with stale data")
-	}
-	home.Update(remoteChangedMsg{remoteName: "dev", change: matching})
-	if got := matrixRemotePinInfo(t, home, "dev", id); got.Title != fresh.Title || got.PinPosition() != session.PinTop {
-		t.Fatalf("fresh matching push did not reconcile the remote row: %+v", got)
+	for _, tc := range []struct {
+		name        string
+		before      session.PinMode
+		want        session.PinMode
+		beforeTitle string
+		freshTitle  string
+	}{
+		{name: "confirm top", before: session.PinNone, want: session.PinTop, beforeTitle: "before pin", freshTitle: "fresh pushed title"},
+		{name: "confirm unpin", before: session.PinTop, want: session.PinNone, beforeTitle: "before unpin", freshTitle: "fresh pushed unpin"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := matrixPinnedHome(t)
+			const id = "confirmed-pin"
+			runner := &matrixFakeRemotePinRunner{readback: matrixRemotePinReadback(t, id, tc.want)}
+			matrixArmRemotePinRunners(t, home, map[string]*matrixFakeRemotePinRunner{"dev": runner})
+			old := session.RemoteSessionInfo{ID: id, Title: tc.beforeTitle, Status: "idle", Pin: matrixRemotePinPointer(tc.before)}
+			home.remoteSessions = map[string][]session.RemoteSessionInfo{"dev": {old}}
+			home.remoteFetchSeq = 7
+			home.rebuildFlatItems()
+			cmd := home.startMatrixRemotePin("dev", id, tc.want)
+			if cmd == nil {
+				t.Fatal("known remote pin did not dispatch")
+			}
+			home.Update(cmd())
+			// A poll begun before the mutation can finish after authoritative show.
+			// Its result must not send the confirmed row back to the old pin state.
+			home.Update(remoteSessionsFetchedMsg{
+				gen: 7, pollName: "dev", pollConfig: home.remotePollConfig["dev"],
+				sessions: map[string][]session.RemoteSessionInfo{"dev": {old}},
+			})
+			if got := matrixRemotePinInfo(t, home, "dev", id).PinPosition(); got != tc.want {
+				t.Fatalf("older poll reverted the confirmed pin: got %q, want %q", got, tc.want)
+			}
+			queued := session.RemoteChange{Remote: "dev", HasData: true, Sessions: []session.RemoteSessionInfo{old}}
+			if !home.stalePushedChange(queued, time.Now()) {
+				t.Fatal("queued push contradicting a just-confirmed pin was accepted")
+			}
+			home.Update(remoteChangedMsg{remoteName: "dev", change: queued})
+			if got := matrixRemotePinInfo(t, home, "dev", id).PinPosition(); got != tc.want {
+				t.Fatalf("queued push reverted the confirmed pin: got %q, want %q", got, tc.want)
+			}
+			fresh := old
+			fresh.Title, fresh.Pin = tc.freshTitle, matrixRemotePinPointer(tc.want)
+			matching := session.RemoteChange{Remote: "dev", HasData: true, Sessions: []session.RemoteSessionInfo{fresh}}
+			if home.stalePushedChange(matching, time.Now()) {
+				t.Fatal("matching push was suppressed along with stale data")
+			}
+			home.Update(remoteChangedMsg{remoteName: "dev", change: matching})
+			if got := matrixRemotePinInfo(t, home, "dev", id); got.Title != fresh.Title || got.PinPosition() != tc.want {
+				t.Fatalf("fresh matching push did not reconcile the remote row: %+v", got)
+			}
+		})
 	}
 }
 
@@ -464,22 +499,28 @@ func TestMatrixRemotePinnedViewScopePreservesHostPath(t *testing.T) {
 }
 
 func TestMatrixRemotePinEditDialogUsesKnownBaseline(t *testing.T) {
-	for _, pin := range []session.PinMode{session.PinNone, session.PinTop, session.PinBottom} {
+	for _, tc := range []struct {
+		baseline session.PinMode
+		want     session.PinMode
+	}{
+		{baseline: session.PinNone, want: session.PinTop},
+		{baseline: session.PinTop, want: session.PinBottom}, // matrix/hardened: explicit Bottom remains editable independently of comma.
+		{baseline: session.PinBottom, want: session.PinNone},
+	} {
 		home := matrixPinnedHome(t)
-		info := session.RemoteSessionInfo{ID: "edit", Title: "remote edit", Tool: "claude", Pin: matrixRemotePinPointer(pin)}
+		info := session.RemoteSessionInfo{ID: "edit", Title: "remote edit", Tool: "claude", Pin: matrixRemotePinPointer(tc.baseline)}
 		dialog := home.editSessionDialog
 		dialog.ShowRemote(info, "dev")
-		if got := dialog.selectedPill(session.FieldPin); got != string(pin) {
-			t.Fatalf("remote edit baseline = %q, want %q", got, pin)
+		if got := dialog.selectedPill(session.FieldPin); got != string(tc.baseline) {
+			t.Fatalf("remote edit baseline = %q, want %q", got, tc.baseline)
 		}
 		if changes := dialog.GetChanges(remoteEditInstance(info)); len(changes) != 0 {
 			t.Fatalf("unchanged remote pin generated edits: %+v", changes)
 		}
-		want := matrixNextPin(pin)
-		selectEditPill(t, dialog, session.FieldPin, string(want))
+		selectEditPill(t, dialog, session.FieldPin, string(tc.want))
 		changes := dialog.GetChanges(remoteEditInstance(info))
-		if len(changes) != 1 || changes[0].Field != session.FieldPin || changes[0].Value != string(want) || !changes[0].IsLive {
-			t.Fatalf("changed remote pin = %+v, want live pin %q", changes, want)
+		if len(changes) != 1 || changes[0].Field != session.FieldPin || changes[0].Value != string(tc.want) || !changes[0].IsLive {
+			t.Fatalf("changed remote pin = %+v, want live pin %q", changes, tc.want)
 		}
 	}
 	home := matrixPinnedHome(t)
