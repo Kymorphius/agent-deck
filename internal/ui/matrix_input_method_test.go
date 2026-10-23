@@ -13,15 +13,17 @@ import (
 )
 
 type fakeInputMethod struct {
-	modes []bool
+	modes     []bool
+	reasserts []bool
 	// matrix/hardened: deny reproduces a switch that cannot run yet (the
 	// terminal app is not foreground), which must stay retryable.
 	deny  bool
 	blurs int
 }
 
-func (f *fakeInputMethod) Sync(nav bool) bool {
+func (f *fakeInputMethod) Sync(nav bool, reassert bool) bool {
 	f.modes = append(f.modes, nav)
+	f.reasserts = append(f.reasserts, reassert)
 	return !f.deny
 }
 func (f *fakeInputMethod) Restore() {}
@@ -157,7 +159,7 @@ func TestInputMethodConfiguredStartupWithoutFocusReport(t *testing.T) {
 	}
 	f := &fakeInputMethod{}
 	previous := createInputMethodController
-	createInputMethodController = func() inputMethodController { return f }
+	createInputMethodController = func(string) inputMethodController { return f }
 	t.Cleanup(func() { createInputMethodController = previous })
 	h := &Home{}
 	if !h.ConfigureInputMethod() {
@@ -290,12 +292,32 @@ func TestInputMethodTracesRefusedConfiguration(t *testing.T) {
 	}
 	session.ClearUserConfigCache()
 	previous := createInputMethodController
-	createInputMethodController = func() inputMethodController { return &fakeInputMethod{} }
+	createInputMethodController = func(string) inputMethodController { return &fakeInputMethod{} }
 	t.Cleanup(func() { createInputMethodController = previous })
 	if !h.ConfigureInputMethod() {
 		t.Fatal("explicitly enabled input method was not configured")
 	}
 	if got := buf.String(); !strings.Contains(got, "configured") {
 		t.Fatalf("configuration was not traced: %q", got)
+	}
+}
+
+// matrix/hardened: only a real return of keyboard focus re-applies the text
+// policy. Plain typing must not override a source the operator picked while
+// editing, and refresh frames must not either.
+func TestInputMethodReassertsOnlyOnFocus(t *testing.T) {
+	f := &fakeInputMethod{}
+	h := &Home{inputMethod: f, inputMethodFocused: true, notesEditing: true}
+	h.syncInputMethod(tea.FocusMsg{})
+	if len(f.reasserts) != 1 || !f.reasserts[0] {
+		t.Fatalf("focus did not reassert the text policy: %v", f.reasserts)
+	}
+	h.syncInputMethod(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	if len(f.reasserts) != 2 || f.reasserts[1] {
+		t.Fatalf("typing reasserted the text policy: %v", f.reasserts)
+	}
+	h.syncInputMethod(tickMsg(time.Now()))
+	if last := f.reasserts[len(f.reasserts)-1]; last {
+		t.Fatal("a refresh tick reasserted the text policy")
 	}
 }

@@ -50,8 +50,8 @@ func TestInputMethodNativeAcceptance(t *testing.T) {
 	}
 	wait(target)
 	c := &Controller{backend: b}
-	c.Sync(true)
+	c.Sync(true, false)
 	wait(b.ascii())
-	c.Sync(false)
+	c.Sync(false, false)
 	wait(target)
 }

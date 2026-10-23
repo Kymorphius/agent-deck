@@ -24,15 +24,18 @@ const (
 type inputMethodRetryMsg struct{}
 
 type inputMethodController interface {
-	// Sync reports whether the requested mode is in effect.
-	Sync(navigation bool) bool
+	// Sync reports whether the requested mode is in effect. reassert asks for
+	// the text-input policy to be applied again, which only a real return of
+	// keyboard focus does; plain typing must not override a source the
+	// operator picked while editing.
+	Sync(navigation bool, reassert bool) bool
 	Restore()
 	Blur()
 }
 
 // matrix/hardened: injectable without touching the desktop in startup tests.
-var createInputMethodController = func() inputMethodController {
-	c := inputmethod.New()
+var createInputMethodController = func(textPolicy string) inputMethodController {
+	c := inputmethod.New(textPolicy)
 	if c == nil {
 		return nil
 	}
@@ -53,7 +56,7 @@ func (h *Home) ConfigureInputMethod() bool {
 		inputmethod.Trace("not configured: ui.auto_input_method is off")
 		return false
 	}
-	controller := createInputMethodController()
+	controller := createInputMethodController(config.UI.InputMethodTextSource)
 	if controller == nil {
 		// The native backend already traced why it is unavailable.
 		inputmethod.Trace("not configured: no native controller")
@@ -61,7 +64,8 @@ func (h *Home) ConfigureInputMethod() bool {
 	}
 	h.inputMethod = controller
 	h.inputMethodFocused = true
-	inputmethod.Trace("configured: assuming keyboard focus until a blur report")
+	inputmethod.Trace("configured: text policy=%q, assuming keyboard focus until a blur report",
+		config.UI.InputMethodTextSource)
 	return true
 }
 
@@ -79,9 +83,13 @@ func (h *Home) syncInputMethod(msg tea.Msg) tea.Cmd {
 	if h.inputMethod == nil {
 		return nil
 	}
-	force, verify := false, false
+	force, verify, reassert := false, false, false
 	switch msg.(type) {
-	case tea.FocusMsg, tea.KeyMsg:
+	case tea.FocusMsg:
+		// Keyboard focus came back to this terminal tab: whatever another app
+		// or tab left behind, this view decides the mode again.
+		h.inputMethodFocused, force, reassert = true, true, true
+	case tea.KeyMsg:
 		h.inputMethodFocused = true
 		force = true
 	case tea.MouseMsg:
@@ -116,9 +124,9 @@ func (h *Home) syncInputMethod(msg tea.Msg) tea.Cmd {
 	if !force && !verify && h.inputMethodApplied && navigation == h.inputMethodNav {
 		return nil
 	}
-	inputmethod.Trace("ui sync msg=%T nav=%v force=%v verify=%v applied=%v retries=%d",
-		msg, navigation, force, verify, h.inputMethodApplied, h.inputMethodRetries)
-	applied := h.inputMethod.Sync(navigation)
+	inputmethod.Trace("ui sync msg=%T nav=%v force=%v verify=%v reassert=%v applied=%v retries=%d",
+		msg, navigation, force, verify, reassert, h.inputMethodApplied, h.inputMethodRetries)
+	applied := h.inputMethod.Sync(navigation, reassert)
 	h.inputMethodNav, h.inputMethodApplied = navigation, applied
 	if applied {
 		h.inputMethodRetries = 0

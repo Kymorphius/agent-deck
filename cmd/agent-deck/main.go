@@ -45,7 +45,7 @@ import (
 )
 
 // matrix/hardened: identifies our hardened build.
-var Version = "1.16.26+matrix.104" // matrix/hardened: comma directly toggles pin / unpin; overridden via -ldflags.
+var Version = "1.16.26+matrix.105" // matrix/hardened: comma directly toggles pin / unpin; overridden via -ldflags.
 
 // Table column widths for list command output
 const (

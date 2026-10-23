@@ -85,3 +85,38 @@ int deck_select_source(const char *identifier, int owner) {
     CFRelease(key);
     return success;
 }
+
+// matrix/hardened: the text-input policy needs to know which input methods the
+// operator actually enabled, so it can select one deterministically instead of
+// guessing. Keyboard layouts and ASCII-capable sources are not candidates.
+char *deck_text_sources(void) {
+    CFArrayRef sources = TISCreateInputSourceList(NULL, false);
+    if (!sources) return NULL;
+    CFMutableStringRef joined = CFStringCreateMutable(NULL, 0);
+    for (CFIndex i = 0; joined && i < CFArrayGetCount(sources); i++) {
+        TISInputSourceRef source = (TISInputSourceRef)CFArrayGetValueAtIndex(sources, i);
+        CFBooleanRef enabled = TISGetInputSourceProperty(source, kTISPropertyInputSourceIsEnabled);
+        CFBooleanRef selectable = TISGetInputSourceProperty(source, kTISPropertyInputSourceIsSelectCapable);
+        CFBooleanRef ascii = TISGetInputSourceProperty(source, kTISPropertyInputSourceIsASCIICapable);
+        CFStringRef category = TISGetInputSourceProperty(source, kTISPropertyInputSourceCategory);
+        CFStringRef identifier = TISGetInputSourceProperty(source, kTISPropertyInputSourceID);
+        if (!identifier || !enabled || !CFBooleanGetValue(enabled)) continue;
+        if (!selectable || !CFBooleanGetValue(selectable)) continue;
+        if (ascii && CFBooleanGetValue(ascii)) continue;
+        // Palettes and press-and-hold are not text input methods.
+        if (!category || !CFEqual(category, kTISCategoryKeyboardInputSource)) continue;
+        if (CFStringGetLength(joined) > 0) CFStringAppendCString(joined, "\n", kCFStringEncodingUTF8);
+        CFStringAppend(joined, identifier);
+    }
+    CFRelease(sources);
+    if (!joined) return NULL;
+    CFIndex capacity = CFStringGetMaximumSizeForEncoding(CFStringGetLength(joined),
+                                                        kCFStringEncodingUTF8) + 1;
+    char *result = malloc(capacity);
+    if (result && !CFStringGetCString(joined, result, capacity, kCFStringEncodingUTF8)) {
+        free(result);
+        result = NULL;
+    }
+    CFRelease(joined);
+    return result;
+}

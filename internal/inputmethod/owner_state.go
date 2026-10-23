@@ -112,3 +112,72 @@ func clearOwnership(pid int) {
 		_ = os.Remove(path)
 	}
 }
+
+// preference remembers the input method the operator actually uses for text, so
+// the text policy can select it again after a restart, or in an instance that
+// never took the source away itself.
+type preference struct {
+	Source string    `json:"source"`
+	At     time.Time `json:"at"`
+}
+
+var preferencePath = func() (string, error) {
+	return agentpaths.EffectiveDataPath(filepath.Join("runtime", "input-method-preferred.json"), "runtime")
+}
+
+func readPreference() string {
+	path, err := preferencePath()
+	if err != nil {
+		return ""
+	}
+	// #nosec G304 -- path comes from our own data directory resolver.
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	var record preference
+	if err := json.Unmarshal(data, &record); err != nil {
+		return ""
+	}
+	return record.Source
+}
+
+func writePreference(source string) {
+	if source == "" || readPreference() == source {
+		return
+	}
+	path, err := preferencePath()
+	if err != nil {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+		return
+	}
+	data, err := json.Marshal(preference{Source: source, At: time.Now()})
+	if err != nil {
+		return
+	}
+	temp, err := os.CreateTemp(filepath.Dir(path), ".input-method-preferred-*")
+	if err != nil {
+		return
+	}
+	name := temp.Name()
+	if _, err := temp.Write(data); err != nil {
+		_ = temp.Close()
+		_ = os.Remove(name)
+		return
+	}
+	if err := temp.Close(); err != nil {
+		_ = os.Remove(name)
+		return
+	}
+	if err := os.Chmod(name, 0o600); err != nil {
+		_ = os.Remove(name)
+		return
+	}
+	if err := os.Rename(name, path); err != nil {
+		_ = os.Remove(name)
+		return
+	}
+	trace("learned text input method: %q", source)
+}

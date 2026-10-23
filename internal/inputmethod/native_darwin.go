@@ -12,6 +12,7 @@ import "C"
 
 import (
 	"os"
+	"strings"
 	"unsafe"
 )
 
@@ -54,6 +55,21 @@ func sourceID(ascii bool) string {
 	}
 	defer C.free(unsafe.Pointer(s))
 	return C.GoString(s)
+}
+
+// textSources lists the enabled keyboard input methods that are not ASCII
+// capable: the candidates for the text-input policy.
+func (b *nativeBackend) textSources() []string {
+	s := C.deck_text_sources()
+	if s == nil {
+		return nil
+	}
+	defer C.free(unsafe.Pointer(s))
+	joined := C.GoString(s)
+	if joined == "" {
+		return nil
+	}
+	return strings.Split(joined, "\n")
 }
 
 func (b *nativeBackend) selectSource(id string) bool {

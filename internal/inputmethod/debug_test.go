@@ -29,7 +29,7 @@ func TestInputMethodTraceRecordsRefusedBackend(t *testing.T) {
 	SetDebugWriter(&buf)
 	t.Cleanup(func() { SetDebugWriter(nil) })
 	t.Setenv("SSH_CONNECTION", "10.0.0.1 1 10.0.0.2 22")
-	if c := New(); c != nil {
+	if c := New(TextSourceAuto); c != nil {
 		t.Fatal("an SSH session must not take over the desktop input source")
 	}
 	if got := buf.String(); !strings.Contains(got, "ssh session") {

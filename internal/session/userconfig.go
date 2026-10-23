@@ -493,6 +493,12 @@ type UISettings struct {
 	// restores the previous source. SSH and unsupported builds ignore it.
 	AutoInputMethod bool `toml:"auto_input_method,omitempty"`
 
+	// matrix/hardened: text-input policy for auto_input_method. Empty hands
+	// back only the source agent-deck took away; "auto" also selects the
+	// operator's input method whenever text input gains the focus; an explicit
+	// input source id selects exactly that one.
+	InputMethodTextSource string `toml:"input_method_text_source,omitempty"`
+
 	// matrix/hardened: clear local search each time / or Alt+/ opens it;
 	// nil defaults to true, while false preserves the previous query.
 	ClearSearchOnOpen *bool `toml:"clear_search_on_open,omitempty"`

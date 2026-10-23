@@ -941,3 +941,11 @@ snapshots, compatibility, and validation boundaries.
 - 应用重启或重新登录后终端应用 pid 必然变化，上一次登录的记录不会被重放；操作者自己选择的英文键盘不会被覆盖（当前源不等于记录中的 forced 时只清记录、不切换）。
 - **改动地图**：`internal/inputmethod/owner_state.go`（新增，记录读写与过期）、`internal/inputmethod/controller.go`（`release`、`restoreInherited`、acquire 后发布记录）、`internal/inputmethod/native_darwin.go`（backend 暴露归属应用 pid）。
 - **测试**：`internal/inputmethod/controller_test.go` 新增兄弟实例交接（含失焦退出后接手）与四条边界（操作者自选 ASCII、别的终端应用、当前源已变、记录过期）；测试把记录重定向到临时目录，不接触真实数据目录。
+
+## 90. 文字输入主动切到输入法，纯操作切 ASCII
+
+- **问题**：还原策略只"交还 agent-deck 自己拿走的输入源"，所以"它从没拿走过"时会把操作者留在英文键盘上（刚登录时系统本来就是英文；所有权记录已被别的实例用掉；或这个实例刚启动）。实际使用的期望是对称的：只要是输入就用中文输入法，只要是纯操作就用英文。
+- **matrix/hardened:** `matrix.105` 增加 `[ui].input_method_text_source`。空（默认）＝原行为；`auto` ＝文字输入获得焦点时主动选中操作者的输入法；也可以直接给输入源 id。解析顺序确定且不猜：上次实际使用并记住的那个（`runtime/input-method-preferred.json`，离开文字态时写入，跨重启有效）→ 系统里唯一启用的非 ASCII 键盘输入法 → 都不满足就不动并留痕。候选来自新的原生枚举，只取已启用、可选中、非 ASCII capable 且类别为键盘输入源的项（排除字符面板、press-and-hold 之类）。
+- **matrix/hardened:** 施加时机是"文字输入获得焦点"，不是持续施加：普通按键和刷新节拍都不重新施加，因此操作者在输入框里自己切成英文后不会被改回去；只有重新获得键盘焦点（`tea.FocusMsg`，从别的应用或标签页切回）才按策略再切一次。文字输入框里已有输入法时不替换、只记住。导航态仍然每个节拍持续核对 ASCII。退出与信号清理只交还拿走的输入源，不会在退出时选中输入法。
+- **改动地图**：`internal/inputmethod/native_darwin.{h,m,go}`（`deck_text_sources` 枚举候选）、`internal/inputmethod/controller.go`（`textPolicy`、`applyTextSource`、`resolveTextSource`、`Sync(navigation, reassert)`、退出路径不施加策略）、`internal/inputmethod/owner_state.go`（记住的输入法读写）、`internal/ui/matrix_input_method.go`（只有焦点回来才 reassert，构造时传入策略）、`internal/session/userconfig.go` 与 `config_keys.go`（新配置键）。
+- **测试**：`internal/inputmethod/controller_test.go`（策略选中、打字不覆盖操作者选择、焦点回来重新施加、导航循环、已有输入法只记住、默认关闭、多候选不猜、记住后可决定、显式 id、退出不选中）、`internal/ui/matrix_input_method_test.go`（只有 FocusMsg 触发 reassert）。

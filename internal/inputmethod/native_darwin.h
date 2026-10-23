@@ -4,3 +4,5 @@ int deck_parent_pid(int pid);
 int deck_is_foreground(int owner);
 char *deck_source_id(int ascii);
 int deck_select_source(const char *identifier, int owner);
+// Newline-separated ids of enabled, selectable, non-ASCII input sources.
+char *deck_text_sources(void);

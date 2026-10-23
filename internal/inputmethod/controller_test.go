@@ -10,10 +10,11 @@ import (
 )
 
 type fakeBackend struct {
-	active bool
-	source string
-	deny   bool
-	calls  []string
+	active  bool
+	source  string
+	deny    bool
+	calls   []string
+	sources []string // enabled non-ASCII input methods
 }
 
 // newTestController advances its own clock on every call so the retry floor,
@@ -28,20 +29,34 @@ func newTestController(t *testing.T, b backend) *Controller {
 	}}
 }
 
-// isolateOwnership redirects the cross-instance record to a temporary file, so
-// tests never read or write the real data directory.
+// isolateOwnership redirects the cross-instance record and the remembered text
+// source to temporary files, so tests never read or write the real data
+// directory.
 func isolateOwnership(t *testing.T) string {
-	path := filepath.Join(t.TempDir(), "input-method-owner.json")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "input-method-owner.json")
 	previous := ownershipPath
 	ownershipPath = func() (string, error) { return path, nil }
-	t.Cleanup(func() { ownershipPath = previous })
+	preferred := filepath.Join(dir, "input-method-preferred.json")
+	previousPreference := preferencePath
+	preferencePath = func() (string, error) { return preferred, nil }
+	t.Cleanup(func() {
+		ownershipPath = previous
+		preferencePath = previousPreference
+	})
 	return path
 }
 
 func (b *fakeBackend) foreground() bool { return b.active }
 func (b *fakeBackend) owner() int       { return 4242 }
-func (b *fakeBackend) current() string  { return b.source }
-func (b *fakeBackend) ascii() string    { return "ABC" }
+func (b *fakeBackend) textSources() []string {
+	if b.sources == nil {
+		return []string{"Rime"}
+	}
+	return b.sources
+}
+func (b *fakeBackend) current() string { return b.source }
+func (b *fakeBackend) ascii() string   { return "ABC" }
 func (b *fakeBackend) selectSource(id string) bool {
 	b.calls = append(b.calls, id)
 	if b.deny {
@@ -54,16 +69,16 @@ func (b *fakeBackend) selectSource(id string) bool {
 func TestInputMethodNavigationAndRestore(t *testing.T) {
 	b := &fakeBackend{active: true, source: "Rime"}
 	c := newTestController(t, b)
-	if !c.Sync(true) {
+	if !c.Sync(true, false) {
 		t.Fatal("foreground navigation sync was not applied")
 	}
-	if !c.Sync(true) {
+	if !c.Sync(true, false) {
 		t.Fatal("re-syncing an owned ASCII source must report applied")
 	}
 	if b.source != "ABC" {
 		t.Fatal("navigation must bypass the IME")
 	}
-	c.Sync(false)
+	c.Sync(false, false)
 	c.Restore()
 	if b.source != "Rime" || !reflect.DeepEqual(b.calls, []string{"ABC", "Rime"}) {
 		t.Fatalf("source=%q selections=%v", b.source, b.calls)
@@ -73,26 +88,26 @@ func TestInputMethodNavigationAndRestore(t *testing.T) {
 func TestInputMethodForegroundAndManualChoice(t *testing.T) {
 	b := &fakeBackend{source: "Rime"}
 	c := newTestController(t, b)
-	if c.Sync(true) {
+	if c.Sync(true, false) {
 		t.Fatal("a background terminal must report the switch as not applied")
 	}
 	if len(b.calls) != 0 {
 		t.Fatal("background terminal changed the source")
 	}
 	b.active = true
-	c.Sync(true)
+	c.Sync(true, false)
 	b.active = false
 	c.Restore()
 	if b.source != "ABC" || len(b.calls) != 1 {
 		t.Fatal("background cleanup changed another app")
 	}
 	b.source, b.active = "OtherIME", true
-	c.Sync(false)
+	c.Sync(false, false)
 	if b.source != "OtherIME" || len(b.calls) != 1 {
 		t.Fatal("restore overwrote a manual input-source selection")
 	}
-	c.Sync(true)
-	c.Sync(false)
+	c.Sync(true, false)
+	c.Sync(false, false)
 	if b.source != "OtherIME" {
 		t.Fatal("new navigation cycle did not remember the new preference")
 	}
@@ -101,12 +116,12 @@ func TestInputMethodForegroundAndManualChoice(t *testing.T) {
 func TestInputMethodSelectionFailure(t *testing.T) {
 	b := &fakeBackend{active: true, source: "Rime", deny: true}
 	c := newTestController(t, b)
-	c.Sync(true)
+	c.Sync(true, false)
 	if c.saved != "" {
 		t.Fatal("failed selection must not acquire ownership")
 	}
 	b.deny = false
-	c.Sync(true)
+	c.Sync(true, false)
 	b.deny = true
 	c.Restore()
 	if c.saved != "Rime" {
@@ -122,13 +137,13 @@ func TestInputMethodSelectionFailure(t *testing.T) {
 func TestInputMethodASCIIAndNil(t *testing.T) {
 	b := &fakeBackend{active: true, source: "ABC"}
 	c := newTestController(t, b)
-	c.Sync(true)
-	c.Sync(false)
+	c.Sync(true, false)
+	c.Sync(false, false)
 	if len(b.calls) != 0 {
 		t.Fatal("an ASCII user should not be forced into a different input method")
 	}
 	var disabled *Controller
-	disabled.Sync(true)
+	disabled.Sync(true, false)
 	disabled.Restore()
 	disabled.Blur()
 }
@@ -136,13 +151,13 @@ func TestInputMethodASCIIAndNil(t *testing.T) {
 func TestInputMethodBlurredSiblingTab(t *testing.T) {
 	b := &fakeBackend{active: true, source: "Rime"}
 	c := newTestController(t, b)
-	c.Sync(true)
+	c.Sync(true, false)
 	c.Blur()
 	c.Restore()
 	if b.source != "ABC" || len(b.calls) != 1 {
 		t.Fatal("background-tab cleanup overwrote the sibling tab's source")
 	}
-	c.Sync(false)
+	c.Sync(false, false)
 	if b.source != "Rime" {
 		t.Fatal("pending source was not restored on focused typing")
 	}
@@ -155,14 +170,14 @@ func TestInputMethodBlurredSiblingTab(t *testing.T) {
 func TestInputMethodPendingAttemptIsRetryable(t *testing.T) {
 	b := &fakeBackend{source: "Rime"}
 	c := newTestController(t, b)
-	if c.Sync(true) {
+	if c.Sync(true, false) {
 		t.Fatal("navigation was reported as applied while not foreground")
 	}
-	if c.Sync(true) {
+	if c.Sync(true, false) {
 		t.Fatal("repeating the same desire hid that it is still unapplied")
 	}
 	b.active = true
-	if !c.Sync(true) {
+	if !c.Sync(true, false) {
 		t.Fatal("retry after activation did not acquire the ASCII source")
 	}
 	if b.source != "ABC" || !reflect.DeepEqual(b.calls, []string{"ABC"}) {
@@ -170,11 +185,11 @@ func TestInputMethodPendingAttemptIsRetryable(t *testing.T) {
 	}
 	// The same contract holds for a refused restore.
 	b.deny = true
-	if c.Sync(false) {
+	if c.Sync(false, false) {
 		t.Fatal("refused restore was reported as applied")
 	}
 	b.deny = false
-	if !c.Sync(false) {
+	if !c.Sync(false, false) {
 		t.Fatal("restore retry did not report success")
 	}
 	if b.source != "Rime" {
@@ -189,14 +204,14 @@ func TestInputMethodRetryFloor(t *testing.T) {
 	isolateOwnership(t)
 	frozen := time.Unix(0, 0)
 	c := &Controller{backend: b, clock: func() time.Time { return frozen }}
-	c.Sync(true)
+	c.Sync(true, false)
 	b.active = true
-	c.Sync(true) // throttled: no native work within the floor
+	c.Sync(true, false) // throttled: no native work within the floor
 	if len(b.calls) != 0 {
 		t.Fatalf("throttled retry ran native selection: %v", b.calls)
 	}
 	frozen = frozen.Add(retryFloor)
-	if !c.Sync(true) {
+	if !c.Sync(true, false) {
 		t.Fatal("retry after the floor did not run")
 	}
 	if b.source != "ABC" {
@@ -204,7 +219,7 @@ func TestInputMethodRetryFloor(t *testing.T) {
 	}
 	// A desire change is immediate even inside the floor.
 	b.deny = true
-	if c.Sync(false) || len(b.calls) != 2 {
+	if c.Sync(false, false) || len(b.calls) != 2 {
 		t.Fatalf("desire change was throttled: calls=%v", b.calls)
 	}
 }
@@ -214,9 +229,9 @@ func TestInputMethodRetryFloor(t *testing.T) {
 func TestInputMethodBlurKeepsRestorePending(t *testing.T) {
 	b := &fakeBackend{active: true, source: "Rime"}
 	c := newTestController(t, b)
-	c.Sync(true)
+	c.Sync(true, false)
 	c.Blur()
-	if !c.Sync(false) || b.source != "Rime" {
+	if !c.Sync(false, false) || b.source != "Rime" {
 		t.Fatalf("focused typing after blur did not restore: %q", b.source)
 	}
 }
@@ -232,7 +247,7 @@ func TestInputMethodInheritsSiblingRestore(t *testing.T) {
 	b := &fakeBackend{active: true, source: "Rime"}
 	processID = func() int { return 111 }
 	owner := &Controller{backend: b}
-	if !owner.Sync(true) || b.source != "ABC" {
+	if !owner.Sync(true, false) || b.source != "ABC" {
 		t.Fatalf("owner did not take the ASCII source: %q", b.source)
 	}
 	if _, err := os.Stat(path); err != nil {
@@ -248,7 +263,7 @@ func TestInputMethodInheritsSiblingRestore(t *testing.T) {
 
 	processID = func() int { return 222 }
 	sibling := &Controller{backend: b}
-	if !sibling.Sync(false) {
+	if !sibling.Sync(false, false) {
 		t.Fatal("sibling could not finish the inherited restore")
 	}
 	if b.source != "Rime" {
@@ -259,7 +274,7 @@ func TestInputMethodInheritsSiblingRestore(t *testing.T) {
 	}
 	// Nothing is left to inherit, and a second pass must stay quiet.
 	calls := len(b.calls)
-	if !sibling.Sync(false) || len(b.calls) != calls {
+	if !sibling.Sync(false, false) || len(b.calls) != calls {
 		t.Fatalf("a consumed record was replayed: %v", b.calls)
 	}
 }
@@ -273,13 +288,13 @@ func TestInputMethodInheritedRestoreLimits(t *testing.T) {
 
 	b := &fakeBackend{active: true, source: "ABC"}
 	c := &Controller{backend: b}
-	if !c.Sync(false) || len(b.calls) != 0 {
+	if !c.Sync(false, false) || len(b.calls) != 0 {
 		t.Fatalf("an operator's own ASCII keyboard was changed: %v", b.calls)
 	}
 
 	// A record from a different terminal app must not touch this desktop.
 	writeOwnership(ownership{Forced: "ABC", Saved: "Rime", App: 9999, PID: 111, At: time.Now()})
-	if !c.Sync(false) || len(b.calls) != 0 {
+	if !c.Sync(false, true) || len(b.calls) != 0 {
 		t.Fatalf("another application's record was replayed: %v", b.calls)
 	}
 	if _, err := os.Stat(path); err != nil {
@@ -289,7 +304,7 @@ func TestInputMethodInheritedRestoreLimits(t *testing.T) {
 	// Our app, but the desktop already moved to a source we never forced.
 	writeOwnership(ownership{Forced: "ABC", Saved: "Rime", App: 4242, PID: 111, At: time.Now()})
 	b.source = "OtherIME"
-	if !c.Sync(false) || len(b.calls) != 0 {
+	if !c.Sync(false, true) || len(b.calls) != 0 {
 		t.Fatalf("a stale record changed a source we never forced: %v", b.calls)
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
@@ -300,7 +315,85 @@ func TestInputMethodInheritedRestoreLimits(t *testing.T) {
 	writeOwnership(ownership{Forced: "ABC", Saved: "Rime", App: 4242, PID: 111,
 		At: time.Now().Add(-2 * ownershipTTL)})
 	b.source = "ABC"
-	if !c.Sync(false) || len(b.calls) != 0 {
+	if !c.Sync(false, true) || len(b.calls) != 0 {
 		t.Fatalf("an expired record was replayed: %v", b.calls)
+	}
+}
+
+// matrix/hardened: with a text policy, focusing text input selects the
+// operator's input method even when this controller never took the source
+// away. Navigation stays ASCII; the policy never guesses between several
+// input methods.
+func TestInputMethodTextSourcePolicy(t *testing.T) {
+	isolateOwnership(t)
+	b := &fakeBackend{active: true, source: "ABC", sources: []string{"Rime"}}
+	c := &Controller{backend: b, textPolicy: TextSourceAuto}
+
+	if !c.Sync(false, false) || b.source != "Rime" {
+		t.Fatalf("text input did not select the input method: %q %v", b.source, b.calls)
+	}
+	// Typing must not re-apply it: an operator who switches to ASCII while
+	// editing keeps that choice.
+	b.source = "ABC"
+	if !c.Sync(false, false) || b.source != "ABC" {
+		t.Fatalf("typing overrode the operator's own choice: %q", b.source)
+	}
+	// Coming back to the terminal re-applies the policy.
+	if !c.Sync(false, true) || b.source != "Rime" {
+		t.Fatalf("renewed focus did not re-apply the policy: %q", b.source)
+	}
+	// Navigation still bypasses it, and the cycle restores afterwards.
+	if !c.Sync(true, false) || b.source != "ABC" {
+		t.Fatalf("navigation did not bypass the input method: %q", b.source)
+	}
+	if !c.Sync(false, false) || b.source != "Rime" {
+		t.Fatalf("navigation cycle did not hand the IME back: %q", b.source)
+	}
+	// An already active input method is left alone and remembered.
+	b.source = "OtherIME"
+	if !c.Sync(false, true) {
+		t.Fatal("an active input method was reported as unapplied")
+	}
+	if b.source != "OtherIME" {
+		t.Fatalf("an active input method was replaced: %q", b.source)
+	}
+	if readPreference() != "OtherIME" {
+		t.Fatalf("the operator's input method was not remembered: %q", readPreference())
+	}
+}
+
+// Without the policy the behaviour is unchanged, several candidates are never
+// guessed between, an explicit id wins, and quitting never selects a source.
+func TestInputMethodTextSourceLimits(t *testing.T) {
+	isolateOwnership(t)
+
+	off := &fakeBackend{active: true, source: "ABC", sources: []string{"Rime"}}
+	if c := (&Controller{backend: off}); !c.Sync(false, true) || len(off.calls) != 0 {
+		t.Fatalf("the default policy selected an input method: %v", off.calls)
+	}
+
+	many := &fakeBackend{active: true, source: "ABC", sources: []string{"Rime", "Pinyin"}}
+	c := &Controller{backend: many, textPolicy: TextSourceAuto}
+	if !c.Sync(false, true) || len(many.calls) != 0 {
+		t.Fatalf("auto guessed between two input methods: %v", many.calls)
+	}
+	// Once one of them is remembered, auto can decide.
+	writePreference("Pinyin")
+	if !c.Sync(false, true) || many.source != "Pinyin" {
+		t.Fatalf("the remembered input method was not used: %q %v", many.source, many.calls)
+	}
+
+	explicit := &fakeBackend{active: true, source: "ABC", sources: []string{"Rime", "Pinyin"}}
+	named := &Controller{backend: explicit, textPolicy: "Rime"}
+	if !named.Sync(false, true) || explicit.source != "Rime" {
+		t.Fatalf("an explicit text source was not selected: %q", explicit.source)
+	}
+
+	// Quitting hands back only what we took.
+	exiting := &fakeBackend{active: true, source: "ABC", sources: []string{"Rime"}}
+	quitting := &Controller{backend: exiting, textPolicy: TextSourceAuto}
+	quitting.Restore()
+	if len(exiting.calls) != 0 {
+		t.Fatalf("exit selected an input method: %v", exiting.calls)
 	}
 }
