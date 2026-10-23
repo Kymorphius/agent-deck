@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -117,10 +118,26 @@ func TestMatrixCodexNoHooksVimFreshCLIStatus(t *testing.T) {
 			"Checking environment setup (5m 09s • esc to interrupt)\n" +
 			"  └ Tip: Use /vim to toggle Vim editing in the composer.\n\n" + footer, StatusWaiting, StatusRunning},
 		{"idle", footer, StatusRunning, StatusWaiting},
+		// matrix/hardened: With reduced motion a long status label hides
+		// both elapsed time and the interrupt hint, but its live Tip remains.
+		{"truncated header", ("Inspecting " + strings.Repeat("synthetic example files ", 8))[:126] + "…\n" +
+			"  └ Tip: Use /vim to toggle Vim editing in the composer.\n\n" + footer, StatusWaiting, StatusRunning},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			inst, cleanup := startCodexPaneInstance(t, "vim-"+tc.name, tc.frame)
 			defer cleanup()
+			// matrix/hardened: Match the renderer's clipped row at an explicit
+			// pane width and prove tmux did not physically wrap the header.
+			if tc.name == "truncated header" {
+				if err := inst.tmuxSession.Resize(127, 50); err != nil {
+					t.Fatal(err)
+				}
+				pane, err := inst.tmuxSession.CapturePaneFresh()
+				header, _, _ := strings.Cut(tc.frame, "\n")
+				if err != nil || !strings.Contains(pane, header+"\n") {
+					t.Fatalf("clipped status header wrapped or missing: %v\n%s", err, pane)
+				}
+			}
 			storage, err := NewStorageWithProfile("_test-codex-vim-" + tc.name)
 			if err != nil {
 				t.Fatal(err)

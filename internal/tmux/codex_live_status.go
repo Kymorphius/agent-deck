@@ -11,6 +11,11 @@ import (
 // after it (")…", ") …", ") ·…").
 var codexStatusLineRe = regexp.MustCompile(`^(?:[•◦]\s+)?\p{Lu}.*\((?:\d+[hms]\s*)+[•·]\s*(?:esc|ctrl ?\+ ?c) to interrupt(?:\)(?: · .*| ?·?…)?|…)$`)
 
+// matrix/hardened: Codex clips the whole header+hint row, so a long label
+// can hide the timer and interrupt hint. Only the reduced-motion (no bullet)
+// row may use this weaker shape, and only beside one verified live Tip block.
+var codexClippedStatusLineRe = regexp.MustCompile(`^\p{Lu}.*…$`)
+
 // matrix/hardened: Codex's Vim composer uses » while transcript prompts keep
 // ›. Share the marker boundary, including empty composers. Live busy detection
 // passes untrimmed rows to preserve its column-zero provenance check.
@@ -52,12 +57,26 @@ func codexLiveStatusLine(content string) bool {
 			break
 		}
 	}
+	// matrix/hardened: Keep the weak clipped-header evidence tied to exactly
+	// one adjacent status-details block; do not collect Tips across output.
+	detailBlocks, tipDetails := 0, -1
 	for i := composer - 1; i >= 0; i-- {
 		line := lines[i]
-		if strings.TrimSpace(line) == "" || strings.HasPrefix(line, "  └ ") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		if strings.HasPrefix(line, "  └ ") {
+			detailBlocks++
+			if codexLiveTipDetails(line) {
+				tipDetails = i
+			}
 			continue
 		}
 		if details := codexStatusDetailsStart(lines, i); details >= 0 {
+			detailBlocks++
+			if codexLiveTipDetails(lines[details]) {
+				tipDetails = details
+			}
 			i = details
 			continue
 		}
@@ -65,9 +84,17 @@ func codexLiveStatusLine(content string) bool {
 			i = header
 			continue
 		}
-		return codexStatusLineRe.MatchString(strings.TrimRight(line, " \t"))
+		return codexStatusLineRe.MatchString(strings.TrimRight(line, " \t")) ||
+			(detailBlocks == 1 && tipDetails == i+1 && codexClippedStatusLineRe.MatchString(line))
 	}
 	return false
+}
+
+// matrix/hardened: History Tips use only two spaces. The status widget uses
+// this exact details prefix, followed by nonempty text and optional wraps.
+func codexLiveTipDetails(line string) bool {
+	text, ok := strings.CutPrefix(line, "  └ Tip: ")
+	return ok && strings.TrimSpace(text) != ""
 }
 
 // codexStatusDetailsStart finds the "  └ " row above wrapped detail rows.

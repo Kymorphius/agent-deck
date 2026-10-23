@@ -45,7 +45,7 @@ import (
 )
 
 // matrix/hardened: identifies our hardened build.
-var Version = "1.16.26+matrix.106" // matrix/hardened: Codex Vim composer status compatibility; overridden via -ldflags.
+var Version = "1.16.26+matrix.107" // matrix/hardened: detect Codex clipped reduced-motion status; overridden via -ldflags.
 
 // Table column widths for list command output
 const (
