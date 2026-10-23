@@ -15,6 +15,9 @@ type backend interface {
 	current() string
 	ascii() string
 	selectSource(string) bool
+	// owner is the pid of the terminal application this backend is scoped to.
+	// Ownership records are only honoured within the same application.
+	owner() int
 }
 
 // Controller belongs to one foreground terminal, and is used on the UI thread.
@@ -131,7 +134,9 @@ func (c *Controller) acquire() bool {
 		return true
 	}
 	// A changed source can be a manual choice or a different app's preference.
-	c.saved, c.forced = "", ""
+	if c.saved != "" || c.forced != "" {
+		c.release()
+	}
 	ascii := c.backend.ascii()
 	if ascii == "" {
 		return false
@@ -144,14 +149,21 @@ func (c *Controller) acquire() bool {
 		return false
 	}
 	c.saved, c.forced = current, ascii
+	// Publish the pending restore so a sibling tab, or the next run after this
+	// process is killed while blurred, can still hand this source back.
+	writeOwnership(ownership{
+		Forced: ascii, Saved: current,
+		App: c.backend.owner(), PID: processID(), At: time.Now(),
+	})
 	return true
 }
 
-// restore hands the operator's own input source back. Having nothing to restore
-// counts as reaching the desired state; a blurred tab defers to its sibling.
+// restore hands the operator's own input source back. Having nothing of our own
+// to restore makes us look for a record another instance left behind; a blurred
+// tab defers to its sibling.
 func (c *Controller) restore() bool {
 	if c.saved == "" {
-		return true
+		return c.restoreInherited()
 	}
 	if c.blurred {
 		trace("restore deferred: blurred tab keeps %q pending", c.saved)
@@ -168,13 +180,60 @@ func (c *Controller) restore() bool {
 	if current != c.forced {
 		// The operator chose something else; that choice wins over our pending
 		// restore, and ownership is released.
-		c.saved, c.forced = "", ""
+		c.release()
 		return true
 	}
 	if !c.backend.selectSource(c.saved) {
 		trace("restore refused: select %q", c.saved)
 		return false
 	}
+	c.release()
+	return true
+}
+
+// release drops our ownership, including the shared record when it is ours.
+func (c *Controller) release() {
 	c.saved, c.forced = "", ""
+	clearOwnership(processID())
+}
+
+// restoreInherited finishes a restore that another instance of the same
+// terminal app started: a sibling tab that is blurred, or an instance that
+// exited or was killed while it still held the ASCII source. It only acts while
+// the desktop is still on exactly that forced source, so an ASCII keyboard the
+// operator selected themselves is never overridden.
+func (c *Controller) restoreInherited() bool {
+	record := readOwnership()
+	if record == nil {
+		return true
+	}
+	if record.PID == processID() {
+		// Our own stale record: we already released ownership above.
+		clearOwnership(processID())
+		return true
+	}
+	if record.App != c.backend.owner() {
+		// A different terminal application, or a session from before the app
+		// restarted. Its record says nothing about this desktop state.
+		return true
+	}
+	if c.blurred || !c.backend.foreground() {
+		return false
+	}
+	current := c.backend.current()
+	if current == "" {
+		return false
+	}
+	if current != record.Forced {
+		// The desktop already moved on; nothing of ours is in effect.
+		clearOwnership(record.PID)
+		return true
+	}
+	if !c.backend.selectSource(record.Saved) {
+		trace("inherited restore refused: select %q", record.Saved)
+		return false
+	}
+	trace("inherited restore: %q from pid=%d", record.Saved, record.PID)
+	clearOwnership(record.PID)
 	return true
 }

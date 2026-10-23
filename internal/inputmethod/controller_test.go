@@ -2,6 +2,8 @@ package inputmethod
 
 // matrix/hardened: exercise ownership/restoration without changing a live IME.
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
@@ -16,7 +18,9 @@ type fakeBackend struct {
 
 // newTestController advances its own clock on every call so the retry floor,
 // which only throttles repeated failing attempts, never hides a real attempt.
-func newTestController(b backend) *Controller {
+// It also keeps the shared ownership record inside the test's own directory.
+func newTestController(t *testing.T, b backend) *Controller {
+	isolateOwnership(t)
 	now := time.Unix(0, 0)
 	return &Controller{backend: b, clock: func() time.Time {
 		now = now.Add(retryFloor)
@@ -24,7 +28,18 @@ func newTestController(b backend) *Controller {
 	}}
 }
 
+// isolateOwnership redirects the cross-instance record to a temporary file, so
+// tests never read or write the real data directory.
+func isolateOwnership(t *testing.T) string {
+	path := filepath.Join(t.TempDir(), "input-method-owner.json")
+	previous := ownershipPath
+	ownershipPath = func() (string, error) { return path, nil }
+	t.Cleanup(func() { ownershipPath = previous })
+	return path
+}
+
 func (b *fakeBackend) foreground() bool { return b.active }
+func (b *fakeBackend) owner() int       { return 4242 }
 func (b *fakeBackend) current() string  { return b.source }
 func (b *fakeBackend) ascii() string    { return "ABC" }
 func (b *fakeBackend) selectSource(id string) bool {
@@ -38,7 +53,7 @@ func (b *fakeBackend) selectSource(id string) bool {
 
 func TestInputMethodNavigationAndRestore(t *testing.T) {
 	b := &fakeBackend{active: true, source: "Rime"}
-	c := newTestController(b)
+	c := newTestController(t, b)
 	if !c.Sync(true) {
 		t.Fatal("foreground navigation sync was not applied")
 	}
@@ -57,7 +72,7 @@ func TestInputMethodNavigationAndRestore(t *testing.T) {
 
 func TestInputMethodForegroundAndManualChoice(t *testing.T) {
 	b := &fakeBackend{source: "Rime"}
-	c := newTestController(b)
+	c := newTestController(t, b)
 	if c.Sync(true) {
 		t.Fatal("a background terminal must report the switch as not applied")
 	}
@@ -85,7 +100,7 @@ func TestInputMethodForegroundAndManualChoice(t *testing.T) {
 
 func TestInputMethodSelectionFailure(t *testing.T) {
 	b := &fakeBackend{active: true, source: "Rime", deny: true}
-	c := newTestController(b)
+	c := newTestController(t, b)
 	c.Sync(true)
 	if c.saved != "" {
 		t.Fatal("failed selection must not acquire ownership")
@@ -106,7 +121,7 @@ func TestInputMethodSelectionFailure(t *testing.T) {
 
 func TestInputMethodASCIIAndNil(t *testing.T) {
 	b := &fakeBackend{active: true, source: "ABC"}
-	c := newTestController(b)
+	c := newTestController(t, b)
 	c.Sync(true)
 	c.Sync(false)
 	if len(b.calls) != 0 {
@@ -120,7 +135,7 @@ func TestInputMethodASCIIAndNil(t *testing.T) {
 
 func TestInputMethodBlurredSiblingTab(t *testing.T) {
 	b := &fakeBackend{active: true, source: "Rime"}
-	c := newTestController(b)
+	c := newTestController(t, b)
 	c.Sync(true)
 	c.Blur()
 	c.Restore()
@@ -139,7 +154,7 @@ func TestInputMethodBlurredSiblingTab(t *testing.T) {
 // the IME consumes the first key for composition.
 func TestInputMethodPendingAttemptIsRetryable(t *testing.T) {
 	b := &fakeBackend{source: "Rime"}
-	c := newTestController(b)
+	c := newTestController(t, b)
 	if c.Sync(true) {
 		t.Fatal("navigation was reported as applied while not foreground")
 	}
@@ -171,6 +186,7 @@ func TestInputMethodPendingAttemptIsRetryable(t *testing.T) {
 // changed desire.
 func TestInputMethodRetryFloor(t *testing.T) {
 	b := &fakeBackend{source: "Rime"}
+	isolateOwnership(t)
 	frozen := time.Unix(0, 0)
 	c := &Controller{backend: b, clock: func() time.Time { return frozen }}
 	c.Sync(true)
@@ -197,10 +213,94 @@ func TestInputMethodRetryFloor(t *testing.T) {
 // owning instance retries once it is focused again.
 func TestInputMethodBlurKeepsRestorePending(t *testing.T) {
 	b := &fakeBackend{active: true, source: "Rime"}
-	c := newTestController(b)
+	c := newTestController(t, b)
 	c.Sync(true)
 	c.Blur()
 	if !c.Sync(false) || b.source != "Rime" {
 		t.Fatalf("focused typing after blur did not restore: %q", b.source)
+	}
+}
+
+// matrix/hardened: ownership of a forced ASCII source has to survive the
+// instance that took it. A sibling tab, or the next run after a tab was killed
+// while blurred, used to find nothing to restore and left the operator typing
+// in ASCII.
+func TestInputMethodInheritsSiblingRestore(t *testing.T) {
+	path := isolateOwnership(t)
+	defer func(previous func() int) { processID = previous }(processID)
+
+	b := &fakeBackend{active: true, source: "Rime"}
+	processID = func() int { return 111 }
+	owner := &Controller{backend: b}
+	if !owner.Sync(true) || b.source != "ABC" {
+		t.Fatalf("owner did not take the ASCII source: %q", b.source)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("ownership record was not published: %v", err)
+	}
+	// The owning tab goes to the background and dies there: its restore is
+	// deliberately deferred, so the record must outlive it.
+	owner.Blur()
+	owner.Restore()
+	if b.source != "ABC" {
+		t.Fatal("a blurred tab restored over a sibling's source")
+	}
+
+	processID = func() int { return 222 }
+	sibling := &Controller{backend: b}
+	if !sibling.Sync(false) {
+		t.Fatal("sibling could not finish the inherited restore")
+	}
+	if b.source != "Rime" {
+		t.Fatalf("inherited restore did not hand the IME back: %q", b.source)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatal("a consumed ownership record was left behind")
+	}
+	// Nothing is left to inherit, and a second pass must stay quiet.
+	calls := len(b.calls)
+	if !sibling.Sync(false) || len(b.calls) != calls {
+		t.Fatalf("a consumed record was replayed: %v", b.calls)
+	}
+}
+
+// An ASCII keyboard the operator selected themselves is never overridden, and a
+// record from another terminal application is ignored.
+func TestInputMethodInheritedRestoreLimits(t *testing.T) {
+	path := isolateOwnership(t)
+	defer func(previous func() int) { processID = previous }(processID)
+	processID = func() int { return 333 }
+
+	b := &fakeBackend{active: true, source: "ABC"}
+	c := &Controller{backend: b}
+	if !c.Sync(false) || len(b.calls) != 0 {
+		t.Fatalf("an operator's own ASCII keyboard was changed: %v", b.calls)
+	}
+
+	// A record from a different terminal app must not touch this desktop.
+	writeOwnership(ownership{Forced: "ABC", Saved: "Rime", App: 9999, PID: 111, At: time.Now()})
+	if !c.Sync(false) || len(b.calls) != 0 {
+		t.Fatalf("another application's record was replayed: %v", b.calls)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatal("another application's record was deleted")
+	}
+
+	// Our app, but the desktop already moved to a source we never forced.
+	writeOwnership(ownership{Forced: "ABC", Saved: "Rime", App: 4242, PID: 111, At: time.Now()})
+	b.source = "OtherIME"
+	if !c.Sync(false) || len(b.calls) != 0 {
+		t.Fatalf("a stale record changed a source we never forced: %v", b.calls)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatal("a stale record was kept")
+	}
+
+	// An expired record is ignored even when everything else matches.
+	writeOwnership(ownership{Forced: "ABC", Saved: "Rime", App: 4242, PID: 111,
+		At: time.Now().Add(-2 * ownershipTTL)})
+	b.source = "ABC"
+	if !c.Sync(false) || len(b.calls) != 0 {
+		t.Fatalf("an expired record was replayed: %v", b.calls)
 	}
 }

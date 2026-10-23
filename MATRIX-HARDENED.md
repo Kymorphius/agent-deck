@@ -933,3 +933,11 @@ snapshots, compatibility, and validation boundaries.
 - **matrix/hardened:** `matrix.103` 起 `AGENTDECK_IME_DEBUG` 的追踪在配置之前就打开，并记录拒绝原因：SSH 会话、无 cgo、祖先链里没有终端应用（附 ppid）、`ui.auto_input_method` 关闭、读配置失败；成功时记录归属的终端应用 pid 和"先按已聚焦初始化"。默认仍然关闭，不改变任何切换行为。
 - 祖先链里没有终端应用时仍然不接管输入源：前台判定无法限定到这个终端，接管会影响别的应用。这条限制不变，只是现在可诊断。
 - **测试**：`internal/inputmethod/debug_test.go`（追踪开关、SSH 拒绝原因）、`internal/ui/matrix_input_method_test.go`（关闭开关与成功配置各自留痕）。
+
+## 89. 输入法所有权可跨实例与跨重启交接
+
+- **问题**：回到会话输入框时偶尔仍是 ABC。"临时切到 ASCII"的所有权只存在于单个 `Controller` 里，三条路都会把操作者留在英文键盘上：同时开两个列表时在另一个标签页进输入框（该实例 `saved` 为空，判定为"没有要还原的东西"）；持有 ASCII 的标签页在失焦状态下退出或被杀（失焦时按设计不碰桌面输入源，待还原记录随进程消失）；重载或重启后新进程不知道上一个进程抢过 ASCII。
+- **matrix/hardened:** `matrix.104` 起抢到 ASCII 时把 `{forced, saved, 终端应用 pid, 进程 pid, 时间}` 原子写入 `<数据目录>/runtime/input-method-owner.json`（0600）。进入文字输入而自身无可还原内容时接手别人的记录，四个条件全满足才动手：同一终端应用 pid、当前输入源正好还是记录中被抢走的那个 ASCII 源、本实例有焦点且应用在前台、记录未超过 12 小时。用掉即删；只清除属于本进程的记录，不会丢掉兄弟实例待还原的记录。
+- 应用重启或重新登录后终端应用 pid 必然变化，上一次登录的记录不会被重放；操作者自己选择的英文键盘不会被覆盖（当前源不等于记录中的 forced 时只清记录、不切换）。
+- **改动地图**：`internal/inputmethod/owner_state.go`（新增，记录读写与过期）、`internal/inputmethod/controller.go`（`release`、`restoreInherited`、acquire 后发布记录）、`internal/inputmethod/native_darwin.go`（backend 暴露归属应用 pid）。
+- **测试**：`internal/inputmethod/controller_test.go` 新增兄弟实例交接（含失焦退出后接手）与四条边界（操作者自选 ASCII、别的终端应用、当前源已变、记录过期）；测试把记录重定向到临时目录，不接触真实数据目录。
