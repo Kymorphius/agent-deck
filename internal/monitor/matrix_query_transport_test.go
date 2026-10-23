@@ -100,7 +100,12 @@ func TestMatrixMonitorQueryTransportLeaseAndHTTPStop(t *testing.T) {
 	missing := session.NewInstanceWithTool("no-pane", "/test", "shell")
 	missing.ID = "no-pane"
 	missing.SetTmuxSessionForTest(nil)
-	reg := &matrixQueryRegistry{instances: append([]*session.Instance{archived, stopped, missing}, instances...)}
+	// matrix/hardened: a dead error row first in registry order must not become
+	// the anchor; its attach fails with a framed %error and the channel never starts.
+	dead := session.NewInstanceWithTool("dead", "/test", "shell")
+	dead.ID, dead.Status, dead.CreatedAt = "dead", session.StatusError, time.Now().Add(-time.Hour)
+	dead.SetTmuxSessionForTest(&tmux.Session{Name: "absent-error", SocketName: socket})
+	reg := &matrixQueryRegistry{instances: append([]*session.Instance{dead, archived, stopped, missing}, instances...)}
 	s, path := startTestServer(t, Options{QueryTransport: m, Interval: 40 * time.Millisecond, DemandTTL: 500 * time.Millisecond, PassBudget: 2 * time.Second,
 		LoadProfile: func(string) (ProfileRegistry, error) { return reg, nil }, ValidateProfile: func(string) error { return nil }})
 	client := NewClient(path, nil)
@@ -111,7 +116,7 @@ func TestMatrixMonitorQueryTransportLeaseAndHTTPStop(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(first.Sessions) != 5 {
+	if len(first.Sessions) != 6 {
 		t.Fatal("missing original source observations")
 	}
 	for _, row := range first.Sessions {

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Codex subagent-thread rebind poisoning (incident 2026-07-15, ares fleet).
@@ -68,8 +69,10 @@ type codexThreadMeta struct {
 var codexThreadMetaCache sync.Map // sessionID string -> codexThreadMeta
 
 // matrix/hardened: polling must not glob the entire dated rollout tree for
-// every known thread. Cache only positive paths, separated by Codex home; a
-// missing rollout can appear on its first flush, so absence is never cached.
+// every known thread. Positive paths are cached per Codex home. Absence is
+// answered from a per-home index of the dated tree (codex_rollout_index.go)
+// that re-reads only day directories whose mtime/size changed, at most once a
+// second for polling; a resume/fork decision forces the incremental refresh.
 type codexRolloutPathKey struct {
 	codexHome string
 	sessionID string
@@ -77,21 +80,29 @@ type codexRolloutPathKey struct {
 
 type codexRolloutPathResolver struct {
 	paths sync.Map // codexRolloutPathKey -> string
+	homes sync.Map // codexHome -> *codexRolloutIndex
+	// clock is a test seam for the polling refresh interval; nil is time.Now.
+	clock func() time.Time
 }
 
 var codexRolloutPaths codexRolloutPathResolver
 
 // codexRolloutPathInHome returns the flushed rollout JSONL path for a session
-// ID under codexHome/sessions, or "" when none exists.
+// ID under codexHome/sessions, or "" when none exists. Status polling uses it;
+// a rollout flushed in the last second may not be visible yet.
 //
 // Codex layout: codexHome/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl
 func codexRolloutPathInHome(sessionID, codexHome string) string {
-	return codexRolloutPaths.find(sessionID, codexHome, filepath.Glob)
+	return codexRolloutPaths.find(sessionID, codexHome, false)
 }
 
-// matrix/hardened: the scan argument lets regression tests count tree scans
-// without replacing a process-wide function while other lookups are running.
-func (r *codexRolloutPathResolver) find(sessionID, codexHome string, scan func(string) ([]string, error)) string {
+// codexRolloutPathInHomeFresh is codexRolloutPathInHome without the polling
+// interval, for decisions that drop or bind a thread id (resume, fork).
+func codexRolloutPathInHomeFresh(sessionID, codexHome string) string {
+	return codexRolloutPaths.find(sessionID, codexHome, true)
+}
+
+func (r *codexRolloutPathResolver) find(sessionID, codexHome string, fresh bool) string {
 	sessionID = strings.TrimSpace(sessionID)
 	if sessionID == "" {
 		return ""
@@ -105,15 +116,29 @@ func (r *codexRolloutPathResolver) find(sessionID, codexHome string, scan func(s
 		// A rollout can be removed or moved after discovery. Avoid deleting a
 		// replacement another caller has already found for the same thread.
 		r.paths.CompareAndDelete(key, path)
+		fresh = true
 	}
-	pattern := filepath.Join(codexHome, "sessions", "*", "*", "*",
-		"rollout-*-"+sessionID+".jsonl")
-	matches, err := scan(pattern)
-	if err != nil || len(matches) == 0 {
+	var path string
+	if strings.ContainsAny(sessionID, `/*?[\`) {
+		// Not representable in the index; keep the original Glob semantics.
+		pattern := filepath.Join(codexHome, "sessions", "*", "*", "*",
+			"rollout-*-"+sessionID+".jsonl")
+		if matches, err := filepath.Glob(pattern); err == nil && len(matches) > 0 {
+			path = matches[0]
+		}
+	} else {
+		now := time.Now
+		if r.clock != nil {
+			now = r.clock
+		}
+		index, _ := r.homes.LoadOrStore(codexHome, &codexRolloutIndex{home: codexHome})
+		path = index.(*codexRolloutIndex).lookup(sessionID, now(), fresh)
+	}
+	if path == "" {
 		return ""
 	}
-	r.paths.Store(key, matches[0])
-	return matches[0]
+	r.paths.Store(key, path)
+	return path
 }
 
 // CodexHomeDirForInstance returns the CODEX_HOME directory that applies to a
@@ -199,7 +224,8 @@ func codexThreadMetaForSession(sessionID, codexHome string) (codexThreadMeta, bo
 	if v, ok := codexThreadMetaCache.Load(sessionID); ok {
 		return v.(codexThreadMeta), true
 	}
-	path := codexRolloutPathInHome(sessionID, codexHome)
+	// matrix/hardened: rebind gates decide on this answer; never repeat a miss.
+	path := codexRolloutPathInHomeFresh(sessionID, codexHome)
 	if path == "" {
 		return codexThreadMeta{}, false
 	}
@@ -320,7 +346,7 @@ func (i *Instance) filterCodexProcessProbeCandidate(candidateID string) string {
 // flushed rollout return false (the #756 existence gate already handled
 // them).
 func codexSessionNeedsFork(sessionID, codexHome string) bool {
-	path := codexRolloutPathInHome(sessionID, codexHome)
+	path := codexRolloutPathInHomeFresh(sessionID, codexHome) // matrix/hardened: launch decision
 	if path == "" {
 		return false
 	}

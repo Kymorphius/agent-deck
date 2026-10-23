@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 )
 
 // matrix/hardened: all rollout fixtures live in synthetic Codex homes. These
@@ -38,21 +39,41 @@ func TestMatrixCodexRolloutPathCacheSeparatesHomes(t *testing.T) {
 	}
 }
 
+// matrix/hardened: a polling miss may be repeated for up to the refresh
+// interval; a fresh (resume/fork) lookup and the next interval both see it.
 func TestMatrixCodexRolloutPathCacheRetriesAfterFirstFlush(t *testing.T) {
 	home := t.TempDir()
 	sid := "019f0000-0000-7000-8000-999999999902"
-	if got := codexRolloutPathInHome(sid, home); got != "" {
+	now := time.Unix(1_800_000_000, 0)
+	resolver := codexRolloutPathResolver{clock: func() time.Time { return now }}
+	if got := resolver.find(sid, home, false); got != "" {
 		t.Fatalf("unflushed path = %q, want empty", got)
 	}
 	path := matrixSeedCachedCodexRollout(t, home, "2026/10/11", sid)
-	if got := codexRolloutPathInHome("  "+sid+"  ", home); got != path {
-		t.Fatalf("first flushed path = %q, want %q", got, path)
+	if got := resolver.find(sid, home, false); got != "" {
+		t.Fatalf("polling miss within the interval = %q, want repeated absence", got)
+	}
+	if got := resolver.find("  "+sid+"  ", home, true); got != path {
+		t.Fatalf("fresh lookup after first flush = %q, want %q", got, path)
+	}
+	other := "019f0000-0000-7000-8000-999999999912"
+	if got := resolver.find(other, home, false); got != "" {
+		t.Fatalf("unflushed second path = %q, want empty", got)
+	}
+	otherPath := matrixSeedCachedCodexRollout(t, home, "2026/10/11", other)
+	now = now.Add(codexRolloutIndexRefresh)
+	if got := resolver.find(other, home, false); got != otherPath {
+		t.Fatalf("polling lookup after the interval = %q, want %q", got, otherPath)
 	}
 }
 
 func TestMatrixCodexRolloutPathCacheRediscoversRemovedOrMovedRollout(t *testing.T) {
 	home := t.TempDir()
 	sid := "019f0000-0000-7000-8000-999999999903"
+	// matrix/hardened: each step is a later polling pass.
+	now := time.Unix(1_800_000_000, 0)
+	resolver := codexRolloutPathResolver{clock: func() time.Time { now = now.Add(codexRolloutIndexRefresh); return now }}
+	codexRolloutPathInHome := func(sid, home string) string { return resolver.find(sid, home, false) }
 	path := matrixSeedCachedCodexRollout(t, home, "2026/10/01", sid)
 	if got := codexRolloutPathInHome(sid, home); got != path {
 		t.Fatalf("initial path = %q, want %q", got, path)
@@ -84,31 +105,89 @@ func TestMatrixCodexRolloutPathCacheAvoidsStableTreeScans(t *testing.T) {
 	home := t.TempDir()
 	sid := "019f0000-0000-7000-8000-999999999904"
 	path := matrixSeedCachedCodexRollout(t, home, "2026/10/11", sid)
-	var resolver codexRolloutPathResolver
-	scans := 0
-	scan := func(pattern string) ([]string, error) {
-		scans++
-		return filepath.Glob(pattern)
+	matrixSeedCachedCodexRollout(t, home, "2026/10/12", "fixture-other")
+	now := time.Unix(1_800_000_000, 0)
+	resolver := codexRolloutPathResolver{clock: func() time.Time { return now }}
+	reads := func() int {
+		index, ok := resolver.homes.Load(home)
+		if !ok {
+			return 0
+		}
+		x := index.(*codexRolloutIndex)
+		x.mu.Lock()
+		defer x.mu.Unlock()
+		return x.reads
 	}
 	for n := 0; n < 100; n++ {
-		if got := resolver.find(sid, home, scan); got != path {
+		if got := resolver.find(sid, home, false); got != path {
 			t.Fatalf("lookup %d = %q, want %q", n, got, path)
 		}
 	}
-	if scans != 1 {
-		t.Fatalf("stable rollout scanned its history tree %d times, want 1", scans)
+	if got := reads(); got != 2 {
+		t.Fatalf("stable rollout listed %d day directories, want 2", got)
 	}
-	if got := resolver.find("  ", home, scan); got != "" || scans != 1 {
-		t.Fatalf("blank session scanned history: path=%q, scans=%d", got, scans)
+	if got := resolver.find("  ", home, false); got != "" || reads() != 2 {
+		t.Fatalf("blank session scanned history: path=%q, reads=%d", got, reads())
 	}
+	// Repeated misses, across refresh intervals, never re-list unchanged days.
 	missing := "019f0000-0000-7000-8000-999999999905"
-	for n := 0; n < 2; n++ {
-		if got := resolver.find(missing, home, scan); got != "" {
+	for n := 0; n < 50; n++ {
+		now = now.Add(codexRolloutIndexRefresh)
+		if got := resolver.find(missing, home, n%2 == 0); got != "" {
 			t.Fatalf("missing rollout path = %q, want empty", got)
 		}
 	}
-	if scans != 3 {
-		t.Fatalf("misses must retry scans: got %d total scans, want 3", scans)
+	if got := reads(); got != 2 {
+		t.Fatalf("misses re-listed unchanged days: got %d listings, want 2", got)
+	}
+	// A new rollout changes only its own day directory.
+	created := matrixSeedCachedCodexRollout(t, home, "2026/10/12", missing)
+	if got := resolver.find(missing, home, true); got != created {
+		t.Fatalf("created rollout = %q, want %q", got, created)
+	}
+	if got := reads(); got != 3 {
+		t.Fatalf("new rollout listings = %d, want 3", got)
+	}
+}
+
+// matrix/hardened: the index must agree with the original Glob, including
+// first-match order, empty wildcard, symlinked days and non-directory entries.
+func TestMatrixCodexRolloutIndexMatchesGlob(t *testing.T) {
+	home := t.TempDir()
+	sid := "019f0000-0000-7000-8000-999999999913"
+	for _, day := range []string{"2026/10/02", "2026/09/30", "2025/12/31"} {
+		matrixSeedCachedCodexRollout(t, home, day, sid)
+	}
+	empty := filepath.Join(home, "sessions", "2026", "10", "02", "rollout--"+sid+"x.jsonl")
+	if err := os.WriteFile(empty, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	wild := "019f0000-0000-7000-8000-999999999914"
+	if err := os.WriteFile(filepath.Join(home, "sessions", "2026", "10", "02", "rollout--"+wild+".jsonl"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "sessions", "2026", "stray"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	linked := t.TempDir()
+	linkedSID := "019f0000-0000-7000-8000-999999999915"
+	matrixSeedCachedCodexRollout(t, linked, "x/y/z", linkedSID)
+	if err := os.Symlink(filepath.Join(linked, "sessions", "x", "y", "z"), filepath.Join(home, "sessions", "2026", "10", "03")); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{sid, wild, linkedSID, "8000-999999999913", "missing", sid + "x"} {
+		var resolver codexRolloutPathResolver
+		want := ""
+		matches, err := filepath.Glob(filepath.Join(home, "sessions", "*", "*", "*", "rollout-*-"+id+".jsonl"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(matches) > 0 {
+			want = matches[0]
+		}
+		if got := resolver.find(id, home, false); got != want {
+			t.Errorf("index(%q) = %q, Glob = %q", id, got, want)
+		}
 	}
 }
 
@@ -168,14 +247,25 @@ func BenchmarkMatrixCodexRolloutPathLookup(b *testing.B) {
 	})
 	b.Run("CachedStat", func(b *testing.B) {
 		var resolver codexRolloutPathResolver
-		if got := resolver.find(sid, home, filepath.Glob); got != path {
+		if got := resolver.find(sid, home, false); got != path {
 			b.Fatalf("initial path = %q, want %q", got, path)
 		}
 		b.ReportAllocs()
 		b.ResetTimer()
 		for n := 0; n < b.N; n++ {
-			if got := resolver.find(sid, home, filepath.Glob); got != path {
+			if got := resolver.find(sid, home, false); got != path {
 				b.Fatalf("cached path = %q, want %q", got, path)
+			}
+		}
+	})
+	b.Run("IndexedMiss", func(b *testing.B) {
+		var resolver codexRolloutPathResolver
+		missing := "019f0000-0000-7000-8000-999999999908"
+		b.ReportAllocs()
+		b.ResetTimer()
+		for n := 0; n < b.N; n++ {
+			if got := resolver.find(missing, home, false); got != "" {
+				b.Fatalf("missing path = %q", got)
 			}
 		}
 	})

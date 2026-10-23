@@ -533,7 +533,10 @@ func (s *Server) collect(p *profileState) {
 			targets := make([]*tmux.Session, 0, len(p.order))
 			for _, id := range p.order {
 				record := p.records[id]
-				if record.queryTarget != nil && record.instance.GetStatusThreadSafe() != session.StatusStopped {
+				// matrix/hardened: the anchor must be attachable. A dead (error) row
+				// fails every attach with a framed %error, so the channel never started.
+				status := record.instance.GetStatusThreadSafe()
+				if record.queryTarget != nil && status != session.StatusStopped && status != session.StatusError && !record.instance.GetTmuxSession().KnownAbsent() {
 					targets = append(targets, record.queryTarget)
 				}
 			}
@@ -594,7 +597,11 @@ func (s *Server) collect(p *profileState) {
 			continue
 		}
 		inst := record.instance
-		nonCapture := s.opts.Probe != nil || inst.IsArchived() || inst.GetStatusThreadSafe() == session.StatusStopped || inst.GetTmuxSession() == nil
+		// matrix/hardened: an error row captures only once its pane is proven
+		// alive again, and a missing pane fails the chained command for every
+		// neighbour; neither belongs in a capture group.
+		status := inst.GetStatusThreadSafe()
+		nonCapture := s.opts.Probe != nil || inst.IsArchived() || status == session.StatusStopped || status == session.StatusError || inst.GetTmuxSession() == nil || inst.GetTmuxSession().KnownAbsent()
 		if nonCapture && len(group) != 0 {
 			// Non-capture demand cannot benefit from holding a capture group.
 			// Start its pending neighbors before the ordinary worker wait.

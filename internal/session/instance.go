@@ -2692,7 +2692,8 @@ func (i *Instance) buildCodexCommand(baseCommand string) string {
 	// stale ID, clear the .sid sidecar so the next hook tick rebinds
 	// cleanly, and spawn fresh.
 	// matrix/hardened: a slept identity must fail resume rather than silently start fresh.
-	if i.CodexSessionID != "" && !i.hasAutoSleepState() && !codexRolloutExistsInHome(i.CodexSessionID, codexHome) {
+	// matrix/hardened: dropping the id is irreversible, so bypass the polling interval.
+	if i.CodexSessionID != "" && !i.hasAutoSleepState() && codexRolloutPathInHomeFresh(i.CodexSessionID, codexHome) == "" {
 		sessionLog.Warn("codex_resume_stale_sid_dropped",
 			slog.String("instance_id", i.ID),
 			slog.String("title", i.Title),

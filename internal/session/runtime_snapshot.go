@@ -376,7 +376,11 @@ func (i *Instance) RuntimeSnapshot(profile, epoch string, revision uint64, sampl
 				alive, known = true, true
 			}
 		}
-		if !titleKnown {
+		// matrix/hardened: every pass snapshots every row; a pane a completed
+		// probe recently proved absent is not re-forked (positive caches win).
+		if !titleKnown && sess.KnownAbsent() {
+			alive, known = false, true
+		} else if !titleKnown {
 			var err error
 			alive, err = sess.ProbeExists()
 			known = err == nil

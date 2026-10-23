@@ -88,7 +88,8 @@ func prefetchMatrixCapturePanes(ctx context.Context, sessions []*Session, entrop
 	var groups [][]*Session
 	seen := make(map[*Session]bool, len(sessions))
 	for _, s := range sessions {
-		if s == nil || s.Name == "" || seen[s] {
+		// matrix/hardened: one missing target fails the whole chained command.
+		if s == nil || s.Name == "" || seen[s] || s.KnownAbsent() {
 			continue
 		}
 		seen[s] = true

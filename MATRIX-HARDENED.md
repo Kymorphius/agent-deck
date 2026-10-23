@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.99`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.101`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -904,3 +904,16 @@ snapshots, compatibility, and validation boundaries.
 - **matrix/hardened:** 失焦标签页行为不变：不碰桌面输入源，保留待还原的输入源等重新获得焦点；退出和信号清理丢掉导航期望，避免晚到的消息又去抢 ASCII。`AGENTDECK_IME_DEBUG=1`（或直接给路径）把每次决策写到 `logs/input-method.log`，默认关闭且不改变切换行为。
 - **改动地图**：`internal/inputmethod/controller.go`（期望状态、`apply`/`acquire`/`restore` 返回是否达成、重试下限）、`internal/inputmethod/debug.go`（新增，可关闭的决策追踪）、`internal/ui/matrix_input_method.go`（重试节拍、节拍核对、返回 `tea.Cmd`）、`internal/ui/home.go`（`inputMethodApplied`/`inputMethodRetries`/`inputMethodRetryQueued`，`Update` 合并重试命令并让重试消息绕过 `updateInner`）、`cmd/agent-deck/main.go` 与 `cmd/agent-deck/matrix_ime_debug.go`（按环境变量开启追踪）。
 - **测试**：`internal/inputmethod/controller_test.go`（待办尝试可重试、重试下限、失焦保留还原）、`internal/ui/matrix_input_method_test.go`（未生效排重试、重试额度有界、节拍核对与失焦不核对）；既有模式/焦点/归属测试保持通过。真实候选窗口仍需按 [输入法适配说明](docs/input-method.md) 的前台交互步骤验收。
+
+## 86. monitor 不再反复探测已消失的会话与 Codex 记录
+
+- **问题**：共享 monitor（`agent-deck monitor serve`）在会话多的机器上长期占 100–300% CPU，加上 tmux 子进程约 30%，电池模式整机耗电明显升高。CPU profile 和调用栈计数定位到三处：
+  1. 每轮每个 Codex 行都要查 rollout 路径（`CanForkCodex`、中断检测）。找不到的 rollout 不缓存，每次都对整个 `~/.codex/sessions/*/*/*` 做 `filepath.Glob`，约 4500 个文件、120 个日期目录。这一项占 monitor 自身 CPU 的约 90%；
+  2. 每轮快照（`RuntimeSnapshot`）直接 `ProbeExists`，绕过了 error 会话原有的 30 秒复查节流，100 多个已消失的会话每秒约 30 次 `has-session`；截图预取把它们一起放进批量命令，任何一个目标不存在都会让整批失败（batch 99.9% 失败）；
+  3. 只读查询通道的锚点按注册顺序取第一个非 stopped 会话，取到的往往是已消失的 error 会话。`attach-session` 返回带分帧的 `%error`，这种失败不计入 framing 或 timeout，于是通道每 5 秒重试一次却从未建立（`starts=0`、`successes=0`）。
+- **matrix/hardened:** `matrix.101` 起：
+  - Codex rollout 按 Codex home 建索引（`internal/session/codex_rollout_index.go`），按 Glob 的顺序列出日期目录，并以日期目录的 mtime 和大小为键缓存文件名。刷新时只重读变化了的日期目录，查询结果（包括“不存在”）按代次缓存。轮询查询最多每秒刷新一次；会丢弃或绑定线程 ID 的决定用 `codexRolloutPathInHomeFresh` 立即刷新，包括 `buildCodexCommand` 丢弃不存在的 ID、`codexSessionNeedsFork`、`LocateCodexResume`，以及钩子换绑闸门用的 `codexThreadMetaForSession`。已找到的路径仍先 `Stat` 校验，删除或移动后立即重新查。含通配符的 ID 仍走原来的 Glob。
+  - tmux `Session` 增加缺席记忆（`internal/tmux/matrix_absence_memo.go`）：完成的探测确认会话不存在后，`Exists`、`IsPaneDead`、`PaneDeadExitStatus`、快照里的存活判断和截图批量在退避期内（15 秒起，翻倍到 5 分钟）不再 fork tmux。只要有任一进程内的正面证据（本轮会话缓存、各 socket 缓存或控制管道，即 `ExistsCached`），记忆立刻失效，所以别的进程重新拉起的会话下一轮就能看到。`Start` 成功、会话改名或换 socket 也会清掉记忆。`ProbeExists` 仍是权威、不走缓存的探测，只负责写入或清除记忆。
+  - 查询通道的锚点排除 error 状态和已知不存在的会话；monitor 的调度把 error 状态和已知不存在的会话当作“不需截图”的探测，不放进截图小组（error 行只有确认复活后才会截图，那时单独截）。
+- **实测**（本机，143 个会话，其中 105 个 error、24 个 stopped，存活的 tmux 会话 14 个）：monitor 自身 CPU 从约 100–300% 降到个位数；`has-session` 从约 36 次/秒降到约 2 次/秒，并随退避继续下降；batch 从约 8 次/秒（几乎全部失败）降到不足 1 次/秒；查询通道连上并持续成功。
+- **测试**：`internal/tmux/matrix_absence_memo_test.go`（记忆不 fork、缓存复活、批量排除、`ProbeExists` 不读记忆、退避上限、改名和过期）；`internal/session/matrix_codex_rollout_cache_test.go`（结果与 Glob 一致，包括首个匹配、空通配、软链接日期目录；未变化的日期不重读；轮询间隔与 fresh 查询；删除和移动）；`internal/monitor/matrix_query_transport_test.go`（排在最前面的 error 行不会成为锚点；修复前能复现 `starts=0 successes=0`）。

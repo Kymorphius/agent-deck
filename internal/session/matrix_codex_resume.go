@@ -68,7 +68,7 @@ func LocateCodexResume(account, threadID string) (CodexResumeLocation, error) {
 		return CodexResumeLocation{}, fmt.Errorf("thread id %q is not a bare Codex thread uuid", threadID)
 	}
 	home := CodexHomeDirForInstance(&Instance{Tool: "codex", Command: "codex", Account: strings.TrimSpace(account)})
-	path := codexRolloutPathInHome(threadID, home)
+	path := codexRolloutPathInHomeFresh(threadID, home) // matrix/hardened: binding decision
 	if path == "" {
 		return CodexResumeLocation{}, fmt.Errorf("no rollout of Codex thread %s under %s, the Codex home a new session%s launches with; nothing to resume", threadID, home, accountClause(account))
 	}

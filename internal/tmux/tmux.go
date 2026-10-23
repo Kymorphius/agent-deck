@@ -1188,6 +1188,11 @@ type Session struct {
 	// generation-guarded clear of startupAt in GetStatus (#2361).
 	afterStartupAliveProbe func()
 
+	// matrix/hardened: repeat a completed absence verdict with backoff
+	// (matrix_absence_memo.go); never consulted over positive evidence.
+	absentMu sync.Mutex
+	absent   matrixAbsentMemo
+
 	// WorkDirIsPlaceholder marks a session whose local WorkDir is not where the
 	// work happens — today that means an SSH session, whose pane only runs an
 	// `ssh` client while the project lives on the remote host. Such a session
@@ -2646,6 +2651,8 @@ func (s *Session) Start(command string) error {
 	// Defense in depth against the 2026-04-17 three-cascade bug.
 	// See assertTestTmuxIsolation for the full rationale.
 	assertTestTmuxIsolation()
+	// matrix/hardened: a new pane generation must not inherit an absence memo.
+	s.matrixNotePresent()
 
 	// #1713: resolve and validate the working directory BEFORE mutating session
 	// state or spawning anything. tmux does NOT fail when -c points at a missing
@@ -2811,6 +2818,7 @@ func (s *Session) Start(command string) error {
 	// Register session in cache immediately to prevent race condition
 	// where Exists() returns false because cache was refreshed before session creation
 	registerSessionInCache(s.Name)
+	s.matrixNotePresent() // matrix/hardened: the pre-spawn Exists() may have seeded it
 
 	// #1713: a tmux server whose OWN cwd was unlinked stops honouring -c and
 	// births every pane in that dead directory, where the pane's shell cannot
@@ -3246,10 +3254,13 @@ func (s *Session) killAfterPaneCwdFailure(cwdErr error) error {
 // and reported as errors. Callers deciding whether a session's process tree
 // may be treated as absent (#1873) depend on that distinction.
 func (s *Session) ProbeExists() (bool, error) {
+	// matrix/hardened: stays authoritative and uncached; it only seeds/clears
+	// the absence memo that hot polling paths consult via KnownAbsent.
 	ctx, cancel := context.WithTimeout(context.Background(), hasSessionProbeTimeout)
 	defer cancel()
 	_, err := commandOutput(s.tmuxCmdContext(ctx, "has-session", "-t", "="+s.Name))
 	if err == nil {
+		s.matrixNotePresent()
 		return true, nil
 	}
 	if ctx.Err() == context.DeadlineExceeded {
@@ -3266,6 +3277,7 @@ func (s *Session) ProbeExists() (bool, error) {
 	if strings.HasPrefix(stderr, "can't find session:") ||
 		strings.HasPrefix(stderr, "no server running on ") ||
 		(strings.Contains(stderr, "error connecting to") && strings.Contains(stderr, "No such file or directory")) {
+		s.matrixNoteAbsent()
 		return false, nil
 	}
 	return false, fmt.Errorf("tmux has-session probe for %q was inconclusive: %w", s.Name, err)
@@ -3302,6 +3314,12 @@ func (s *Session) Exists() bool {
 		}
 	}
 
+	// matrix/hardened: a recent completed absence is repeated without a fork;
+	// KnownAbsent also honours the per-socket positive cache.
+	if s.KnownAbsent() {
+		return false
+	}
+
 	// Cache is stale (or skipped for an isolated socket): fall back to a
 	// direct tmux check on the session's own socket. Bound it: a server that
 	// is briefly busy can make the probe hang, and a probe that never answers
@@ -3328,6 +3346,13 @@ func (s *Session) Exists() bool {
 	// for WaitDelay to bound on the status hot path.
 	if err != nil && socketHasProtocolMismatch(s.SocketName) {
 		return true
+	}
+	// matrix/hardened: only a completed client exit seeds the absence memo.
+	var exitErr *exec.ExitError
+	if err == nil {
+		s.matrixNotePresent()
+	} else if errors.As(err, &exitErr) && exitErr.Exited() {
+		s.matrixNoteAbsent()
 	}
 	return err == nil
 }
@@ -3382,6 +3407,10 @@ func (s *Session) IsPaneDead() bool {
 	if info, ok := GetCachedPaneInfo(s.Name); ok {
 		return info.Dead
 	}
+	// matrix/hardened: no pane to query; same "not dead" answer as a failed probe.
+	if s.KnownAbsent() {
+		return false
+	}
 	// Cache miss: direct tmux check targeting the primary pane. Bound it the
 	// same way Exists() bounds has-session — a wedged tmux server must not hang
 	// this probe, since it runs under the notify-daemon's single-threaded poll
@@ -3409,6 +3438,10 @@ func (s *Session) IsPaneDead() bool {
 // pair to distinguish a clean exit (0) from a crash (non-zero) instead of
 // treating every terminated pane as an error.
 func (s *Session) PaneDeadExitStatus() (int, bool) {
+	// matrix/hardened: an absent session has no pane or exit status to read.
+	if s.KnownAbsent() {
+		return 0, false
+	}
 	// Bounded like IsPaneDead: this runs on the notify-daemon poll loop, so a
 	// wedged tmux server must not stall it.
 	ctx, cancel := context.WithTimeout(context.Background(), hasSessionProbeTimeout)
