@@ -249,10 +249,14 @@ type pendingTitle struct {
 // Home is the main application model
 type Home struct {
 	// matrix/hardened: local macOS input-source ownership follows UI focus.
-	inputMethod        inputMethodController
-	inputMethodFocused bool
-	inputMethodKnown   bool
-	inputMethodNav     bool
+	// inputMethodApplied records that the last sync actually reached the
+	// desired mode; an unapplied one is retried on inputMethodRetryMsg.
+	inputMethod            inputMethodController
+	inputMethodFocused     bool
+	inputMethodApplied     bool
+	inputMethodNav         bool
+	inputMethodRetries     int
+	inputMethodRetryQueued bool
 
 	// Dimensions
 	width  int
@@ -7630,6 +7634,11 @@ func (h *Home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return h, tea.Sequence(commands...)
 	}
+	// matrix/hardened: the input-method retry carries no model change; keep it
+	// out of updateInner so a pending switch cannot disturb the session view.
+	if _, ok := msg.(inputMethodRetryMsg); ok {
+		return h, h.syncInputMethod(msg)
+	}
 	if input := h.sessionInput; input != nil {
 		receipt := input.InputReceipt(msg)
 		defer input.FinishInput(receipt)
@@ -7640,7 +7649,11 @@ func (h *Home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return h, nil
 	}
 	model, cmd := h.updateInner(msg)
-	h.syncInputMethod(msg) // matrix/hardened: switch before the next input/attach.
+	// matrix/hardened: switch before the next input/attach, and carry the
+	// retry tick of a switch that could not run yet.
+	if imeCmd := h.syncInputMethod(msg); imeCmd != nil {
+		cmd = tea.Batch(cmd, imeCmd)
+	}
 	if !h.fullRepaint {
 		return model, cmd
 	}

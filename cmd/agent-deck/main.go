@@ -45,7 +45,7 @@ import (
 )
 
 // matrix/hardened: identifies our hardened build.
-var Version = "1.16.26+matrix.99" // matrix/hardened: comma directly toggles pin / unpin; overridden via -ldflags.
+var Version = "1.16.26+matrix.100" // matrix/hardened: comma directly toggles pin / unpin; overridden via -ldflags.
 
 // Table column widths for list command output
 const (
@@ -1336,6 +1336,8 @@ func main() {
 	// reports and shares the normal/error/signal terminal cleanup lifecycle.
 	if homeModel.ConfigureInputMethod() {
 		programOptions = append(programOptions, tea.WithReportFocus())
+		stopInputMethodTrace := startInputMethodTrace()
+		defer stopInputMethodTrace()
 	}
 	setEmbeddedTerminalCleanup(homeModel.RestoreInputMethod)
 	defer runEmbeddedTerminalCleanup()

@@ -3,16 +3,26 @@ package ui
 // matrix/hardened: model-level focus tests use a fake native controller.
 import (
 	"testing"
+	"time"
 
 	"github.com/asheshgoplani/agent-deck/internal/session"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-type fakeInputMethod struct{ modes []bool }
+type fakeInputMethod struct {
+	modes []bool
+	// matrix/hardened: deny reproduces a switch that cannot run yet (the
+	// terminal app is not foreground), which must stay retryable.
+	deny  bool
+	blurs int
+}
 
-func (f *fakeInputMethod) Sync(nav bool) { f.modes = append(f.modes, nav) }
-func (f *fakeInputMethod) Restore()      {}
-func (f *fakeInputMethod) Blur()         {}
+func (f *fakeInputMethod) Sync(nav bool) bool {
+	f.modes = append(f.modes, nav)
+	return !f.deny
+}
+func (f *fakeInputMethod) Restore() {}
+func (f *fakeInputMethod) Blur()    { f.blurs++ }
 
 func TestInputMethodModes(t *testing.T) {
 	h := &Home{}
@@ -160,5 +170,91 @@ func TestInputMethodConfiguredStartupWithoutFocusReport(t *testing.T) {
 	h.syncInputMethod(tea.WindowSizeMsg{})
 	if len(f.modes) != 1 {
 		t.Fatal("startup focus assumption overrode an actual blur report")
+	}
+}
+
+// matrix/hardened: a switch that could not run must be retried by the TUI
+// itself. In the list the IME swallows the next keystroke for composition, so
+// waiting for input would leave the list in a composing IME indefinitely.
+func TestInputMethodRetriesUnappliedSwitch(t *testing.T) {
+	f := &fakeInputMethod{deny: true}
+	h := &Home{inputMethod: f, inputMethodFocused: true}
+	cmd := h.syncInputMethod(tea.FocusMsg{})
+	if cmd == nil {
+		t.Fatal("unapplied switch scheduled no retry")
+	}
+	if h.inputMethodApplied {
+		t.Fatal("a denied switch was recorded as applied")
+	}
+	if msg := cmd(); msg != (inputMethodRetryMsg{}) {
+		t.Fatalf("retry command produced %T", msg)
+	}
+	// The retry itself runs the sync again even though nothing else changed.
+	if cmd = h.syncInputMethod(inputMethodRetryMsg{}); len(f.modes) != 2 {
+		t.Fatalf("retry did not re-sync: modes=%v", f.modes)
+	}
+	if cmd == nil {
+		t.Fatal("still-unapplied switch stopped retrying")
+	}
+	// Only one retry tick is outstanding at a time.
+	h.inputMethodRetryQueued = true
+	if again := h.syncInputMethod(tickMsg(time.Now())); again != nil {
+		t.Fatal("a second retry tick was queued while one was pending")
+	}
+	// Once it succeeds, the retry chain stops and refresh frames do no work.
+	f.deny = false
+	if h.syncInputMethod(inputMethodRetryMsg{}) != nil {
+		t.Fatal("applied switch kept the retry chain alive")
+	}
+	applied := len(f.modes)
+	if h.syncInputMethod(tea.WindowSizeMsg{}) != nil || len(f.modes) != applied {
+		t.Fatalf("refresh frame re-entered the native controller: modes=%v", f.modes)
+	}
+	if h.inputMethodRetries != 0 {
+		t.Fatalf("retry budget was not released: %d", h.inputMethodRetries)
+	}
+}
+
+// The retry burst is bounded: a terminal that stays in the background must not
+// keep the TUI awake forever. The regular tick keeps verifying after that.
+func TestInputMethodRetryBurstIsBounded(t *testing.T) {
+	f := &fakeInputMethod{deny: true}
+	h := &Home{inputMethod: f, inputMethodFocused: true}
+	h.syncInputMethod(tea.FocusMsg{})
+	for i := 0; i < inputMethodRetryBurst*2; i++ {
+		h.inputMethodRetryQueued = false
+		h.syncInputMethod(inputMethodRetryMsg{})
+	}
+	if h.inputMethodRetries != inputMethodRetryBurst {
+		t.Fatalf("retries=%d want=%d", h.inputMethodRetries, inputMethodRetryBurst)
+	}
+	if cmd := h.syncInputMethod(inputMethodRetryMsg{}); cmd != nil {
+		t.Fatal("exhausted burst kept scheduling retries")
+	}
+	// A real event earns a fresh budget.
+	h.syncInputMethod(tea.FocusMsg{})
+	if h.inputMethodRetries != 1 {
+		t.Fatalf("a focus report did not reset the retry budget: %d", h.inputMethodRetries)
+	}
+}
+
+// The periodic tick verifies the mode even with no event: the operator, another
+// app or a sibling tab can change the source behind the TUI's back.
+func TestInputMethodTickVerifiesMode(t *testing.T) {
+	f := &fakeInputMethod{}
+	h := &Home{inputMethod: f, inputMethodFocused: true}
+	h.syncInputMethod(tea.FocusMsg{})
+	before := len(f.modes)
+	h.syncInputMethod(tickMsg(time.Now()))
+	if len(f.modes) != before+1 {
+		t.Fatalf("tick skipped verification: modes=%v", f.modes)
+	}
+	h.syncInputMethod(tea.BlurMsg{})
+	h.syncInputMethod(tickMsg(time.Now()))
+	if len(f.modes) != before+1 {
+		t.Fatal("a blurred tab verified the desktop input source")
+	}
+	if f.blurs != 1 {
+		t.Fatalf("blur reports forwarded: %d", f.blurs)
 	}
 }

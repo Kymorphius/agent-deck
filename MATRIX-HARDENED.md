@@ -895,3 +895,12 @@ snapshots, compatibility, and validation boundaries.
 - 远程写入仍需所属主机 `session set` 加 `session show` 确认后更新显示；等待中的重复输入、旧轮询和旧主机结果沿用已有保护。
 - 帮助和快捷键参考同步更新；验证覆盖一次取消顶部/底部固定、重新置顶、排序后的选择保持、置顶视图空态、远程确认及编辑器三种位置。
 
+
+## 85. 输入法切换改为期望状态与自驱重试
+
+- **问题**：切换按"调用一次即生效"处理。`Sync()` 在终端应用还没被系统算作前台（窗口刚激活时终端的焦点上报可能早于前台切换）或原生选择被拒绝时直接空转返回，但 UI 层仍把这次当成已切换缓存下来（旧 `inputMethodKnown`/`inputMethodNav`）。此后只有按键、焦点或鼠标点击会重试——而列表里按下的那一下正好被中文输入法吃掉去组词，永远到不了 agent-deck，列表就一直停在中文。表现为间歇性"到列表还是中文输入"。
+- **matrix/hardened:** `matrix.100` 起控制器持有期望状态：`Sync(navigation) bool` 报告期望是否已生效，未生效即为待办并保持可重试；`acquire`/`restore` 分别判定"已经持有 ASCII"、"本来就是英文键盘"、"没有要还原的东西"为已达成。失败的尝试受 100ms 下限保护，不在每帧做原生调用；期望改变时立即执行，不受下限限制。
+- **matrix/hardened:** 未生效的切换由 TUI 自己重试：`inputMethodRetryMsg` 按 150ms 重试、最多 12 次（约 1.8 秒）覆盖窗口激活，同时只排一个待发节拍，真实事件或模式改变重置额度。之后由固定 2 秒 `tickMsg` 继续核对——输入源也可能在没有任何事件时被改掉（用户手动切、别的应用恢复偏好、同一终端另一个标签页接管），所以节拍核对的是当前模式本身，不只是模式切换。已处于期望模式时普通输出帧仍然零原生调用。
+- **matrix/hardened:** 失焦标签页行为不变：不碰桌面输入源，保留待还原的输入源等重新获得焦点；退出和信号清理丢掉导航期望，避免晚到的消息又去抢 ASCII。`AGENTDECK_IME_DEBUG=1`（或直接给路径）把每次决策写到 `logs/input-method.log`，默认关闭且不改变切换行为。
+- **改动地图**：`internal/inputmethod/controller.go`（期望状态、`apply`/`acquire`/`restore` 返回是否达成、重试下限）、`internal/inputmethod/debug.go`（新增，可关闭的决策追踪）、`internal/ui/matrix_input_method.go`（重试节拍、节拍核对、返回 `tea.Cmd`）、`internal/ui/home.go`（`inputMethodApplied`/`inputMethodRetries`/`inputMethodRetryQueued`，`Update` 合并重试命令并让重试消息绕过 `updateInner`）、`cmd/agent-deck/main.go` 与 `cmd/agent-deck/matrix_ime_debug.go`（按环境变量开启追踪）。
+- **测试**：`internal/inputmethod/controller_test.go`（待办尝试可重试、重试下限、失焦保留还原）、`internal/ui/matrix_input_method_test.go`（未生效排重试、重试额度有界、节拍核对与失焦不核对）；既有模式/焦点/归属测试保持通过。真实候选窗口仍需按 [输入法适配说明](docs/input-method.md) 的前台交互步骤验收。

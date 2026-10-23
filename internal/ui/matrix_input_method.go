@@ -3,13 +3,29 @@ package ui
 // matrix/hardened: use explicit UI focus instead of trying to infer modes from
 // terminal output. Text keeps the operator's IME; navigation uses raw keys.
 import (
+	"time"
+
 	"github.com/asheshgoplani/agent-deck/internal/inputmethod"
 	"github.com/asheshgoplani/agent-deck/internal/session"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+// matrix/hardened: a switch that could not run yet is retried on our own clock.
+// Waiting for the next keystroke cannot work in navigation mode, because the
+// IME consumes that key for composition before the TUI ever sees it. The
+// bounded burst covers window activation; the 2s tickMsg chain then keeps the
+// desired mode eventually consistent.
+const (
+	inputMethodRetryDelay = 150 * time.Millisecond
+	inputMethodRetryBurst = 12
+)
+
+// inputMethodRetryMsg re-runs an unapplied switch without touching the model.
+type inputMethodRetryMsg struct{}
+
 type inputMethodController interface {
-	Sync(navigation bool)
+	// Sync reports whether the requested mode is in effect.
+	Sync(navigation bool) bool
 	Restore()
 	Blur()
 }
@@ -48,11 +64,14 @@ func (h *Home) RestoreInputMethod() {
 	}
 }
 
-func (h *Home) syncInputMethod(msg tea.Msg) {
+// syncInputMethod reconciles the native input source with the current UI focus.
+// It returns a command when the desired mode is not in effect yet, so the TUI
+// retries on its own instead of waiting for input that the IME may swallow.
+func (h *Home) syncInputMethod(msg tea.Msg) tea.Cmd {
 	if h.inputMethod == nil {
-		return
+		return nil
 	}
-	force := false
+	force, verify := false, false
 	switch msg.(type) {
 	case tea.FocusMsg, tea.KeyMsg:
 		h.inputMethodFocused = true
@@ -67,16 +86,42 @@ func (h *Home) syncInputMethod(msg tea.Msg) {
 	case tea.BlurMsg:
 		h.inputMethodFocused = false
 		h.inputMethod.Blur()
+	case inputMethodRetryMsg:
+		h.inputMethodRetryQueued = false
+	case tickMsg:
+		// The source can also change without any event reaching us: the
+		// operator switches it by hand, another app restores its own
+		// preference, or a sibling tab takes over. Re-check on the regular
+		// tick so the list cannot sit in a composing IME indefinitely.
+		verify = true
 	}
-	if h.inputMethodFocused {
-		navigation := h.inputMethodNavigation()
-		// Output/refresh ticks can be frequent. Native work only accompanies
-		// real input, focus, or a mode transition, never each output frame.
-		if force || !h.inputMethodKnown || navigation != h.inputMethodNav {
-			h.inputMethod.Sync(navigation)
-			h.inputMethodKnown, h.inputMethodNav = true, navigation
-		}
+	if !h.inputMethodFocused {
+		return nil
 	}
+	navigation := h.inputMethodNavigation()
+	if force || navigation != h.inputMethodNav {
+		// A real event or a mode change earns a fresh retry budget.
+		h.inputMethodRetries = 0
+	}
+	// Output/refresh frames still do no native work while the desired mode is
+	// already in effect.
+	if !force && !verify && h.inputMethodApplied && navigation == h.inputMethodNav {
+		return nil
+	}
+	inputmethod.Trace("ui sync msg=%T nav=%v force=%v verify=%v applied=%v retries=%d",
+		msg, navigation, force, verify, h.inputMethodApplied, h.inputMethodRetries)
+	applied := h.inputMethod.Sync(navigation)
+	h.inputMethodNav, h.inputMethodApplied = navigation, applied
+	if applied {
+		h.inputMethodRetries = 0
+		return nil
+	}
+	if h.inputMethodRetryQueued || h.inputMethodRetries >= inputMethodRetryBurst {
+		return nil
+	}
+	h.inputMethodRetries++
+	h.inputMethodRetryQueued = true
+	return tea.Tick(inputMethodRetryDelay, func(time.Time) tea.Msg { return inputMethodRetryMsg{} })
 }
 
 func (h *Home) inputMethodNavigation() bool {
