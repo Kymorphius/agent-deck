@@ -1868,6 +1868,27 @@ func (s *StateDB) SetArchived(id string, at time.Time) error {
 	return s.touchWithRetry()
 }
 
+// ArchiveIfStatus archives id only while it is still unarchived and its
+// stored status is still status. matrix/hardened: auto-archive must lose any
+// race with a restart, a manual archive or an observed status change.
+func (s *StateDB) ArchiveIfStatus(id, status string, at time.Time) (bool, error) {
+	var changed int64
+	if err := withBusyRetry(func() error {
+		res, err := s.db.Exec("UPDATE instances SET archived_at = ? WHERE id = ? AND archived_at = 0 AND status = ?", archivedAtUnix(at), id, status)
+		if err != nil {
+			return err
+		}
+		changed, err = res.RowsAffected()
+		return err
+	}); err != nil {
+		return false, err
+	}
+	if changed == 0 {
+		return false, nil
+	}
+	return true, s.touchWithRetry()
+}
+
 // --- Heartbeat ---
 
 // RegisterInstance records this process as an active TUI instance.

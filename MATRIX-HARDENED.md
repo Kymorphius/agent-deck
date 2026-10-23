@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.101`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.102`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -917,3 +917,12 @@ snapshots, compatibility, and validation boundaries.
   - 查询通道的锚点排除 error 状态和已知不存在的会话；monitor 的调度把 error 状态和已知不存在的会话当作“不需截图”的探测，不放进截图小组（error 行只有确认复活后才会截图，那时单独截）。
 - **实测**（本机，143 个会话，其中 105 个 error、24 个 stopped，存活的 tmux 会话 14 个）：monitor 自身 CPU 从约 100–300% 降到个位数；`has-session` 从约 36 次/秒降到约 2 次/秒，并随退避继续下降；batch 从约 8 次/秒（几乎全部失败）降到不足 1 次/秒；查询通道连上并持续成功。
 - **测试**：`internal/tmux/matrix_absence_memo_test.go`（记忆不 fork、缓存复活、批量排除、`ProbeExists` 不读记忆、退避上限、改名和过期）；`internal/session/matrix_codex_rollout_cache_test.go`（结果与 Glob 一致，包括首个匹配、空通配、软链接日期目录；未变化的日期不重读；轮询间隔与 fresh 查询；删除和移动）；`internal/monitor/matrix_query_transport_test.go`（排在最前面的 error 行不会成为锚点；修复前能复现 `starts=0 successes=0`）。
+
+## 87. 自动归档长期失效的会话
+
+- **问题**：会话结束或出错后一直留在列表里（本机一度有 100 多个 error 行），挤占列表、搜索和网页菜单，还让真正的异常不显眼。
+- **matrix/hardened:** `matrix.102` 起新增 `[lifecycle] auto_archive = true`（默认关闭）和 `archive_after = "24h"`（1h–8760h，省略时 24h）。打开后，管理 TUI 或 headless Web 里的生命周期控制器每分钟检查一次：本地会话处于 error 或 stopped 状态、距最后使用（创建、访问、活动时间中最晚的一个）超过 `archive_after`，且相隔至少 50 秒的两次检查指纹一致（状态、tmux 名称、最后使用时间），并经 `ProbeExists` 确认 tmux 会话确实不存在，才会归档。
+- 只写 `archived_at`，写入条件是"仍未归档且状态仍是检查时的值"（`StateDB.ArchiveIfStatus`），所以重启、手动归档或状态变化都会让这次归档落空。会话本身、对话 ID 和各项字段都保留。置顶、conductor、SSH、沙箱以及带自动休眠状态的会话从不归档。控制器单独持有 `auto-archive-<profile>.lock`，和自动休眠互不影响。
+- **复活**：TUI 按 `^` 进入归档视图，选中后按 `Shift+U` 取消归档，再正常打开或重启；命令行用 `agent-deck session unarchive <id|标题>`。
+- **改动地图**：`internal/session/matrix_auto_archive.go`（新增）、`internal/session/matrix_sleep_controller.go`（同一个每分钟循环，`tryLifecycleLease`）、`internal/session/userconfig_lifecycle.go`、`internal/session/config_keys.go`、`internal/statedb/statedb.go`（`ArchiveIfStatus`）。
+- **测试**：`internal/session/matrix_auto_archive_test.go`（确认间隔、竞争下的状态变化、置顶/conductor/SSH/休眠/最近使用/仍存活都不归档、已归档不重复、时长边界）。

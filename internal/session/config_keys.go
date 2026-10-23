@@ -43,6 +43,18 @@ var configKeys = []ConfigKey{
 			return c.Lifecycle.SleepAfter
 		},
 		set: func(c *UserConfig, v any) { c.Lifecycle.SleepAfter = v.(string) }},
+	// matrix/hardened: archiving only hides a dead session; unarchive restores it.
+	{Key: "lifecycle.auto_archive", Section: "Sessions", Label: "Archive dead sessions", Help: "Hide local sessions that stayed in error or stopped without use; unarchive restores them", Type: "bool",
+		get: func(c *UserConfig) any { return c.Lifecycle.AutoArchive },
+		set: func(c *UserConfig, v any) { c.Lifecycle.AutoArchive = v.(bool) }},
+	{Key: "lifecycle.archive_after", Section: "Sessions", Label: "Archive after", Help: "Time since last use of a dead session, from 1h to 8760h (default 24h)", Type: "string",
+		get: func(c *UserConfig) any {
+			if c.Lifecycle.ArchiveAfter == "" {
+				return "24h"
+			}
+			return c.Lifecycle.ArchiveAfter
+		},
+		set: func(c *UserConfig, v any) { c.Lifecycle.ArchiveAfter = v.(string) }},
 	// matrix/hardened: this collector switch is shared by CLI and hook paths.
 	{Key: "costs.auto_collect", Section: "Costs", Label: "Automatic collection", Help: "Collect transcript usage in the background; default off. Run costs sync for a manual update. Reload Agent Deck management windows after changing this setting.", Type: "bool", RestartRequired: true,
 		get: func(c *UserConfig) any { return c.Costs.GetAutoCollect() },
@@ -338,6 +350,11 @@ func SetConfigValue(name, raw string) (ConfigKey, any, error) {
 	// matrix/hardened: reject a bad grace period before changing the file.
 	if k.Key == "lifecycle.sleep_after" {
 		if _, err := cfg.Lifecycle.SleepDuration(); err != nil {
+			return k, nil, err
+		}
+	}
+	if k.Key == "lifecycle.archive_after" {
+		if _, err := cfg.Lifecycle.ArchiveDuration(); err != nil {
 			return k, nil, err
 		}
 	}

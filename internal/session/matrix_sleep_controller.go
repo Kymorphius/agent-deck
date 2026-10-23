@@ -20,17 +20,20 @@ func RunAutoSleepController(ctx context.Context, profile string) {
 		return
 	}
 	var storage *Storage
-	var lease *os.File
+	var lease, archiveLease *os.File
 	defer func() {
 		if storage != nil {
 			_ = storage.Close()
 		}
-		if lease != nil {
-			_ = syscall.Flock(int(lease.Fd()), syscall.LOCK_UN)
-			_ = lease.Close()
+		for _, f := range []*os.File{lease, archiveLease} {
+			if f != nil {
+				_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+				_ = f.Close()
+			}
 		}
 	}()
 	watcher := NewAutoSleepWatcher(AutoSleepWatcherConfig{})
+	archiver := NewAutoArchiveWatcher(AutoArchiveWatcherConfig{})
 	timer := time.NewTimer(time.Minute)
 	defer timer.Stop()
 	for {
@@ -61,6 +64,23 @@ func RunAutoSleepController(ctx context.Context, profile string) {
 				// Unknown/disabled policy breaks the continuous observation window.
 				watcher = NewAutoSleepWatcher(AutoSleepWatcherConfig{})
 			}
+			// matrix/hardened: auto-archive has its own opt-in and lease.
+			if err == nil && cfg != nil && cfg.Lifecycle.AutoArchive {
+				after, archiveErr := cfg.Lifecycle.ArchiveDuration()
+				if archiveErr == nil && archiveLease == nil {
+					archiveLease, archiveErr = tryLifecycleLease(profile, "auto-archive")
+				}
+				if archiveErr == nil && archiveLease != nil && storage == nil {
+					storage, archiveErr = NewStorageWithProfile(profile)
+				}
+				if archiveErr == nil && archiveLease != nil {
+					if instances, loadErr := storage.Load(); loadErr == nil {
+						archiver.Tick(ctx, storage, instances, after)
+					}
+				}
+			} else {
+				archiver = NewAutoArchiveWatcher(AutoArchiveWatcherConfig{})
+			}
 			timer.Reset(time.Minute)
 		}
 	}
@@ -69,6 +89,10 @@ func RunAutoSleepController(ctx context.Context, profile string) {
 // matrix/hardened: a nonblocking per-profile lock prevents multiple TUI/Web
 // hosts from multiplying probes or stopping the same instance.
 func tryAutoSleepLease(profile string) (*os.File, error) {
+	return tryLifecycleLease(profile, "auto-sleep")
+}
+
+func tryLifecycleLease(profile, kind string) (*os.File, error) {
 	dir, err := resolveLocksDirForSpawnLock()
 	if err != nil {
 		return nil, err
@@ -76,7 +100,7 @@ func tryAutoSleepLease(profile string) (*os.File, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
-	path := filepath.Join(dir, "auto-sleep-"+spawnLockSafeID(profile)+".lock")
+	path := filepath.Join(dir, kind+"-"+spawnLockSafeID(profile)+".lock")
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|syscall.O_NOFOLLOW, 0o600)
 	if err != nil {
 		return nil, err
@@ -84,11 +108,11 @@ func tryAutoSleepLease(profile string) (*os.File, error) {
 	info, err := f.Stat()
 	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
 		_ = f.Close()
-		return nil, fmt.Errorf("unsafe auto-sleep lease")
+		return nil, fmt.Errorf("unsafe %s lease", kind)
 	}
 	if st, ok := info.Sys().(*syscall.Stat_t); !ok || st.Nlink != 1 || int(st.Uid) != os.Getuid() {
 		_ = f.Close()
-		return nil, fmt.Errorf("unsafe auto-sleep lease ownership")
+		return nil, fmt.Errorf("unsafe %s lease ownership", kind)
 	}
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		_ = f.Close()
