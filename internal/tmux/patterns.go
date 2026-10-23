@@ -81,7 +81,9 @@ func DefaultRawPatterns(toolName string) *RawPatterns {
 				"esc to interrupt",
 				"press esc to interrupt",
 			},
-			PromptPatterns: []string{"How can I help", "codex>", "Continue?", `re:(?m)^\s*›\s`},
+			// matrix/hardened: Match both regular and Vim composers, including
+			// the bare glyph; preserve the existing whitespace compatibility.
+			PromptPatterns: []string{"How can I help", "codex>", "Continue?", `re:(?m)^\s*[›»](?:\s|$)`},
 		}
 	case "codewhale":
 		// codewhale CLI (deepseek-v4-pro TUI, #1577). The codex preset's
@@ -367,7 +369,7 @@ type codexLine struct {
 // Newest signal wins (review P1-2, the same rule the Claude scans apply): the
 // walk goes up from the bottom and stops at the first line that proves the
 // session continued after any banner above it — a submitted prompt ("› text"
-// above the composer, which is always the bottom-most "›" line), an
+// above the composer, which is always the bottom-most › or » line), an
 // assistant/tool line ("• …"), or a live busy cue anywhere in the tail. A
 // banner sitting directly above the composer is still an error.
 //
@@ -390,10 +392,13 @@ func scanCodexErrorBanner(content string) (kind, detail string) {
 	seenComposer := false
 	for i := len(recent) - 1; i >= 0; i-- {
 		line := recent[i].text
+		// matrix/hardened: Recognize Vim's current composer before checking
+		// older transcript › submissions, which clear historical banners.
+		composerText, composer := codexComposerText(line)
 		switch {
-		case strings.HasPrefix(line, codexPromptGlyph):
-			text := strings.TrimSpace(strings.TrimPrefix(line, codexPromptGlyph))
-			if seenComposer && text != "" && !strings.HasPrefix(text, codexComposerPlaceholder) {
+		case composer:
+			text := strings.TrimSpace(composerText)
+			if seenComposer && strings.HasPrefix(line, codexPromptGlyph) && text != "" && !strings.HasPrefix(text, codexComposerPlaceholder) {
 				return "", "" // a later turn was submitted; anything above is history
 			}
 			seenComposer = true
@@ -408,7 +413,8 @@ func scanCodexErrorBanner(content string) (kind, detail string) {
 		case containsAny(lower, codexUsageLimitBannerPatterns):
 			banner := line
 			for j := i + 1; j < len(recent); j++ {
-				if strings.HasPrefix(recent[j].text, codexErrorBannerPrefix) || strings.HasPrefix(recent[j].text, codexPromptGlyph) {
+				_, composer := codexComposerText(recent[j].text)
+				if strings.HasPrefix(recent[j].text, codexErrorBannerPrefix) || composer {
 					break
 				}
 				banner += " " + recent[j].text

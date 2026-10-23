@@ -104,6 +104,36 @@ func TestCodexNoHooks_BusyPaneStillRunsInFreshProcess(t *testing.T) {
 	}
 }
 
+// matrix/hardened: A one-pass remote list/show process has no earlier live
+// sample or hooks to correct a missed Vim composer boundary.
+func TestMatrixCodexNoHooksVimFreshCLIStatus(t *testing.T) {
+	const footer = "» Ask Codex to do anything\n\n  GPT-6-Astra · ~/example · Main [default]\n  ? for shortcuts\n"
+	for _, tc := range []struct {
+		name, frame string
+		persisted   Status
+		want        Status
+	}{
+		{"busy", "› inspect the example\n\n• Completed the previous step.\n\n" +
+			"Checking environment setup (5m 09s • esc to interrupt)\n" +
+			"  └ Tip: Use /vim to toggle Vim editing in the composer.\n\n" + footer, StatusWaiting, StatusRunning},
+		{"idle", footer, StatusRunning, StatusWaiting},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			inst, cleanup := startCodexPaneInstance(t, "vim-"+tc.name, tc.frame)
+			defer cleanup()
+			storage, err := NewStorageWithProfile("_test-codex-vim-" + tc.name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer storage.Close()
+			fresh := persistAndReload(t, storage, inst, tc.persisted)
+			if got, _ := cliPass(t, fresh); got != tc.want {
+				t.Fatalf("fresh CLI status = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // The one-tick hold is kept where it can be confirmed: a process that saw
 // running itself holds the first idle sample and flips on the second.
 func TestCodexNoHooks_InProcessHoldStillConfirmsOnSecondSample(t *testing.T) {

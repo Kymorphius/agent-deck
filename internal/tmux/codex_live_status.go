@@ -11,8 +11,23 @@ import (
 // after it (")…", ") …", ") ·…").
 var codexStatusLineRe = regexp.MustCompile(`^(?:[•◦]\s+)?\p{Lu}.*\((?:\d+[hms]\s*)+[•·]\s*(?:esc|ctrl ?\+ ?c) to interrupt(?:\)(?: · .*| ?·?…)?|…)$`)
 
+// matrix/hardened: Codex's Vim composer uses » while transcript prompts keep
+// ›. Share the marker boundary, including empty composers. Live busy detection
+// passes untrimmed rows to preserve its column-zero provenance check.
+func codexComposerText(line string) (string, bool) {
+	for _, glyph := range []string{codexPromptGlyph, "»"} {
+		if line == glyph {
+			return "", true
+		}
+		if text, ok := strings.CutPrefix(line, glyph+" "); ok {
+			return text, true
+		}
+	}
+	return "", false
+}
+
 // codexLiveStatusLine reports whether a Codex frame shows the live status
-// line in its live slot immediately before the "› " composer, with only
+// line in its live slot immediately before the › or » composer, with only
 // blank lines and status details between the two.
 //
 // Codex draws that line four to six rows above the bottom (composer and
@@ -32,7 +47,7 @@ func codexLiveStatusLine(content string) bool {
 	lines := lastNLines(content, 60)
 	composer := -1
 	for i := len(lines) - 1; i >= 0; i-- {
-		if strings.HasPrefix(lines[i], "› ") {
+		if _, ok := codexComposerText(lines[i]); ok {
 			composer = i
 			break
 		}

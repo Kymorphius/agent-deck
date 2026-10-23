@@ -100,7 +100,7 @@ func TestDefaultRawPatterns_Codex_PromptRegex(t *testing.T) {
 		t.Fatalf("unexpected compile error: %v", err)
 	}
 
-	// The › regex should match Codex's actual prompt format
+	// matrix/hardened: Both composer styles retain whitespace compatibility.
 	tests := []struct {
 		content string
 		want    bool
@@ -108,6 +108,12 @@ func TestDefaultRawPatterns_Codex_PromptRegex(t *testing.T) {
 		{"› Run /review on my current changes", true},
 		{"  › ", true},
 		{"› ", true},
+		{"›", true},
+		{"» Ask Codex to do anything", true},
+		{"» draft", true},
+		{"»", true},
+		{"  » Ask Codex to do anything", true},
+		{"»quoted", false},
 		{"some output without marker", false},
 		{"codex>", false}, // matched by string pattern, not regex
 	}

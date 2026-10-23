@@ -79,7 +79,7 @@ func (d *PromptDetector) HasPrompt(content string) bool {
 			strings.Contains(content, "How can I help") {
 			return true
 		}
-		// Codex uses › (U+203A) as its prompt marker, similar to Claude's ❯.
+		// matrix/hardened: Codex uses ›, or » with Vim editing enabled.
 		// The prompt appears as "› suggestion text" near the bottom of the pane
 		// with a status bar (model · path · branch · usage) below it.
 		return d.hasCodexPromptMarker(content)
@@ -553,7 +553,7 @@ func hasAnyPrefix(s string, prefixes []string) bool {
 	return false
 }
 
-// hasCodexPromptMarker detects the › (U+203A) prompt marker used by Codex CLI.
+// hasCodexPromptMarker detects the › (U+203A) or » (U+00BB) Codex composer.
 // Codex renders its prompt as:
 //
 //	› Run /review on my current changes
@@ -572,9 +572,9 @@ func (d *PromptDetector) hasCodexPromptMarker(content string) bool {
 		}
 	}
 	for _, line := range lastLines {
-		clean := strings.TrimSpace(StripANSI(line))
-		if clean == "›" || clean == "› " ||
-			strings.HasPrefix(clean, "› ") {
+		// matrix/hardened: Recognize both composer styles while retaining
+		// the prompt detector's existing whitespace/ANSI compatibility.
+		if _, ok := codexComposerText(strings.TrimSpace(StripANSI(line))); ok {
 			return true
 		}
 	}

@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.102`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.106`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -66,7 +66,7 @@
 - `internal/session/claude_hooks.go`：`isAgentDeckHookCommand` 的判断规则：先去掉开头的 `VAR=值`，再要求第二个词是 `hook-handler`、程序名的文件名部分是 `agent-deck`。`RemoveClaudeHooks` 会扫描全部事件，并做 UTC 时间戳备份（约 387–414 行）。
 - `cmd/agent-deck/main.go`（约 4845、5070 行）：`agent-deck uninstall` 会移除这些钩子。`uninstall.sh` 第 253 行附近的 jq 过滤用的是同一套规则（正则），写回时用 `cat >` 保持软链接和权限。
 
-**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.99`。
+**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.106`。
 
 **测试**：以 `_hardened_test.go` 结尾的文件、`update_check_disable_test.go`、`update_timer_wiring_test.go` 等是新增或调整过的测试；`testdata/goldens/*` 里的快照已经按加固后的输出更新。
 
@@ -949,3 +949,9 @@ snapshots, compatibility, and validation boundaries.
 - **matrix/hardened:** 施加时机是"文字输入获得焦点"，不是持续施加：普通按键和刷新节拍都不重新施加，因此操作者在输入框里自己切成英文后不会被改回去；只有重新获得键盘焦点（`tea.FocusMsg`，从别的应用或标签页切回）才按策略再切一次。文字输入框里已有输入法时不替换、只记住。导航态仍然每个节拍持续核对 ASCII。退出与信号清理只交还拿走的输入源，不会在退出时选中输入法。
 - **改动地图**：`internal/inputmethod/native_darwin.{h,m,go}`（`deck_text_sources` 枚举候选）、`internal/inputmethod/controller.go`（`textPolicy`、`applyTextSource`、`resolveTextSource`、`Sync(navigation, reassert)`、退出路径不施加策略）、`internal/inputmethod/owner_state.go`（记住的输入法读写）、`internal/ui/matrix_input_method.go`（只有焦点回来才 reassert，构造时传入策略）、`internal/session/userconfig.go` 与 `config_keys.go`（新配置键）。
 - **测试**：`internal/inputmethod/controller_test.go`（策略选中、打字不覆盖操作者选择、焦点回来重新施加、导航循环、已有输入法只记住、默认关闭、多候选不猜、记住后可决定、显式 id、退出不选中）、`internal/ui/matrix_input_method_test.go`（只有 FocusMsg 触发 reassert）。
+
+## 91. Codex Vim 输入框的运行状态
+
+- **问题**：Codex 启用 Vim 编辑时，当前输入框使用 `»`，已提交的历史消息仍使用 `›`。状态检测只识别后者，会把历史消息当成当前输入框，漏掉正在执行的状态行，或把历史中的忙碌状态误认为当前状态。
+- **matrix/hardened:** `matrix.106` 统一识别 `›` 和 `»` 输入框，兼容空输入框、占位文字及草稿；运行状态仍仅匹配列首输入框，输入就绪保持原有缩进兼容，错误横幅仍只由已提交的 `›` 消息清除。保留引述、缩进输出及历史状态的误判保护，不改刷新周期或安装钩子。
+- **测试**：简化脱敏的 Vim 忙碌/空闲帧、草稿、历史状态、引述输出及错误横幅边界；合成帧在真实 tmux pane 的 `GetStatus` 与无 hook 的单次 CLI 状态刷新。使用第 4 节隔离入口；部署需更新远端程序与实际采集进程，AI 会话本身不需重启。
