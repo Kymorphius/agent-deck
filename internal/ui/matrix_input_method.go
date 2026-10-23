@@ -45,15 +45,23 @@ var createInputMethodController = func() inputMethodController {
 // to be foreground, and subsequent terminal blur reports revoke this focus.
 func (h *Home) ConfigureInputMethod() bool {
 	config, err := session.LoadUserConfig()
-	if err != nil || !config.UI.AutoInputMethod {
+	if err != nil {
+		inputmethod.Trace("not configured: reading the user config failed: %v", err)
+		return false
+	}
+	if !config.UI.AutoInputMethod {
+		inputmethod.Trace("not configured: ui.auto_input_method is off")
 		return false
 	}
 	controller := createInputMethodController()
 	if controller == nil {
+		// The native backend already traced why it is unavailable.
+		inputmethod.Trace("not configured: no native controller")
 		return false
 	}
 	h.inputMethod = controller
 	h.inputMethodFocused = true
+	inputmethod.Trace("configured: assuming keyboard focus until a blur report")
 	return true
 }
 

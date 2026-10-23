@@ -45,7 +45,7 @@ import (
 )
 
 // matrix/hardened: identifies our hardened build.
-var Version = "1.16.26+matrix.100" // matrix/hardened: comma directly toggles pin / unpin; overridden via -ldflags.
+var Version = "1.16.26+matrix.103" // matrix/hardened: comma directly toggles pin / unpin; overridden via -ldflags.
 
 // Table column widths for list command output
 const (
@@ -1334,10 +1334,13 @@ func main() {
 	programOptions := []tea.ProgramOption{tea.WithAltScreen()}
 	// matrix/hardened: the local IME controller requires terminal-tab focus
 	// reports and shares the normal/error/signal terminal cleanup lifecycle.
+	// Start the trace before configuring, so a refused configuration (feature
+	// off, SSH, no owning terminal app) is recorded instead of silently
+	// leaving the IME untouched.
+	stopInputMethodTrace := startInputMethodTrace()
+	defer stopInputMethodTrace()
 	if homeModel.ConfigureInputMethod() {
 		programOptions = append(programOptions, tea.WithReportFocus())
-		stopInputMethodTrace := startInputMethodTrace()
-		defer stopInputMethodTrace()
 	}
 	setEmbeddedTerminalCleanup(homeModel.RestoreInputMethod)
 	defer runEmbeddedTerminalCleanup()

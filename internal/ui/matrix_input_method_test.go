@@ -2,9 +2,12 @@ package ui
 
 // matrix/hardened: model-level focus tests use a fake native controller.
 import (
+	"bytes"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/asheshgoplani/agent-deck/internal/inputmethod"
 	"github.com/asheshgoplani/agent-deck/internal/session"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -256,5 +259,43 @@ func TestInputMethodTickVerifiesMode(t *testing.T) {
 	}
 	if f.blurs != 1 {
 		t.Fatalf("blur reports forwarded: %d", f.blurs)
+	}
+}
+
+// matrix/hardened: a refused configuration must leave a trace. "Silently off"
+// is indistinguishable from "switching is broken" when looking at the desktop.
+func TestInputMethodTracesRefusedConfiguration(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("HOME", root)
+	t.Setenv("XDG_CONFIG_HOME", root)
+	session.ClearUserConfigCache()
+	t.Cleanup(session.ClearUserConfigCache)
+	if err := session.SaveUserConfig(&session.UserConfig{}); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	inputmethod.SetDebugWriter(&buf)
+	t.Cleanup(func() { inputmethod.SetDebugWriter(nil) })
+	h := &Home{}
+	if h.ConfigureInputMethod() {
+		t.Fatal("the disabled default was configured")
+	}
+	if got := buf.String(); !strings.Contains(got, "auto_input_method is off") {
+		t.Fatalf("refusal was not traced: %q", got)
+	}
+	// A configured controller records that it starts out assuming focus.
+	buf.Reset()
+	if err := session.SaveUserConfig(&session.UserConfig{UI: session.UISettings{AutoInputMethod: true}}); err != nil {
+		t.Fatal(err)
+	}
+	session.ClearUserConfigCache()
+	previous := createInputMethodController
+	createInputMethodController = func() inputMethodController { return &fakeInputMethod{} }
+	t.Cleanup(func() { createInputMethodController = previous })
+	if !h.ConfigureInputMethod() {
+		t.Fatal("explicitly enabled input method was not configured")
+	}
+	if got := buf.String(); !strings.Contains(got, "configured") {
+		t.Fatalf("configuration was not traced: %q", got)
 	}
 }

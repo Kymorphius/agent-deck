@@ -926,3 +926,10 @@ snapshots, compatibility, and validation boundaries.
 - **复活**：TUI 按 `^` 进入归档视图，选中后按 `Shift+U` 取消归档，再正常打开或重启；命令行用 `agent-deck session unarchive <id|标题>`。
 - **改动地图**：`internal/session/matrix_auto_archive.go`（新增）、`internal/session/matrix_sleep_controller.go`（同一个每分钟循环，`tryLifecycleLease`）、`internal/session/userconfig_lifecycle.go`、`internal/session/config_keys.go`、`internal/statedb/statedb.go`（`ArchiveIfStatus`）。
 - **测试**：`internal/session/matrix_auto_archive_test.go`（确认间隔、竞争下的状态变化、置顶/conductor/SSH/休眠/最近使用/仍存活都不归档、已归档不重复、时长边界）。
+
+## 88. 输入法功能被静默关闭时留下痕迹
+
+- **问题**：`New()` 返回 nil 时整个功能直接关闭且毫无痕迹——SSH 会话、非 cgo 构建，以及进程祖先链里找不到 `.app/Contents/MacOS/` 可执行文件（TUI 跑在 tmux 里，或终端会话服务被 launchd 收养后 app 身份不在链上）。从桌面上看，"功能没开"和"切换坏了"完全无法区分，重启后尤其容易混淆。
+- **matrix/hardened:** `matrix.103` 起 `AGENTDECK_IME_DEBUG` 的追踪在配置之前就打开，并记录拒绝原因：SSH 会话、无 cgo、祖先链里没有终端应用（附 ppid）、`ui.auto_input_method` 关闭、读配置失败；成功时记录归属的终端应用 pid 和"先按已聚焦初始化"。默认仍然关闭，不改变任何切换行为。
+- 祖先链里没有终端应用时仍然不接管输入源：前台判定无法限定到这个终端，接管会影响别的应用。这条限制不变，只是现在可诊断。
+- **测试**：`internal/inputmethod/debug_test.go`（追踪开关、SSH 拒绝原因）、`internal/ui/matrix_input_method_test.go`（关闭开关与成功配置各自留痕）。

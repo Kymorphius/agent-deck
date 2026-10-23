@@ -23,12 +23,18 @@ func nativeParentPID(pid int) int { return int(C.deck_parent_pid(C.int(pid))) }
 func newBackend() backend {
 	// Never let a remote TUI change the host Mac's desktop input source.
 	if os.Getenv("SSH_CONNECTION") != "" || os.Getenv("SSH_TTY") != "" {
+		trace("backend unavailable: ssh session")
 		return nil
 	}
 	owner := C.deck_terminal_owner()
 	if owner == 0 {
+		// Nothing in the ancestry lives in an app bundle: a tmux server or a
+		// terminal-session server adopted by launchd hides the owning app, so
+		// foreground checks could not be scoped to this terminal.
+		trace("backend unavailable: no terminal app in the process ancestry (ppid=%d)", os.Getppid())
 		return nil
 	}
+	trace("backend ready: terminal app pid=%d", int(owner))
 	return &nativeBackend{owner: owner}
 }
 
