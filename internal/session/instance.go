@@ -5355,7 +5355,13 @@ func (i *Instance) Start() error {
 
 // matrix/hardened: RestartFresh passes its already admitted launch while holding
 // the spawn lock, so teardown cannot be followed by a second budget charge.
-func (i *Instance) startWithClaudeAdmission(admission *claudeLaunchAdmission, lockHeld bool) (returnErr error) {
+func (i *Instance) startWithClaudeAdmission(admission *claudeLaunchAdmission, lockHeld bool) error {
+	return i.startWithClaudeAdmissionAndExactResume(admission, lockHeld, nil)
+}
+
+// matrix/hardened: explicit remote recovery pins a validated native resume;
+// ordinary Start and automatic sleep retain their existing launch contracts.
+func (i *Instance) startWithClaudeAdmissionAndExactResume(admission *claudeLaunchAdmission, lockHeld bool, exact *exactCodexResumePlan) (returnErr error) {
 	// matrix/hardened: exact sleep identity cannot degrade to a fresh/fork launch.
 	if i.hasAutoSleepState() {
 		if err := validateAutoSleepResume(i); err != nil {
@@ -5516,6 +5522,16 @@ func (i *Instance) startWithClaudeAdmission(admission *claudeLaunchAdmission, lo
 		// Record start time for session ID detection (Unix millis)
 		i.OpenCodeStartedAt = time.Now().UnixMilli()
 	case IsCodexCompatible(i.Tool):
+		// matrix/hardened: this path can neither drop the binding nor fork.
+		if exact != nil {
+			var err error
+			command, err = exact.command(i)
+			if err != nil {
+				return err
+			}
+			i.CodexStartedAt = time.Now().UnixMilli()
+			break
+		}
 		if i.IsForkAwaitingStart {
 			command = i.consumeForkStartCommand()
 			// Stamp the start time so the session-id disk scan is lower-bounded and
@@ -5686,13 +5702,15 @@ func (i *Instance) startWithClaudeAdmission(admission *claudeLaunchAdmission, lo
 	// sandbox and non-sandbox sessions). This replaces the previous approach of embedding
 	// "tmux set-environment" calls in the shell command string, which silently failed
 	// inside Docker sandbox containers that have no access to the host tmux socket.
-	if i.ClaudeSessionID != "" {
+	// matrix/hardened: exact Codex recovery must not propagate stale bindings
+	// from another provider or run Claude's duplicate-session teardown.
+	if i.ClaudeSessionID != "" && exact == nil {
 		_ = i.tmuxSession.SetEnvironment("CLAUDE_SESSION_ID", i.ClaudeSessionID)
 		// Kill any other agentdeck tmux session with the same Claude session ID
 		// to prevent duplicates running `claude --resume` with the same conversation (#596).
 		tmux.KillSessionsWithEnvValue("CLAUDE_SESSION_ID", i.ClaudeSessionID, i.tmuxSession.Name)
 	}
-	if i.GeminiSessionID != "" {
+	if i.GeminiSessionID != "" && exact == nil {
 		_ = i.tmuxSession.SetEnvironment("GEMINI_SESSION_ID", i.GeminiSessionID)
 	}
 	if i.Tool == "gemini" {
@@ -5705,7 +5723,7 @@ func (i *Instance) startWithClaudeAdmission(admission *claudeLaunchAdmission, lo
 	// OpenCode and Codex IDs are detected asynchronously; SyncSessionIDsToTmux() handles
 	// propagation once they are available.
 	// Copilot session ID propagation (if already known from prior session)
-	if i.CopilotSessionID != "" {
+	if i.CopilotSessionID != "" && exact == nil {
 		_ = i.tmuxSession.SetEnvironment("COPILOT_SESSION_ID", i.CopilotSessionID)
 	}
 
@@ -5743,7 +5761,7 @@ func (i *Instance) startWithClaudeAdmission(admission *claudeLaunchAdmission, lo
 
 	// Start async session ID detection for Codex
 	// This runs in background and captures the session ID once Codex creates it
-	if IsCodexCompatible(i.Tool) {
+	if IsCodexCompatible(i.Tool) && exact == nil {
 		go i.detectCodexSessionAsync()
 	}
 

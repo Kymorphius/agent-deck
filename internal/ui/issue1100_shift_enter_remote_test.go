@@ -72,6 +72,10 @@ profile = "work"
 // host, binary path, profile, and remote session id.
 func TestIssue1100_HomeDispatch_ShiftEnterRemoteCallsLauncher(t *testing.T) {
 	home := armHomeWithOneRemoteSession(t)
+	// matrix/hardened: the launcher follows server-authoritative prepare.
+	home.matrixRemoteOpenRunner = func(string, session.RemoteConfig) matrixRemoteOpenRunner {
+		return &matrixFakeOpenRunner{result: session.RemoteOpenResult{ID: "remote-id-xyz", Disposition: "existing", Status: "waiting"}}
+	}
 
 	var called bool
 	var captured terminal.AttachRequest
@@ -82,7 +86,11 @@ func TestIssue1100_HomeDispatch_ShiftEnterRemoteCallsLauncher(t *testing.T) {
 	}
 
 	keyMsg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{shiftEnterMarker}}
-	_, _ = home.handleMainKey(keyMsg)
+	_, cmd := home.handleMainKey(keyMsg)
+	if cmd == nil || called {
+		t.Fatal("remote window must prepare before launching")
+	}
+	home.applyMatrixRemoteOpen(cmd().(matrixRemoteOpenMsg))
 
 	if !called {
 		t.Fatal("Shift+Enter on remote session did NOT call the new-window launcher (the #1100a regression)")

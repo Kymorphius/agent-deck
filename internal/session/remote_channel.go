@@ -525,6 +525,14 @@ func (r *SSHRunner) dialRemoteAgent(ctx context.Context) (io.WriteCloser, io.Rea
 // Connected reports whether requests can go over the channel right now.
 func (c *RemoteChannel) Connected() bool { return c.up.Load() }
 
+// ConnectionGeneration identifies a transport lifetime without exposing its
+// internals. matrix/hardened: late UI opening replies must not cross reconnects.
+func (c *RemoteChannel) ConnectionGeneration() uint64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.gen
+}
+
 // Close takes the channel down for good: the transport is torn down, requests
 // in flight fail, nothing waiting in the mailbox for this remote is
 // delivered, and there is no redial.

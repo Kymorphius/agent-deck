@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agent-deck/session.prepare-open/v1/in",
+  "title": "session.prepare-open input",
+  "type": "object",
+  "properties": {
+    "profile": {
+      "type": "string"
+    },
+    "session": {
+      "description": "Full session ID to open",
+      "type": "string"
+    }
+  },
+  "required": [
+    "profile",
+    "session"
+  ],
+  "additionalProperties": false
+}

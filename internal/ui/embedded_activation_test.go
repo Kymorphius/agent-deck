@@ -23,6 +23,10 @@ func doubleClickRow(t *testing.T, home *Home, y int) *Home {
 }
 
 func TestEmbeddedDoubleClickActivatesRemoteRow(t *testing.T) {
+	// matrix/hardened: remote opening now prepares asynchronously before PTY/input entry.
+	withTempAgentDeckHome(t, `[remotes.lab]
+host = "alice@lab.example"
+`)
 	remote := &session.RemoteSessionInfo{ID: "remote-1", Title: "lab-claude", Status: "running", Tool: "claude"}
 	items := []session.Item{
 		{Type: session.ItemTypeRemoteSession, RemoteSession: remote, RemoteName: "lab", Level: 1},
@@ -33,7 +37,16 @@ func TestEmbeddedDoubleClickActivatesRemoteRow(t *testing.T) {
 		return &fakeInsertKeySender{}, nil
 	}
 
-	home = doubleClickRow(t, home, home.getListContentStartY())
+	home.matrixRemoteOpenRunner = func(string, session.RemoteConfig) matrixRemoteOpenRunner {
+		return &matrixFakeOpenRunner{result: session.RemoteOpenResult{ID: "remote-1", Disposition: "existing", Status: "running"}}
+	}
+	click := tea.MouseMsg{X: 5, Y: home.getListContentStartY(), Button: tea.MouseButtonLeft, Action: tea.MouseActionPress}
+	_, _ = home.handleMouse(click)
+	_, cmd := home.handleMouse(click)
+	if cmd == nil || home.embeddedMode {
+		t.Fatal("double-click must prepare before remote entry")
+	}
+	home.applyMatrixRemoteOpen(cmd().(matrixRemoteOpenMsg))
 
 	if !home.embeddedMode {
 		t.Fatalf("double-click on a remote row did not enter embedded mode (err=%v)", home.err)

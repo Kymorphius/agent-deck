@@ -2,16 +2,25 @@ package core
 
 // Built-in command ids.
 const (
-	IDSessionStart   = "session.start"
-	IDSessionStop    = "session.stop"
-	IDSessionRestart = "session.restart"
-	IDSessionList    = "session.list"
-	IDGroupList      = "group.list"
+	IDSessionStart = "session.start"
+	// matrix/hardened: explicit remote first-open and exact recovery intent.
+	IDSessionPrepareOpen = "session.prepare-open"
+	IDSessionStop        = "session.stop"
+	IDSessionRestart     = "session.restart"
+	IDSessionList        = "session.list"
+	IDGroupList          = "group.list"
 )
 
 // Builtins returns the slice-1 command definitions wired to deps.
 func Builtins(deps Deps) []Def {
 	return []Def{
+		{
+			ID: IDSessionPrepareOpen, CLI: []string{"session", "prepare-open"},
+			Summary: "Prepare an explicit remote visit without attaching or sending input",
+			Class:   Mutate, Remote: RemoteAllow,
+			In: SessionPrepareOpenIn{}, Out: SessionPrepareOpenOut{},
+			Exec: Typed(deps.sessionPrepareOpen),
+		},
 		{
 			ID: IDSessionStart, CLI: []string{"session", "start"},
 			Summary: "Start a session's tmux process",

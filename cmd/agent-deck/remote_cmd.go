@@ -744,23 +744,51 @@ func handleRemoteAttach(args []string) {
 	}
 
 	// Find matching session by title or ID prefix
-	var matchID string
+	var matched session.RemoteSessionInfo
 	for _, s := range sessions {
 		if s.Title == sessionRef || strings.HasPrefix(s.ID, sessionRef) {
-			matchID = s.ID
+			matched = s
 			break
 		}
 	}
+	matchID := matched.ID
 
 	if matchID == "" {
 		fmt.Printf("Error: session '%s' not found on remote '%s'\n", sessionRef, remoteName)
 		os.Exit(1)
 	}
 
-	if err := runner.Attach(matchID); err != nil {
+	if err := prepareAndAttachRemote(ctx, runner, matched, stdinStdoutIsTerminal(), os.Stderr); err != nil {
 		fmt.Printf("Error: failed to attach: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// matrix/hardened: public CLI opening shares the TUI's authoritative prepare
+// operation. Refuse non-TTY callers before any start/resume can be dispatched.
+type remoteOpenAttacher interface {
+	PrepareOpen(context.Context, string) (session.RemoteOpenResult, error)
+	Attach(string) error
+}
+
+func prepareAndAttachRemote(ctx context.Context, runner remoteOpenAttacher, target session.RemoteSessionInfo, interactive bool, notices io.Writer) error {
+	if !interactive {
+		return errAttachNoTTY
+	}
+	result, err := runner.PrepareOpen(ctx, target.ID)
+	if errors.Is(err, session.ErrRemotePrepareOpenUnsupported) {
+		switch target.Status {
+		case string(session.StatusRunning), string(session.StatusWaiting), string(session.StatusIdle):
+			fmt.Fprintln(notices, "Remote Agent Deck is older; update it for automatic session recovery.")
+		default:
+			return err
+		}
+	} else if err != nil {
+		return err
+	} else if result.Disposition == "queued" {
+		return fmt.Errorf("cannot open yet: group %q has reached its concurrency limit (%d)", result.Group, result.MaxConcurrent)
+	}
+	return runner.Attach(target.ID)
 }
 
 func handleRemoteRename(args []string) {

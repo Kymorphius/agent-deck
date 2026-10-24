@@ -2474,6 +2474,11 @@ func remoteVerbReadOnly(args []string) bool {
 	case "inbox":
 		return second == "export" || second == "writer-status"
 	case "session":
+		// matrix/hardened: only the exact capability probe is safe to retry;
+		// prepare-open itself may start/resume and must never be replayed.
+		if second == "prepare-open" {
+			return len(args) == 3 && args[2] == "--help"
+		}
 		return second == "show" || second == "output" || second == "pane"
 	case "update":
 		// The timer status is a read; the timer install/heal is not, but

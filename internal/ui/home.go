@@ -1012,6 +1012,12 @@ type Home struct {
 	// (Backspace, arrows, Tab, Ctrl-C, Ctrl-D — #1094). When nil, named keys
 	// are sent via the session's tmux pane (SendNamedKey).
 	insertNamedKeySink func(inst *session.Instance, key string) error
+	// matrix/hardened: async remote opening is bound to one explicit intent.
+	matrixRemoteOpenGeneration   uint64
+	matrixRemoteOpenPending      *matrixRemoteOpenIntent
+	matrixRemoteOpenInputPending uint64
+	matrixRemoteOpenRunner       func(string, session.RemoteConfig) matrixRemoteOpenRunner
+	matrixRemoteOpenReady        func(matrixRemoteOpenMode, string, string) tea.Cmd
 	// remoteCreateSink is an optional override used by tests to capture what
 	// the new-session dialog forwards to the remote-create path (#1353) without
 	// opening an SSH connection. When nil, createRemoteSessionWithOptions runs.
@@ -1574,16 +1580,7 @@ func (h *Home) activateSelectedItem() (tea.Model, tea.Cmd) {
 				return h, h.startEmbeddedModeCmd()
 			}
 		} else if item.Type == session.ItemTypeRemoteSession && item.RemoteSession != nil {
-			// A stopped remote session is restarted first, as Enter on a
-			// dead local session restarts it; the row refreshes when the
-			// remote confirms. Otherwise attach (embedded or over SSH).
-			if strings.EqualFold(item.RemoteSession.Status, string(session.StatusStopped)) {
-				return h, h.restartRemoteSession(item.RemoteName, item.RemoteSession.ID, item.RemoteSession.Title)
-			}
-			if h.enterEmbeddedMode() {
-				return h, h.startEmbeddedModeCmd()
-			}
-			return h, h.attachRemoteSession(item.RemoteName, item.RemoteSession.ID)
+			return h, h.beginMatrixRemoteOpen(matrixRemoteOpenEmbedded) // matrix/hardened
 		}
 	}
 	return h, nil
@@ -7682,6 +7679,22 @@ func appendClearScreen(cmd tea.Cmd) tea.Cmd {
 // component or the appropriate handler and returns the updated model plus any
 // commands to run. Update wraps it to add cross-cutting concerns.
 func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// matrix/hardened: explicit cancellation/navigation retires deferred
+	// opening intent. Typed input waits for readiness without becoming list
+	// shortcuts; the remote mutation remains bounded and is never replayed.
+	switch input := msg.(type) {
+	case tea.KeyMsg:
+		if h.cancelMatrixRemoteOpenForKey(input) {
+			return h, nil
+		}
+	case tea.MouseMsg:
+		if input.Action != tea.MouseActionMotion {
+			h.cancelMatrixRemoteOpen()
+			h.matrixRemoteOpenInputPending = 0
+		}
+	case matrixRemoteOpenMsg:
+		return h, h.applyMatrixRemoteOpen(input)
+	}
 	h.consumeHealthWarning()
 	var cmds []tea.Cmd
 
@@ -11945,9 +11958,7 @@ func (h *Home) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			case session.ItemTypeRemoteSession:
 				if item.RemoteSession != nil {
 					h.cursor = itemIndex
-					if h.enterEmbeddedMode() {
-						return h, h.startEmbeddedModeCmd()
-					}
+					return h, h.beginMatrixRemoteOpen(matrixRemoteOpenEmbedded) // matrix/hardened
 				}
 			case session.ItemTypeGroup:
 				groupPath := item.Path
@@ -12318,11 +12329,7 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					}
 				}
 			case item.Type == session.ItemTypeRemoteSession && item.RemoteSession != nil:
-				if req, ok := buildRemoteAttachRequest(item.RemoteName, item.RemoteSession.ID, openAs); ok {
-					if err := h.openInNewWindow(req, true); err != nil {
-						h.setError(fmt.Errorf("open remote in new window: %w", err))
-					}
-				}
+				return h, h.beginMatrixRemoteOpen(matrixRemoteOpenWindow) // matrix/hardened
 			}
 		}
 		return h, nil
@@ -13165,6 +13172,10 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return h, h.importSessions
 
 	case "I":
+		// matrix/hardened: remote input requires the same authoritative open.
+		if h.cursor >= 0 && h.cursor < len(h.flatItems) && h.flatItems[h.cursor].Type == session.ItemTypeRemoteSession {
+			return h, h.beginMatrixRemoteOpen(matrixRemoteOpenInsert)
+		}
 		// Enter insert mode (#1069 feature 1): subsequent keystrokes are
 		// routed to the currently-selected session's tmux pane. Esc exits.
 		// `i` is taken by import; `I` follows the vim convention (Insert).
@@ -13788,7 +13799,7 @@ func (h *Home) attachSelectedLegacy() tea.Cmd {
 		})
 	case session.ItemTypeRemoteSession:
 		if item.RemoteSession != nil {
-			return h.attachRemoteSession(item.RemoteName, item.RemoteSession.ID)
+			return h.beginMatrixRemoteOpen(matrixRemoteOpenLegacy) // matrix/hardened
 		}
 	}
 	return nil

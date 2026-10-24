@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agent-deck/session.prepare-open/v1/out",
+  "title": "session.prepare-open output",
+  "type": "object",
+  "properties": {
+    "codex_session_id": {
+      "type": "string"
+    },
+    "disposition": {
+      "description": "existing, started, resumed or queued",
+      "type": "string"
+    },
+    "group": {
+      "type": "string"
+    },
+    "id": {
+      "type": "string"
+    },
+    "max_concurrent": {
+      "type": "integer"
+    },
+    "status": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "disposition",
+    "id",
+    "status"
+  ],
+  "additionalProperties": false
+}

@@ -46,6 +46,10 @@ func (r *remoteCapturingSender) Close() error {
 // fake. After this returns, Home is in insert mode against the remote.
 func armRemoteInsertMode(t *testing.T) (*Home, *remoteCapturingSender) {
 	t.Helper()
+	// matrix/hardened: input readiness now follows authoritative prepare.
+	withTempAgentDeckHome(t, `[remotes.dev]
+host = "alice@dev.example"
+`)
 	home := NewHome()
 	home.width = 100
 	home.height = 30
@@ -81,9 +85,16 @@ func armRemoteInsertMode(t *testing.T) (*Home, *remoteCapturingSender) {
 	home.insertKeySink = nil
 	home.insertNamedKeySink = nil
 
-	// Press `I` to enter insert mode.
-	model, _ := home.handleMainKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'I'}})
+	home.matrixRemoteOpenRunner = func(string, session.RemoteConfig) matrixRemoteOpenRunner {
+		return &matrixFakeOpenRunner{result: session.RemoteOpenResult{ID: "r1", Disposition: "existing", Status: "waiting"}}
+	}
+	// Press `I`, then confirm remote preparation before entering input mode.
+	model, cmd := home.handleMainKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'I'}})
 	home = model.(*Home)
+	if cmd == nil {
+		t.Fatal("test setup: remote insert did not prepare")
+	}
+	home.applyMatrixRemoteOpen(cmd().(matrixRemoteOpenMsg))
 	if !home.insertMode {
 		t.Fatal("test setup: failed to enter insert mode on remote target")
 	}

@@ -40,6 +40,8 @@ func handleSession(profile string, args []string) {
 	}
 
 	switch args[0] {
+	case "prepare-open": // matrix/hardened: explicit remote open lifecycle.
+		cliSessionPrepareOpen(profile, args[1:])
 	case "start":
 		if coreRegistryEnabled() {
 			cliSessionStart(profile, args[1:])

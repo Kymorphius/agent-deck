@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.110`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.111`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -66,7 +66,7 @@
 - `internal/session/claude_hooks.go`：`isAgentDeckHookCommand` 的判断规则：先去掉开头的 `VAR=值`，再要求第二个词是 `hook-handler`、程序名的文件名部分是 `agent-deck`。`RemoveClaudeHooks` 会扫描全部事件，并做 UTC 时间戳备份（约 387–414 行）。
 - `cmd/agent-deck/main.go`（约 4845、5070 行）：`agent-deck uninstall` 会移除这些钩子。`uninstall.sh` 第 253 行附近的 jq 过滤用的是同一套规则（正则），写回时用 `cat >` 保持软链接和权限。
 
-**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.110`。
+**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.111`。
 
 **测试**：以 `_hardened_test.go` 结尾的文件、`update_check_disable_test.go`、`update_timer_wiring_test.go` 等是新增或调整过的测试；`testdata/goldens/*` 里的快照已经按加固后的输出更新。
 
@@ -975,3 +975,11 @@ snapshots, compatibility, and validation boundaries.
 - **matrix/hardened:** `matrix.110` 允许交互 `session attach` 为无 pane 的 queued 会话启动原有启动计划。先检查真实 TTY、记录访问并保留自动休眠的精确唤醒流程；pane 存活时只 attach，stopped/error 不由这个入口自动重启。启动前取得既有 profile mutation lock，在锁内重读状态、权威探测 pane 并遵守当前有效分组上限；仍受限时保留 queued 并显示分组及上限。
 - **matrix/hardened:** 复用原有 `Start` 和 `VerifySpawned`，只保存目标会话的快照。验证失败置 error 并保存；保存失败明确说明进程已启动，不重复启动或回收它。完成启动及保存后释放锁，再进入交互终端；并发首次打开不会重复创建同一会话。远程客户端无需新参数。
 - **测试**：隔离真实 PTY/tmux 配合本地 fake harness，验证首次打开、无 TTY、已有 pane、并发打开、分组上限、失败边界与启动参数保留；另运行已有自动休眠及相关 attach/start 定向回归。安装后需更新目标设备的实际程序，AI 会话本身不需重启。
+
+## 95. 远程打开已退出的原 Codex 会话
+
+- **问题**：已有 Codex 进程退出后，远程普通打开仅 attach，嵌入布局还可能直接进入预览与输入状态。两条路径都未确认原进程已退出、是否能够恢复原线程；仅修复 queued 首次启动不能覆盖这一情况。`unknown-exit` 表示缺少退出原因的证据，不代表已经确认 Codex 崩溃。
+- **matrix/hardened:** `matrix.111` 增加显式 `session prepare-open --json <id>`。打开意图由远端在 profile mutation lock 内重新读取状态并权威探测；已有活 pane 直接返回 existing，不根据客户端旧状态执行 restart。queued 无 pane 走原有受限启动；error/stopped 的普通 Codex 只允许验证过的原线程恢复。准备操作不 attach、不发送输入，普通 `session attach` 的既有契约保持不变。
+- **matrix/hardened:** 精确恢复使用实例实际 Codex home，核对唯一 regular rollout、头部 ID 和非 subagent 来源，在 spawn 保护内重查绑定并固定生成原 ID 的 resume 命令。证据缺失、绑定变化或不支持的启动形态明确报错，禁止退化为 fresh 或 fork。所有缺失进程的启动均检查分组上限；被限制的旧会话保留原状态，不转换为可丢失恢复约束的 queued 记录。
+- **matrix/hardened:** 普通远程打开、嵌入终端、新窗口及 `remote attach` 共用准备流程，成功后才连接或接受输入；命令行先检查本地 TTY。异步结果核对设备身份、完整会话 ID 和本次打开意图；受限结果只提示。能力检查为只读 help，仅明确的旧版 unknown command 允许兼容处理；网络、鉴权和解析错误不当作旧版，变更请求中断后不自动重放。取消只废弃打开意图，不打断已经发出的恢复与保存。
+- **测试**：隔离 CLI/tmux 配合 fake Codex 验证原线程恢复、并发单次启动、已存活进程复用、分组限制、原记录证据与旧 provider 字段隔离；client/UI 定向回归覆盖旧版兼容、响应丢失不重放、输入等待、迟到结果、重连代际及各打开入口。保留原 queued attach、自动休眠和普通启动的既有合同。

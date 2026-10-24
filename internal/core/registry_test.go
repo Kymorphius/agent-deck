@@ -181,7 +181,7 @@ func TestAsErrorWrapsPlainErrors(t *testing.T) {
 	}
 }
 
-func TestBuiltinsRegisterFiveCommands(t *testing.T) {
+func TestBuiltinsRegisterCommands(t *testing.T) {
 	r := NewRegistry()
 	if err := RegisterBuiltins(r, Deps{}); err != nil {
 		t.Fatal(err)
@@ -194,7 +194,9 @@ func TestBuiltinsRegisterFiveCommands(t *testing.T) {
 		IDSessionList:    {"list", Query},
 		IDSessionRestart: {"session restart", Mutate},
 		IDSessionStart:   {"session start", Mutate},
-		IDSessionStop:    {"session stop", Mutate},
+		// matrix/hardened: remote opening has explicit mutation semantics.
+		IDSessionPrepareOpen: {"session prepare-open", Mutate},
+		IDSessionStop:        {"session stop", Mutate},
 	}
 	defs := r.Defs()
 	if len(defs) != len(want) {
