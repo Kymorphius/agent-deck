@@ -310,11 +310,19 @@ func (h *Home) renderEmbeddedSessionItem(
 		toolPrefix = toolIcon + " "
 	}
 
-	firstPlain := gutter + indent + marker + chevron + statusIcon + " " + toolPrefix + label
+	// matrix/hardened: Claude /fast burns usage fast; lead the title with a
+	// red tag so it survives truncation of long labels.
+	fastPlain, fastTag := "", ""
+	if state.claudeFast {
+		fastPlain = "fast "
+		fastTag = lipgloss.NewStyle().Foreground(ColorRed).Bold(true).Render("fast") + " "
+	}
+	firstPlain := gutter + indent + marker + chevron + statusIcon + " " + toolPrefix + fastPlain + label
 	first := gutter + indent + marker + chevron + statusStyle.Render(statusIcon) + " "
 	if toolPrefix != "" {
 		first += GetToolStyle(tool).Bold(true).Render(toolIcon) + " "
 	}
+	first += fastTag
 	first += titleStyle.Render(label)
 
 	metadataParts := make([]string, 0, 6)
@@ -348,7 +356,13 @@ func (h *Home) renderEmbeddedSessionItem(
 	first = fitCellWidth(first, max(1, listWidth))
 	if highlighted {
 		style := lipgloss.NewStyle().Foreground(ColorText).Background(ColorSurface)
-		first = style.Render(fitCellWidth(firstPlain, max(1, listWidth)))
+		fitted := fitCellWidth(firstPlain, max(1, listWidth))
+		first = style.Render(fitted)
+		// matrix/hardened: keep the fast tag red on the highlight too.
+		if at := strings.Index(fitted, fastPlain); fastPlain != "" && at >= 0 {
+			red := style.Foreground(ColorRed).Bold(true)
+			first = style.Render(fitted[:at]) + red.Render("fast") + style.Render(fitted[at+len("fast"):])
+		}
 	} else {
 		first = lipgloss.NewStyle().Foreground(ColorText).Render(first)
 	}

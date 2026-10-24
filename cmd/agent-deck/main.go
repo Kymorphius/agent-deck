@@ -45,7 +45,7 @@ import (
 )
 
 // matrix/hardened: identifies our hardened build.
-var Version = "1.16.26+matrix.111" // matrix/hardened: prepare remote opens and resume the original thread; overridden via -ldflags.
+var Version = "1.16.26+matrix.112" // matrix/hardened: flag Claude /fast sessions in the list; overridden via -ldflags.
 
 // Table column widths for list command output
 const (

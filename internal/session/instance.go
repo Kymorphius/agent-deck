@@ -335,7 +335,10 @@ type Instance struct {
 	usageLimitedCached   bool
 	usageLimitSessionID  string
 	usageLimitScanGen    uint64
-	lastCodexProbeAt     time.Time // Rate-limits expensive Codex process-file probes
+	// matrix/hardened: the same scan records whether the latest assistant turn
+	// ran in Claude fast mode (usage.speed == "fast"), keyed like the verdict.
+	usageFastCached  bool
+	lastCodexProbeAt time.Time // Rate-limits expensive Codex process-file probes
 	// matrix/hardened: last turn stopped before it finished (matrix_turn_interrupt.go),
 	// guarded by i.mu.
 	matrixInterrupt matrixTurnInterruptMemo

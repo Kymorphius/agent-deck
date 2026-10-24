@@ -104,6 +104,8 @@ type RuntimeSessionSnapshot struct {
 	ToolOptions             json.RawMessage         `json:"tool_options,omitempty"`
 	CanFork                 bool                    `json:"can_fork"`
 	CanForkKnown            bool                    `json:"can_fork_known"`
+	// matrix/hardened: latest Claude assistant turn ran with usage.speed "fast".
+	FastMode bool `json:"fast_mode,omitempty"`
 }
 
 // Clone gives each consumer private mutable pointer/slice fields.
@@ -351,6 +353,7 @@ func (i *Instance) RuntimeSnapshot(profile, epoch string, revision uint64, sampl
 	persistError := i.persistRuntimeNativeBindings()
 	sub := i.Substate()
 	detail := i.SubstateDetail()
+	fast := i.ClaudeFastMode()
 	held, remedy := i.IsAuthHeld()
 	hold := i.AuthHold()
 	observed, observedKnown := i.LastObservedActivity()
@@ -396,7 +399,7 @@ func (i *Instance) RuntimeSnapshot(profile, epoch string, revision uint64, sampl
 		CodexSessionID: i.CodexSessionID, CodexDetectedAt: i.CodexDetectedAt, GeminiSessionID: i.GeminiSessionID, GeminiDetectedAt: i.GeminiDetectedAt,
 		OpenCodeSessionID: i.OpenCodeSessionID, OpenCodeDetectedAt: i.OpenCodeDetectedAt, OpenCodePort: i.OpenCodePort, CopilotSessionID: i.CopilotSessionID, CopilotDetectedAt: i.CopilotDetectedAt, CopilotModel: i.CopilotModel, HermesSessionID: i.HermesSessionID, HermesHookGeneration: i.HermesHookGeneration, DeepSeekSessionID: i.DeepSeekSessionID, PiSessionID: i.PiSessionID, PiSessionPath: i.PiSessionPath,
 		GenericSessionID: i.GenericSessionID, GenericDetectedAt: i.GenericDetectedAt, GenericSessionTool: i.GenericSessionTool, GenericSessionCommand: i.GenericSessionCommand, GenericSessionLocation: i.GenericSessionLocation,
-		GeminiModel: i.GeminiModel, GeminiAnalytics: i.GeminiAnalytics, LatestPrompt: i.LatestPrompt, AutoNameDescription: i.autoNameDescription, LaunchModel: model, ToolOptions: i.ToolOptionsJSON, CanFork: canFork, CanForkKnown: true}
+		GeminiModel: i.GeminiModel, GeminiAnalytics: i.GeminiAnalytics, LatestPrompt: i.LatestPrompt, AutoNameDescription: i.autoNameDescription, LaunchModel: model, ToolOptions: i.ToolOptionsJSON, CanFork: canFork, CanForkKnown: true, FastMode: fast}
 	if titleKnown {
 		r.PaneTitleObservedAt = titleObservedAt
 	}

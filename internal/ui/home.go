@@ -6129,6 +6129,7 @@ type sessionRenderState struct {
 	matrixSleeping     bool
 	matrixSleepPending bool
 	substate           session.Substate // Honest Status v2: additive refinement (model-unavailable, auth-401, ...)
+	claudeFast         bool             // matrix/hardened: latest Claude turn ran in /fast mode
 	tool               string
 	paneTitle          string // Current task description from tmux pane title (stripped of spinner/done markers)
 	// matrix/hardened: archived rows are not counted as interrupted turns.
@@ -6310,6 +6311,7 @@ func (h *Home) refreshSessionRenderSnapshot(instances []*session.Instance) {
 			matrixSleeping:     inst.IsAutoSleeping() || inst.AutoSleepPending(),
 			matrixSleepPending: inst.AutoSleepPending(),
 			substate:           inst.CachedSubstate(),
+			claudeFast:         inst.ClaudeFastModeCached(),
 			tool:               inst.GetToolThreadSafe(),
 			archivedSuperseded: inst.IsArchived() && inst.SupersededBy != "",
 			matrixArchived:     inst.IsArchived(), // matrix/hardened
@@ -22880,6 +22882,16 @@ func (h *Home) renderSessionItem(
 			yoloStyle = SessionStatusSelStyle
 		}
 		yoloBadge = yoloStyle.Render(" [YOLO]")
+	}
+	// matrix/hardened: Claude /fast draws usage much faster; flag it so a
+	// forgotten toggle is visible. Rides in yoloBadge's width/row slot.
+	if instState.claudeFast {
+		// Red on the selection bar too: this is a critical cost signal.
+		fastStyle := lipgloss.NewStyle().Foreground(ColorRed).Bold(true)
+		if selected {
+			fastStyle = SessionStatusSelStyle.Foreground(ColorRed).Bold(true)
+		}
+		yoloBadge += fastStyle.Render(" [fast]")
 	}
 
 	// Worktree branch badge for sessions running in git worktrees.

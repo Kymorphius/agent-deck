@@ -15,6 +15,8 @@ type matrixUsageLimitFact struct {
 	rejection      bool
 	at             time.Time
 	timestampKnown bool
+	// matrix/hardened: usage.speed == "fast" on the same record (Claude /fast).
+	fast bool
 }
 
 func (f matrixUsageLimitFact) limited(now time.Time) bool {

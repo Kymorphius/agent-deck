@@ -144,6 +144,10 @@ type transcriptRecord struct {
 	Timestamp         string `json:"timestamp"`
 	Message           struct {
 		Role string `json:"role"`
+		// matrix/hardened: Claude Code writes "standard" or "fast" here.
+		Usage *struct {
+			Speed string `json:"speed"`
+		} `json:"usage"`
 	} `json:"message"`
 }
 
@@ -265,7 +269,8 @@ func scanLatestAssistantUsageLimitFact(path string) matrixUsageLimitScanResult {
 			return false
 		}
 		at, timeErr := time.Parse(time.RFC3339, strings.TrimSpace(rec.Timestamp))
-		result.fact = matrixUsageLimitFact{rejection: rec.isRateLimitRejection(), at: at, timestampKnown: timeErr == nil}
+		result.fact = matrixUsageLimitFact{rejection: rec.isRateLimitRejection(), at: at, timestampKnown: timeErr == nil,
+			fast: rec.Message.Usage != nil && strings.EqualFold(strings.TrimSpace(rec.Message.Usage.Speed), "fast")}
 		result.formed, result.cacheable = true, cacheable
 		return true
 	}
@@ -413,6 +418,7 @@ func (i *Instance) usageLimited() bool {
 	if i.usageLimitSessionID != sessionID {
 		i.usageLimitSessionID = sessionID
 		i.usageLimitedCached = false
+		i.usageFastCached = false
 		i.lastUsageLimitScanAt = time.Time{}
 	}
 	if !i.lastUsageLimitScanAt.IsZero() && time.Since(i.lastUsageLimitScanAt) < usageLimitScanInterval {
@@ -442,7 +448,10 @@ func (i *Instance) usageLimited() bool {
 		return i.usageLimitVerdictFor(sessionID)
 	}
 
-	limited, ok := latestAssistantTurnIsRateLimited(path, time.Now())
+	// matrix/hardened: read the cached fact directly so the fast-mode flag
+	// comes from the same scan as the verdict.
+	scan := matrixUsageLimitFiles.load(path)
+	limited, ok := scan.fact.limited(time.Now()), scan.formed
 	if !ok {
 		// No formed verdict (unreadable, or no assistant turn in the file): leave
 		// the previous answer standing rather than silently reporting "not
@@ -466,6 +475,7 @@ func (i *Instance) usageLimited() bool {
 		limited = false
 	case usageLimitPublishable(i.usageLimitScanGen, gen, live, sessionID):
 		i.usageLimitedCached = limited
+		i.usageFastCached = scan.fact.fast
 	default:
 		// A newer claim for the same live session landed while this read was in
 		// flight, so this result is stale. Report the memo through the SAME
@@ -477,4 +487,32 @@ func (i *Instance) usageLimited() bool {
 	i.mu.Unlock()
 
 	return limited
+}
+
+// ClaudeFastMode reports whether the latest assistant turn of this Claude
+// session ran in fast mode, so the list can flag sessions burning usage faster.
+// matrix/hardened: consumers read the monitor's verdict; the producer reuses
+// the throttled usage-limit scan and the same three-way identity invariant.
+func (i *Instance) ClaudeFastMode() bool {
+	if row, consumer := i.runtimeView(); row != nil {
+		return row.FastMode
+	} else if consumer {
+		return false
+	}
+	i.usageLimited()
+	return i.ClaudeFastModeCached()
+}
+
+// ClaudeFastModeCached is ClaudeFastMode without IO, for render snapshots.
+// matrix/hardened: it never scans; the status pass or monitor fills the memo.
+func (i *Instance) ClaudeFastModeCached() bool {
+	if row, consumer := i.runtimeView(); row != nil {
+		return row.FastMode
+	} else if consumer {
+		return false
+	}
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+	sessionID := strings.TrimSpace(i.ClaudeSessionID)
+	return sessionID != "" && i.usageLimitSessionID == sessionID && i.usageFastCached
 }
