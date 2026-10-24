@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.107`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.108`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -921,7 +921,7 @@ snapshots, compatibility, and validation boundaries.
 ## 87. 自动归档长期失效的会话
 
 - **问题**：会话结束或出错后一直留在列表里（本机一度有 100 多个 error 行），挤占列表、搜索和网页菜单，还让真正的异常不显眼。
-- **matrix/hardened:** `matrix.102` 起新增 `[lifecycle] auto_archive = true`（默认关闭）和 `archive_after = "24h"`（1h–8760h，省略时 24h）。打开后，管理 TUI 或 headless Web 里的生命周期控制器每分钟检查一次：本地会话处于 error 或 stopped 状态、距最后使用（创建、访问、活动时间中最晚的一个）超过 `archive_after`，且相隔至少 50 秒的两次检查指纹一致（状态、tmux 名称、最后使用时间），并经 `ProbeExists` 确认 tmux 会话确实不存在，才会归档。
+- **matrix/hardened:** `matrix.102` 起新增 `[lifecycle] auto_archive = true`（默认关闭）和 `archive_after = "24h"`（1h–8760h，省略时 24h）。打开后，管理 TUI 或 headless Web 里的生命周期控制器每分钟检查一次：本地会话处于 error 或 stopped 状态、距最后使用（创建、访问、活动、启动、收到消息时间中最晚的一个，后两项自 `matrix.108` 起计入）超过 `archive_after`，且相隔至少 50 秒的两次检查指纹一致（状态、tmux 名称、最后使用时间），并经 `ProbeExists` 确认 tmux 会话确实不存在，才会归档。
 - 只写 `archived_at`，写入条件是"仍未归档且状态仍是检查时的值"（`StateDB.ArchiveIfStatus`），所以重启、手动归档或状态变化都会让这次归档落空。会话本身、对话 ID 和各项字段都保留。置顶、conductor、SSH、沙箱以及带自动休眠状态的会话从不归档。控制器单独持有 `auto-archive-<profile>.lock`，和自动休眠互不影响。
 - **复活**：TUI 按 `^` 进入归档视图，选中后按 `Shift+U` 取消归档，再正常打开或重启；命令行用 `agent-deck session unarchive <id|标题>`。
 - **改动地图**：`internal/session/matrix_auto_archive.go`（新增）、`internal/session/matrix_sleep_controller.go`（同一个每分钟循环，`tryLifecycleLease`）、`internal/session/userconfig_lifecycle.go`、`internal/session/config_keys.go`、`internal/statedb/statedb.go`（`ArchiveIfStatus`）。

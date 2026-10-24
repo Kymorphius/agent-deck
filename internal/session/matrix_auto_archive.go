@@ -8,7 +8,7 @@ import (
 
 // matrix/hardened: auto-archive hides local sessions that stayed dead (error
 // or stopped, no tmux session) for longer than lifecycle.archive_after since
-// their last use. Archiving only sets archived_at; the conversation, tool ids
+// their last use (created, accessed, activity, started or message sent). Archiving only sets archived_at; the conversation, tool ids
 // and row are kept, and unarchive (TUI ^ then Shift+U, or `session unarchive`)
 // restores the session for a normal restart.
 //
@@ -70,7 +70,7 @@ func autoArchiveCandidate(inst *Instance, now time.Time, after time.Duration) (s
 		return "", "", false
 	}
 	lastUse := inst.CreatedAt
-	for _, t := range []time.Time{inst.LastAccessedAt, inst.lastActivityAt} {
+	for _, t := range []time.Time{inst.LastAccessedAt, inst.lastActivityAt, inst.LastStartedAt} {
 		if t.After(lastUse) {
 			lastUse = t
 		}
@@ -106,6 +106,11 @@ func (w *AutoArchiveWatcher) Tick(ctx context.Context, storage *Storage, instanc
 			continue
 		}
 		if now.Sub(prior.firstSeen) < autoArchiveConfirm {
+			continue
+		}
+		// A message delivered to the session (send, conductor, Web) is use too.
+		if sent, err := storage.GetDB().ReadLastSentAt(inst.ID); err != nil || (sent > 0 && now.Sub(time.Unix(sent, 0)) < after) {
+			delete(w.observed, inst.ID)
 			continue
 		}
 		if alive, err := w.cfg.Probe(inst); err != nil || alive {

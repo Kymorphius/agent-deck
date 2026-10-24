@@ -27,10 +27,16 @@ func TestMatrixAutoArchiveConfirmsDeadSessionsOnly(t *testing.T) {
 	remote.SSHHost = "dev"
 	slept := mk("slept", StatusStopped)
 	slept.AutoSleep = &AutoSleepState{Phase: "asleep"}
+	restarted := mk("restarted", StatusError)
+	restarted.LastStartedAt = time.Now().Add(-time.Hour)
+	messaged := mk("messaged", StatusError)
 	alive := mk("alive", StatusError)
 	raced := mk("raced", StatusError)
-	all := []*Instance{dead, stopped, live, recent, pinned, conductor, remote, slept, alive, raced}
+	all := []*Instance{dead, stopped, live, recent, pinned, conductor, remote, slept, restarted, messaged, alive, raced}
 	if err := storage.Save(all); err != nil {
+		t.Fatal(err)
+	}
+	if err := storage.GetDB().WriteLastSentAt("messaged", time.Now().Add(-time.Hour).Unix()); err != nil {
 		t.Fatal(err)
 	}
 
