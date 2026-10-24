@@ -93,6 +93,37 @@ agent-deck config set ui.input_method_text_source auto
 - 输入框里已经是某个输入法时不动它，只把它记下来；
 - 退出 TUI 只还原拿走的东西，绝不会在退出时把桌面切成中文。
 
+## 输入态与操作态的完整分类（matrix.109 审计）
+
+判定在 `Home.inputMethodNavigation()`，按**当前获得焦点的那个控件**分，不按对话框整体分。
+
+**文字输入态（切到输入法）**
+
+- 列表搜索 `/`、全局搜索、分组搜索（Alt+S）、zoxide 路径选择器、提示输入框；
+- 分组与会话重命名、备注编辑；
+- 新建会话：Name、Path、Model、Branch、自定义命令（选了 custom 时）、多仓库编辑态，以及
+  **工具选项面板里的文字字段**（Claude 的 resume id / extra args / start query，OMP 的 8 个
+  字段）——这一条是 matrix.109 修的，之前整个面板被当成操作态；
+- 编辑会话对话框的文字字段、Fork 对话框的 Name/Group/Branch、编辑路径对话框的编辑态；
+- 设置面板的文字编辑态、首次配置向导的配置目录、看板面板的筛选编辑态；
+- **worktree 收尾对话框的合并目标**（matrix.109 修，之前整个对话框被当成操作态）；
+- 进入会话之后（insert 态或 attach）。
+
+**操作态（切到 ASCII）**
+
+- 列表导航、会话切换列表、分组移动、按钮与开关；
+- 新建会话里的工具选择器、各复选框、选项面板里的开关和选择器、`[ Create session ]`、
+  `[ Save as default ]`；分组创建时的父级目标选择器；
+- 帮助页、确认框、hook 信任框、滚动回看、上下文分页、会话选择器、代码块、MCP／技能／
+  插件／Gemini 模型对话框，以及 watcher／agents／adopt／web 服务／死信／工具可见性面板；
+- MCP 与技能对话框的首字母跳转：这里**必须**是 ASCII，否则那一下按键会被输入法拿去组词；
+- 永久删除确认：要求输入字面量 `DELETE`，ASCII 才打得出来；
+- worktree 收尾的两个复选框。
+
+反馈对话框有一个自由文本步骤，但本分支 `hardenedNoPrompts = true` 使它永不出现，因此没有
+纳入分类。新增带文字输入的组件时，`internal/ui/matrix_input_method_test.go` 里的
+`TestInputMethodPanelAndDialogTextFields` 与 `TestInputMethodFormFields` 是对应的守卫测试。
+
 ## 诊断日志
 
 输入源切换依赖终端的焦点上报和应用激活顺序，事后没有痕迹。需要排查时显式打开：

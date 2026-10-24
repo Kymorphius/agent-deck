@@ -528,6 +528,12 @@ func (p *ClaudeOptionsPanel) isStartQueryInputFocused() bool {
 }
 
 // updateInputFocus updates which text input has focus
+// matrix/hardened: the text fields themselves are the authority, since
+// updateInputFocus keeps exactly the focused one in Focus().
+func (p *ClaudeOptionsPanel) TextFocused() bool {
+	return p.resumeIDInput.Focused() || p.extraArgsInput.Focused() || p.startQueryInput.Focused()
+}
+
 func (p *ClaudeOptionsPanel) updateInputFocus() {
 	p.resumeIDInput.Blur()
 	p.extraArgsInput.Blur()

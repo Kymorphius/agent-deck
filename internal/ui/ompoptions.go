@@ -92,6 +92,17 @@ func (p *OMPOptionsPanel) FocusedLine() int {
 	}
 	return p.cursor + 1
 }
+
+// matrix/hardened: syncFocus keeps exactly the focused field in Focus().
+func (p *OMPOptionsPanel) TextFocused() bool {
+	for idx := range p.inputs {
+		if p.inputs[idx].Focused() {
+			return true
+		}
+	}
+	return false
+}
+
 func (p *OMPOptionsPanel) syncFocus() {
 	for idx := range p.inputs {
 		if p.focused && p.cursor == idx+2 {

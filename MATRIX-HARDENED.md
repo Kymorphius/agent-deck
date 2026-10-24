@@ -961,3 +961,10 @@ snapshots, compatibility, and validation boundaries.
 - **问题**：Codex 将状态标题、计时和 interrupt 提示合成一行后截断；标题足够长时只剩末尾的 `…`。关闭动画后还没有 spinner，旧规则无法识别这个正在执行的状态。
 - **matrix/hardened:** `matrix.107` 增加严格的补充分支：当前输入框上方的列首行以大写字符开头、没有 `•`/`◦`、以 `…` 结尾，并紧邻一个完整的 `  └ Tip: ` 状态详情块；只允许原有四空格续行、空行及完整队列结构。普通历史 Tip、带 bullet 的引用、分隔线、菜单和错误横幅不提供这项证据；原有带计时/interrupt 的规则保持不变。
 - **测试**：脱敏合成长标题帧覆盖两种输入框、换行 Tip、队列、strong 路径与历史/引用反例；无 hook 的单次 CLI 状态回归将真实 tmux pane 明确设为 127 列，并读回确认状态标题未被物理换行。使用第 4 节隔离入口及定向 race 检查；安装后仍需更新实际采集进程，不重启 AI 会话。
+
+## 93. 输入态与操作态按焦点控件逐一校准
+
+- **问题**：`inputMethodNavigation()` 多数对话框已按焦点字段区分，但两处按整体判定，于是它们的文字输入框被强制成 ASCII：新建会话的工具选项面板（`focusOptions`）里有 Claude 的 resume id／extra args／**start query** 和 OMP 的 8 个字段；worktree 收尾对话框（`focusIndex == 1` 是合并目标输入框）整个被放进"永远是操作态"那组。
+- **matrix/hardened:** `matrix.109` 给 `OptionsPanel` 接口加 `TextFocused()`，Claude 与 OMP 面板用各自 `textinput` 的 `Focused()` 作权威判据（两者的 `updateInputFocus`／`syncFocus` 始终只让获得焦点的那个处于 Focus 态），Yolo 面板只有开关故恒为 false；`NewDialog.isTextInputFocused()` 增加 `focusOptions` 分支。worktree 收尾对话框新增 `IsTextFocused()`，并从整体导航组移到按焦点判定。
+- 审计覆盖全部带文字输入的组件（`textinput.Model` 与手写按键缓冲各一遍）。结论：MCP 与技能对话框的首字母跳转、永久删除确认要求的字面量 `DELETE`，本来就应当是 ASCII，保持不变；反馈对话框有自由文本步骤但 `hardenedNoPrompts = true` 使其不可达，不纳入分类。完整分类表记在 [输入法适配说明](docs/input-method.md)。
+- **测试**：`internal/ui/matrix_input_method_test.go` 新增 `TestInputMethodPanelAndDialogTextFields`（无面板、面板开关、Claude 三个字段、OMP 字段、worktree 三个焦点位置），与既有 `TestInputMethodFormFields` 一起作为新增文字输入组件的守卫。

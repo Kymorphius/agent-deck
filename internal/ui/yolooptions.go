@@ -28,6 +28,9 @@ func (p *YoloOptionsPanel) SetDefaults(yoloMode bool) {
 }
 
 // Focus sets focus to this panel.
+// matrix/hardened: this panel has toggles only, never a text field.
+func (p *YoloOptionsPanel) TextFocused() bool { return false }
+
 func (p *YoloOptionsPanel) Focus() {
 	p.focused = true
 }

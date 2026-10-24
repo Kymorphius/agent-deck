@@ -2041,6 +2041,10 @@ func (d *NewDialog) isTextInputFocused() bool {
 		return d.customCommandSelected() // custom command input
 	case focusMultiRepo:
 		return d.multiRepoEditing
+	case focusOptions:
+		// matrix/hardened: the tool options panel mixes text fields with
+		// toggles and pickers; ask it which one has the focus.
+		return d.toolOptions != nil && d.toolOptions.TextFocused()
 	default:
 		return false
 	}

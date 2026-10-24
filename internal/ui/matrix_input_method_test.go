@@ -9,6 +9,7 @@ import (
 
 	"github.com/asheshgoplani/agent-deck/internal/inputmethod"
 	"github.com/asheshgoplani/agent-deck/internal/session"
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -319,5 +320,64 @@ func TestInputMethodReassertsOnlyOnFocus(t *testing.T) {
 	h.syncInputMethod(tickMsg(time.Now()))
 	if last := f.reasserts[len(f.reasserts)-1]; last {
 		t.Fatal("a refresh tick reasserted the text policy")
+	}
+}
+
+// matrix/hardened: the tool options panel inside the new-session dialog mixes
+// text fields with toggles and pickers, and the worktree finish dialog mixes a
+// typed merge target with checkboxes. Both used to be classified per dialog,
+// which forced ASCII onto their text fields.
+func TestInputMethodPanelAndDialogTextFields(t *testing.T) {
+	d := NewNewDialog()
+	d.Show()
+	d.focusTargets = []focusTarget{focusOptions}
+	d.focusIndex = 0
+	h := &Home{newDialog: d}
+
+	d.toolOptions = nil
+	if !h.inputMethodNavigation() {
+		t.Fatal("a tool without an options panel was treated as text input")
+	}
+
+	d.toolOptions = d.claudeOptions
+	d.claudeOptions.resumeIDInput.Blur()
+	d.claudeOptions.extraArgsInput.Blur()
+	d.claudeOptions.startQueryInput.Blur()
+	if !h.inputMethodNavigation() {
+		t.Fatal("an options toggle was treated as text input")
+	}
+	for name, input := range map[string]*textinput.Model{
+		"resume id":   &d.claudeOptions.resumeIDInput,
+		"extra args":  &d.claudeOptions.extraArgsInput,
+		"start query": &d.claudeOptions.startQueryInput,
+	} {
+		input.Focus()
+		if h.inputMethodNavigation() {
+			t.Fatalf("the %s field was treated as an operation", name)
+		}
+		input.Blur()
+	}
+
+	d.toolOptions = d.ompOptions
+	if !h.inputMethodNavigation() {
+		t.Fatal("an unfocused OMP panel was treated as text input")
+	}
+	d.ompOptions.inputs[0].Focus()
+	if h.inputMethodNavigation() {
+		t.Fatal("an OMP text field was treated as an operation")
+	}
+
+	// The worktree finish dialog: 0 = merge checkbox, 1 = target input, 2 = keep branch.
+	w := &WorktreeFinishDialog{visible: true}
+	h = &Home{worktreeFinishDialog: w}
+	for _, index := range []int{0, 2} {
+		w.focusIndex = index
+		if !h.inputMethodNavigation() {
+			t.Fatalf("worktree checkbox %d was treated as text input", index)
+		}
+	}
+	w.focusIndex = 1
+	if h.inputMethodNavigation() {
+		t.Fatal("the worktree merge target was treated as an operation")
 	}
 }

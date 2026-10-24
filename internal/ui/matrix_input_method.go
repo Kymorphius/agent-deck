@@ -181,6 +181,10 @@ func (h *Home) inputMethodNavigation() bool {
 	if p := h.kanbanPanel; p != nil && p.IsVisible() {
 		return !p.filterEditing
 	}
+	if d := h.worktreeFinishDialog; d != nil && d.IsVisible() {
+		// The merge target is typed; the two checkboxes are operated.
+		return !d.IsTextFocused()
+	}
 	if h.notesEditing {
 		return false
 	}
@@ -197,7 +201,6 @@ func (h *Home) inputMethodNavigation() bool {
 		h.pluginDialog != nil && h.pluginDialog.IsVisible() ||
 		h.skillDialog != nil && h.skillDialog.IsVisible() ||
 		h.geminiModelDialog != nil && h.geminiModelDialog.IsVisible() ||
-		h.worktreeFinishDialog != nil && h.worktreeFinishDialog.IsVisible() ||
 		h.watcherPanel != nil && h.watcherPanel.IsVisible() ||
 		h.agentsPanel != nil && h.agentsPanel.IsVisible() ||
 		h.adoptPanel != nil && h.adoptPanel.IsVisible() ||

@@ -83,6 +83,11 @@ func (d *WorktreeFinishDialog) IsVisible() bool {
 	return d.visible
 }
 
+// IsTextFocused reports whether the merge target input has the focus, as
+// opposed to one of the two checkboxes. matrix/hardened: the input-method
+// policy distinguishes typing from pure operation per focused control.
+func (d *WorktreeFinishDialog) IsTextFocused() bool { return d != nil && d.focusIndex == 1 }
+
 // SetSize sets the dialog dimensions for centering
 func (d *WorktreeFinishDialog) SetSize(width, height int) {
 	d.width = width
