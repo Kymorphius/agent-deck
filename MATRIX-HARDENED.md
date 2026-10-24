@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.108`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.110`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -66,7 +66,7 @@
 - `internal/session/claude_hooks.go`：`isAgentDeckHookCommand` 的判断规则：先去掉开头的 `VAR=值`，再要求第二个词是 `hook-handler`、程序名的文件名部分是 `agent-deck`。`RemoveClaudeHooks` 会扫描全部事件，并做 UTC 时间戳备份（约 387–414 行）。
 - `cmd/agent-deck/main.go`（约 4845、5070 行）：`agent-deck uninstall` 会移除这些钩子。`uninstall.sh` 第 253 行附近的 jq 过滤用的是同一套规则（正则），写回时用 `cat >` 保持软链接和权限。
 
-**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.107`。
+**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.110`。
 
 **测试**：以 `_hardened_test.go` 结尾的文件、`update_check_disable_test.go`、`update_timer_wiring_test.go` 等是新增或调整过的测试；`testdata/goldens/*` 里的快照已经按加固后的输出更新。
 
@@ -968,3 +968,10 @@ snapshots, compatibility, and validation boundaries.
 - **matrix/hardened:** `matrix.109` 给 `OptionsPanel` 接口加 `TextFocused()`，Claude 与 OMP 面板用各自 `textinput` 的 `Focused()` 作权威判据（两者的 `updateInputFocus`／`syncFocus` 始终只让获得焦点的那个处于 Focus 态），Yolo 面板只有开关故恒为 false；`NewDialog.isTextInputFocused()` 增加 `focusOptions` 分支。worktree 收尾对话框新增 `IsTextFocused()`，并从整体导航组移到按焦点判定。
 - 审计覆盖全部带文字输入的组件（`textinput.Model` 与手写按键缓冲各一遍）。结论：MCP 与技能对话框的首字母跳转、永久删除确认要求的字面量 `DELETE`，本来就应当是 ASCII，保持不变；反馈对话框有自由文本步骤但 `hardenedNoPrompts = true` 使其不可达，不纳入分类。完整分类表记在 [输入法适配说明](docs/input-method.md)。
 - **测试**：`internal/ui/matrix_input_method_test.go` 新增 `TestInputMethodPanelAndDialogTextFields`（无面板、面板开关、Claude 三个字段、OMP 字段、worktree 三个焦点位置），与既有 `TestInputMethodFormFields` 一起作为新增文字输入组件的守卫。
+
+## 94. 远程排队会话的首次交互打开
+
+- **问题**：远程新建后的启动请求可能因目标设备的分组并发上限而进入 queued，尚未创建 tmux pane。远程打开只执行 `session attach`，此前直接报 not running；在目标设备本地打开会启动缺失的 pane，造成必须先在本地打开一次的差异。分组默认值和已有分组限制各自保存在目标设备，不会随控制端设置自动同步。
+- **matrix/hardened:** `matrix.110` 允许交互 `session attach` 为无 pane 的 queued 会话启动原有启动计划。先检查真实 TTY、记录访问并保留自动休眠的精确唤醒流程；pane 存活时只 attach，stopped/error 不由这个入口自动重启。启动前取得既有 profile mutation lock，在锁内重读状态、权威探测 pane 并遵守当前有效分组上限；仍受限时保留 queued 并显示分组及上限。
+- **matrix/hardened:** 复用原有 `Start` 和 `VerifySpawned`，只保存目标会话的快照。验证失败置 error 并保存；保存失败明确说明进程已启动，不重复启动或回收它。完成启动及保存后释放锁，再进入交互终端；并发首次打开不会重复创建同一会话。远程客户端无需新参数。
+- **测试**：隔离真实 PTY/tmux 配合本地 fake harness，验证首次打开、无 TTY、已有 pane、并发打开、分组上限、失败边界与启动参数保留；另运行已有自动休眠及相关 attach/start 定向回归。安装后需更新目标设备的实际程序，AI 会话本身不需重启。

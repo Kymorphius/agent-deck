@@ -1589,9 +1589,11 @@ func handleSessionAttach(profile string, args []string) {
 			os.Exit(1)
 		}
 	}
-	// Check if session exists
-	if !inst.Exists() {
-		fmt.Fprintf(os.Stderr, "Error: session '%s' is not running\n", inst.Title)
+	// matrix/hardened: Remote opens reach this same interactive entry point.
+	// Start only an unspawned queued session; never restart an existing AI.
+	inst, err = ensureSessionPaneForAttach(profile, storage, inst)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 
