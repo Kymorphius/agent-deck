@@ -1710,12 +1710,16 @@ func (i *Instance) buildClaudeCommandWithMessage(baseCommand, message string) st
 			// UTF-8 locale, and a non-ASCII first message (Chinese task
 			// titles from the task board, `launch --message`) must not be
 			// treated as non-UTF-8 by the client.
+			//
+			// matrix/hardened: send-keys names no real target client so a
+			// read-only observer cannot make tmux 3.7+ refuse it.
+			sendKeysClient := tmux.SendKeysClientFlag()
 			baseCmd = fmt.Sprintf(
 				`(sleep 2; SESSION_NAME=$(tmux -u display-message -p '#S'); `+
 					`while ! tmux -u capture-pane -p -t "$SESSION_NAME" | tail -5 | grep -qE "^>"; do sleep 0.2; done; `+
-					`tmux -u send-keys -l -t "$SESSION_NAME" -- '%s' \; send-keys -t "$SESSION_NAME" Enter) & `+
+					`tmux -u send-keys %s-l -t "$SESSION_NAME" -- '%s' \; send-keys %s-t "$SESSION_NAME" Enter) & `+
 					`%sexec %s%s --session-id "%s"%s`,
-				escapedMsg,
+				sendKeysClient, escapedMsg, sendKeysClient,
 				bashExportPrefix, execEnvPrefix, claudeCmd, sessionUUID, extraFlags)
 		}
 

@@ -196,18 +196,20 @@ func (k *localKeySender) SendKeys(text string) error {
 	if text == "" {
 		return nil
 	}
-	return k.writeCmd("send-keys -l -t " + tmuxQuote(k.target) + " -- " + tmuxQuote(text))
+	// matrix/hardened: -c keeps a read-only observer from being the target
+	// client (see matrix_send_keys_client.go); same for the two below.
+	return k.writeCmd("send-keys " + SendKeysClientFlag() + "-l -t " + tmuxQuote(k.target) + " -- " + tmuxQuote(text))
 }
 
 func (k *localKeySender) SendNamedKey(key string) error {
 	if strings.TrimSpace(key) == "" {
 		return fmt.Errorf("keysender: empty named key")
 	}
-	return k.writeCmd("send-keys -t " + tmuxQuote(k.target) + " " + tmuxQuote(key))
+	return k.writeCmd("send-keys " + SendKeysClientFlag() + "-t " + tmuxQuote(k.target) + " " + tmuxQuote(key))
 }
 
 func (k *localKeySender) SendEnter() error {
-	return k.writeCmd("send-keys -t " + tmuxQuote(k.target) + " Enter")
+	return k.writeCmd("send-keys " + SendKeysClientFlag() + "-t " + tmuxQuote(k.target) + " Enter")
 }
 
 func (k *localKeySender) writeCmd(line string) error {

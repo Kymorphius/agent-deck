@@ -1000,3 +1000,11 @@ snapshots, compatibility, and validation boundaries.
 - **matrix/hardened:** 当前视图沿用各自的状态、归档、时间、最近、置顶与分组范围规则；远端分组搜索同时限定设备和直属分组。所有本地候选刷新统一走同一构造器，打开的搜索也接收远端快照更新，保留关键词和仍有效的选中项，不新增搜索专用 SSH 请求。
 - **matrix/hardened:** 搜索回车只定位。远端结果先按设备和完整 ID 在最新快照重验，再处理视图与折叠祖先并定位；后续普通打开沿用既有 prepare-open。Recall 全文索引与联邦搜索的数据源保持原有范围。
 - **测试**：隔离 UI 回归覆盖本机及两个远端同 ID、设备与分组定位、折叠、归档、状态/时间/最近/置顶组合、过期结果无副作用，以及 local reload 与 remote fetch 后的 query/scope/selection 保留；同时运行既有会话和分组搜索定向回归。
+
+## 98. 只读观察客户端让 send-keys 失败，会话之间消息发不出去
+
+- **问题**：tmux 3.7 起（上游 `610bf013`，"A few additional readonly checks"），`send-keys` 的目标客户端是只读时直接报 `client is read-only` 退出 1。没写 `-c` 时 tmux 自己挑目标客户端：服务器上最近活动的已附着客户端。agent-deck 自己的观察连接（control pipe、monitor）都用 `-f read-only,ignore-size` 附着，经常就是被挑中的那个，于是 agent-deck 的所有 `send-keys` 都失败，而 `paste-buffer` 不受影响。结果是多行 `session send` 把正文粘进输入框、按 Enter 失败，输入框里留下 `[Pasted text #N +M lines]`；之后所有发给这个会话的消息都因为"输入框被占用"被拒，几个会话之间互相发不出消息（2026-10-25 在 Pro 上的 XingPan 会话里发现，Air 的 tmux 3.8 同样复现）。
+- **matrix/hardened:** `matrix.114` 给每个 `send-keys` 加上 `-c agent-deck-no-target-client`。这个名字不会对应任何客户端，`send-keys` 允许找不到客户端（`CMD_CLIENT_CANFAIL`），目标客户端于是为空，跳过只读检查，按键照样送到 `-t` 指定的窗格。`tmuxArgs` 统一处理所有经 `tmuxExec` 的调用（已经带 `-c` 的不动，只扫描选项部分，不会把正文当成参数）；控制模式的 KeySender 和新会话首条消息的 shell 片段用 `tmux.SendKeysClientFlag()` 拼进命令行。`send-keys -c` 从 tmux 3.4 才有，更早的版本（例如 3.2a）本来也没有这项检查，维持原命令；版本读不出来时也维持原命令。
+- **已经卡住的会话**：修复不会去动输入框里已有的 `[Pasted text]`，需要人工按 Enter 发出去或清空，之后的消息就能正常送达。
+- **改动地图**：`internal/tmux/matrix_send_keys_client.go`（新文件）、`internal/tmux/socket.go`（`tmuxArgs` 一行）、`internal/tmux/keysender.go`（三处）、`internal/session/instance.go`（首条消息片段）。
+- **测试**：`internal/tmux/matrix_send_keys_client_test.go`（版本门槛、参数插入、真实 tmux 私有 socket 上挂一个只读 control 客户端后 `SendKeysAndEnter` 仍能提交；去掉修复时该用例以 `exit status 1` 失败）；`internal/session/matrix_first_message_utf8_test.go` 放宽为允许 `send-keys` 后带 `-c`。

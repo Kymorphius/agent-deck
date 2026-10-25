@@ -166,6 +166,9 @@ func tmuxArgs(socketName string, args ...string) []string {
 	if len(args) > 0 && args[0] == tmuxutf8.Flag {
 		args = args[1:]
 	}
+	// matrix/hardened: keep send-keys working while a read-only observer is
+	// the server's most active client (see matrix_send_keys_client.go).
+	args = withSendKeysClient(args)
 	name := strings.TrimSpace(socketName)
 	var out []string
 	if name == "" {

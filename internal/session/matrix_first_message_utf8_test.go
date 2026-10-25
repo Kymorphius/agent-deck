@@ -17,7 +17,8 @@ func TestMatrixFirstMessage_TmuxCallsUseUTF8Flag(t *testing.T) {
 	if !strings.Contains(cmd, "'整理 World Store 任务'") {
 		t.Fatalf("message not passed through as is: %s", cmd)
 	}
-	for _, sub := range []string{"display-message", "capture-pane", "send-keys -l"} {
+	// send-keys may carry -c before -l (matrix_send_keys_client.go).
+	for _, sub := range []string{"display-message", "capture-pane", "send-keys "} {
 		if !strings.Contains(cmd, "tmux -u "+sub) {
 			t.Errorf("tmux %s without -u: %s", sub, cmd)
 		}
