@@ -23602,6 +23602,11 @@ func (h *Home) renderRemoteSessionItemAtWidth(b *strings.Builder, item session.I
 			staleNote = " · status " + formatRemoteAge(age) + " old"
 		}
 		indent := strings.Repeat("  ", max(0, item.Level-1))
+		// matrix/hardened: standalone fleet cards share the local hotkey gutter.
+		standalone := h.matrixStandaloneSessionView() && item.Level == 0
+		if standalone && !h.compactSidebar {
+			indent = strings.Repeat(" ", leftGutterWidth) + indent
+		}
 		marker := "  "
 		if selected {
 			marker = "▶ "
@@ -23610,14 +23615,20 @@ func (h *Home) renderRemoteSessionItemAtWidth(b *strings.Builder, item session.I
 		if embedded {
 			marker = "┃ "
 		}
+		// matrix/hardened: reserve the local card's window-chevron slot, even
+		// though remote windows cannot be expanded in this list.
+		chevron := ""
+		if standalone {
+			chevron = "  "
+		}
 		// A one-line rail carries the tool marker inline, like local rows.
 		rowLines := h.sidebarRowLines()
 		toolPrefix := ""
 		if rowLines == 1 && rs.Tool != "" {
 			toolPrefix = sidebarToolIcon(rs.Tool) + " "
 		}
-		firstPlain := indent + marker + statusIcon + " " + toolPrefix + remoteTitle
-		first := indent + marker + statusStyle.Render(statusIcon) + " "
+		firstPlain := indent + marker + chevron + statusIcon + " " + toolPrefix + remoteTitle
+		first := indent + marker + chevron + statusStyle.Render(statusIcon) + " "
 		if toolPrefix != "" {
 			first += GetToolStyle(strings.ToLower(rs.Tool)).Bold(true).Render(sidebarToolIcon(rs.Tool)) + " "
 		}
@@ -23742,10 +23753,19 @@ func (h *Home) renderRemoteSessionItemAtWidth(b *strings.Builder, item session.I
 		remoteViewersBadge += sStyle.Render(" " + formatRelativeTime(matrixRemoteAccessTime(*rs)))
 	}
 
-	line := fmt.Sprintf("%s%s%s %s %s%s%s%s",
-		remoteRowGutter(selected), // align with group/session hotkey gutter
-		indent,
-		DimStyle.Render(treeConnector),
+	rowPrefix := remoteRowGutter(selected) + indent + DimStyle.Render(treeConnector) + " "
+	if h.matrixStandaloneSessionView() && item.Level == 0 {
+		// matrix/hardened: Recent/Pinned are flat fleet lists. Match the local
+		// gutter, selection arrow and empty window-chevron cell exactly.
+		selectionPrefix, windowChevron := " ", " "
+		if selected {
+			selectionPrefix = SessionSelectionPrefix.Render("▶")
+			windowChevron = SessionStatusSelStyle.Render(" ")
+		}
+		rowPrefix = strings.Repeat(" ", leftGutterWidth) + selectionPrefix + windowChevron
+	}
+	line := fmt.Sprintf("%s%s %s%s%s%s",
+		rowPrefix,
 		sStyle.Render(statusIcon),
 		titleStyle.Render(titleStr),
 		toolStr,

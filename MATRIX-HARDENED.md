@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.113`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.115`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -66,7 +66,7 @@
 - `internal/session/claude_hooks.go`：`isAgentDeckHookCommand` 的判断规则：先去掉开头的 `VAR=值`，再要求第二个词是 `hook-handler`、程序名的文件名部分是 `agent-deck`。`RemoveClaudeHooks` 会扫描全部事件，并做 UTC 时间戳备份（约 387–414 行）。
 - `cmd/agent-deck/main.go`（约 4845、5070 行）：`agent-deck uninstall` 会移除这些钩子。`uninstall.sh` 第 253 行附近的 jq 过滤用的是同一套规则（正则），写回时用 `cat >` 保持软链接和权限。
 
-**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.113`。
+**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.115`。
 
 **测试**：以 `_hardened_test.go` 结尾的文件、`update_check_disable_test.go`、`update_timer_wiring_test.go` 等是新增或调整过的测试；`testdata/goldens/*` 里的快照已经按加固后的输出更新。
 
@@ -1008,3 +1008,9 @@ snapshots, compatibility, and validation boundaries.
 - **已经卡住的会话**：修复不会去动输入框里已有的 `[Pasted text]`，需要人工按 Enter 发出去或清空，之后的消息就能正常送达。
 - **改动地图**：`internal/tmux/matrix_send_keys_client.go`（新文件）、`internal/tmux/socket.go`（`tmuxArgs` 一行）、`internal/tmux/keysender.go`（三处）、`internal/session/instance.go`（首条消息片段）。
 - **测试**：`internal/tmux/matrix_send_keys_client_test.go`（版本门槛、参数插入、真实 tmux 私有 socket 上挂一个只读 control 客户端后 `SendKeysAndEnter` 仍能提交；去掉修复时该用例以 `exit status 1` 失败）；`internal/session/matrix_first_message_utf8_test.go` 放宽为允许 `send-keys` 后带 `-c`。
+
+## 99. 最近列表的行缩进对齐
+
+- **问题**：独立时间线沿用了远程分组树的选择箭头与保底缩进，导致经典布局的远程状态比本机右移一格、选择箭头落在不同列；内嵌布局的远程卡片缺少本机的左侧留白，多窗口本机会话又额外占用展开标记的位置。
+- **matrix/hardened:** `matrix.115` 为“最近”和“仅置顶”的 Level-0 会话统一选择标记、状态和标题的起始列。经典远程行复用本机会话的 gutter、选择位与窗口标记空位；内嵌远程行按 compact 设置保留同样的 gutter，所有独立会话预留窗口展开标记位置，元数据同步对齐。窗口子行保持其层级；普通分组树沿用原有缩进。
+- **测试**：`internal/ui/matrix_standalone_indent_test.go` 按终端显示列断言本机／远程、选中／未选中、经典／窄栏回退、compact／普通内嵌卡片及多窗口会话对齐；既有 Recent 排序与游标、Pinned、远程分组父子树、状态字形回归继续覆盖原有行为。

@@ -293,6 +293,11 @@ func (h *Home) renderEmbeddedSessionItem(
 		marker = "┃ "
 	}
 	chevron := ""
+	if h.matrixStandaloneSessionView() && item.Level == 0 {
+		// matrix/hardened: flat fleet rows keep status/title columns aligned
+		// whether or not a session has expandable windows.
+		chevron = "  "
+	}
 	if h.sessionHasWindows(item) {
 		chevron = "▾ "
 		if h.windowsCollapsed[inst.ID] {
