@@ -245,7 +245,14 @@ func (i *Instance) ownershipStatusAt(store *procowner.Store) OwnershipStatus {
 		return status
 	}
 	status.Receipt = receipt
-	status.Report = procowner.Verify(ownershipProber, receipt)
+	// matrix/hardened: a managed Codex runtime serves other clients too; old
+	// receipts may still contain it. Keep the durable receipt for CAS/clear.
+	view, err := i.codexSharedOwnershipFilter().receipt(receipt, ownershipProber)
+	if err != nil {
+		status.LoadErr = err
+		return status
+	}
+	status.Report = procowner.Verify(ownershipProber, view)
 
 	owned := status.Report.Owned()
 	if len(owned) == 0 {
@@ -554,7 +561,16 @@ func (i *Instance) claimOwnershipAtSpawn(command string, gen uint64, wake <-chan
 				seen[member.Key()] = true
 			}
 		}
-		return claimed, nil
+		// matrix/hardened: exclude verified shared runtime roots and their
+		// current tree from both initial attribution and carried identities.
+		view, filterErr := i.codexSharedOwnershipFilter().receipt(claimed, ownershipProber)
+		if filterErr != nil {
+			// Preserve the actual claim; later status/reap fail closed until
+			// the shared-runtime identity becomes verifiable.
+			sessionLog.Debug("ownership_shared_runtime_unverified", slog.String("reason", logging.SanitizeValue(filterErr.Error())))
+			return claimed, nil
+		}
+		return view, nil
 	})
 	if err != nil {
 		if errors.Is(err, procowner.ErrNoProcess) || errors.Is(err, procowner.ErrUnsupported) {
@@ -615,7 +631,10 @@ func (i *Instance) claimOwnershipAtSpawn(command string, gen uint64, wake <-chan
 	// can still be running after the test that started it has finished and
 	// swapped those package variables out from under it. Reading them from the
 	// goroutine is a data race the race detector will (and did) catch.
-	go i.attributeOwnedTree(receipt, store, ownershipProber, sessionLog, gen, wake)
+	// matrix/hardened: resolve the instance home and read-only probe before
+	// starting the goroutine, just like the prober and logger above.
+	sharedFilter := i.codexSharedOwnershipFilter()
+	go i.attributeOwnedTree(receipt, store, ownershipProber, sessionLog, gen, wake, sharedFilter)
 }
 
 // probePanePIDForClaim reads the pane's initial pid, retrying a few times so a
@@ -706,7 +725,7 @@ func unverifiedSpawnMarker(p procowner.Prober, instanceID string, generation uin
 // that still verifies against the receipt, and it stops the moment that leader
 // stops being ours. Nothing here can add a process that was not, at the instant
 // of a single stat read, a live descendant of a process this spawn owns.
-func (i *Instance) attributeOwnedTree(owned *procowner.Receipt, store *procowner.Store, prober procowner.Prober, logger *slog.Logger, gen uint64, wake <-chan struct{}) {
+func (i *Instance) attributeOwnedTree(owned *procowner.Receipt, store *procowner.Store, prober procowner.Prober, logger *slog.Logger, gen uint64, wake <-chan struct{}, sharedFilter codexSharedOwnershipFilter) {
 	start := time.Now()
 	deadline := start.Add(ownershipAttributeMaxWindow)
 	for {
@@ -755,7 +774,22 @@ func (i *Instance) attributeOwnedTree(owned *procowner.Receipt, store *procowner
 				// nothing more to contribute and must not start guessing.
 				return err
 			}
-			if len(added) == 0 {
+			// matrix/hardened: the first launcher must not keep claiming the
+			// shared daemon while its updater/children appear during startup.
+			view, filterErr := sharedFilter.receipt(current, prober)
+			if filterErr != nil {
+				// matrix/hardened: native pid publication may lag startup.
+				// Keep the actual claim (status/reap remain fail closed), and
+				// let later ticks continue to attribute ordinary descendants.
+				logger.Debug("ownership_shared_runtime_unverified", slog.String("reason", logging.SanitizeValue(filterErr.Error())))
+				if len(added) == 0 {
+					return procowner.ErrNoChange // Store.Update treats this as a successful tick
+				}
+				return nil
+			}
+			removed := len(current.Members) - len(view.Members)
+			current.Members = view.Members
+			if len(added) == 0 && removed == 0 {
 				return procowner.ErrNoChange
 			}
 			return nil
@@ -809,7 +843,8 @@ func (i *Instance) clearOwnershipAfterTeardown(sync bool) {
 	if receipt == nil {
 		return
 	}
-	report := procowner.Reap(ownershipProber, ownershipSignaler, receipt, teardownReapOptions(sync))
+	// matrix/hardened: teardown must leave the shared Codex backend intact.
+	report := reapCodexSessionOwnership(i.codexSharedOwnershipFilter(), ownershipProber, ownershipSignaler, receipt, teardownReapOptions(sync))
 	if report.Verdict != procowner.VerdictClear {
 		markOwnershipRecoveryRequired(store, receipt, report.Reason)
 		sessionLog.Warn("ownership_teardown_incomplete",
@@ -878,7 +913,9 @@ func (i *Instance) ReconcileOwnership() (procowner.ReapReport, error) {
 			Reason:  "no ownership receipt",
 		}, nil
 	}
-	report := procowner.Reap(ownershipProber, ownershipSignaler, receipt, procowner.ReapOptions{})
+	// matrix/hardened: explicit reconciliation has the same shared-runtime
+	// boundary as normal teardown; it must not terminate other clients.
+	report := reapCodexSessionOwnership(i.codexSharedOwnershipFilter(), ownershipProber, ownershipSignaler, receipt, procowner.ReapOptions{})
 	if report.Verdict != procowner.VerdictClear {
 		markOwnershipRecoveryRequired(store, receipt, report.Reason)
 		return report, nil
