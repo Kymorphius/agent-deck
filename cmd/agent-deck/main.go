@@ -45,7 +45,7 @@ import (
 )
 
 // matrix/hardened: identifies our hardened build.
-var Version = "1.16.26+matrix.115" // matrix/hardened: align local/remote standalone list rows and window slots; overridden via -ldflags.
+var Version = "1.16.26+matrix.116" // matrix/hardened: align local/remote standalone list rows and window slots; overridden via -ldflags.
 
 // Table column widths for list command output
 const (

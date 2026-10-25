@@ -10,6 +10,12 @@ import (
 // It is shorter than the UI's retry tick so scheduled retries always execute.
 const retryFloor = 100 * time.Millisecond
 
+// verifyFloor throttles re-checking a mode that is already in effect. Each
+// check costs two native IPC calls (frontmost application, current source), and
+// key repeat in the list would otherwise run them tens of times a second. A
+// source hijacked between two checks is still corrected within this window.
+const verifyFloor = 250 * time.Millisecond
+
 // TextSourceAuto resolves the text input method from what the operator uses:
 // the remembered one, otherwise the only enabled non-ASCII input method.
 const TextSourceAuto = "auto"
@@ -93,6 +99,10 @@ func (c *Controller) Sync(navigation, reassert bool) bool {
 	// operator who picks a different source while typing keeps it. Navigation
 	// keeps verifying, because those keys belong to agent-deck itself.
 	if !navigation && !changed && !c.pending && !reassert {
+		return true
+	}
+	// Verifying an applied mode is cheap to skip and expensive to repeat.
+	if !changed && !c.pending && !reassert && c.now().Sub(c.lastTry) < verifyFloor {
 		return true
 	}
 	c.lastTry = c.now()

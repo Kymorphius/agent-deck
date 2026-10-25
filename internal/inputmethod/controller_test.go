@@ -397,3 +397,43 @@ func TestInputMethodTextSourceLimits(t *testing.T) {
 		t.Fatalf("exit selected an input method: %v", exiting.calls)
 	}
 }
+
+// matrix/hardened: re-checking a mode that is already in effect costs two
+// native IPC calls. Key repeat in the list used to run them on every keystroke.
+func TestInputMethodVerifyFloor(t *testing.T) {
+	isolateOwnership(t)
+	b := &fakeBackend{active: true, source: "Rime"}
+	frozen := time.Unix(0, 0)
+	c := &Controller{backend: b, clock: func() time.Time { return frozen }}
+	if !c.Sync(true, false) || b.source != "ABC" {
+		t.Fatalf("navigation was not applied: %q", b.source)
+	}
+	// A burst of keystrokes inside the floor does no native work at all.
+	b.calls = nil
+	reads := 0
+	for i := 0; i < 50; i++ {
+		if !c.Sync(true, false) {
+			t.Fatal("an applied mode was reported as unapplied")
+		}
+		reads++
+	}
+	if len(b.calls) != 0 {
+		t.Fatalf("throttled verification ran native selection: %v", b.calls)
+	}
+	// After the floor, verification runs again and still corrects a hijack.
+	frozen = frozen.Add(verifyFloor)
+	b.source = "Rime" // something else took the source back
+	if !c.Sync(true, false) || b.source != "ABC" {
+		t.Fatalf("verification after the floor did not re-acquire: %q", b.source)
+	}
+	// A mode change and a renewed focus are never throttled.
+	frozen = frozen.Add(time.Millisecond)
+	if !c.Sync(false, false) || b.source != "Rime" {
+		t.Fatalf("a mode change was throttled: %q", b.source)
+	}
+	frozen = frozen.Add(time.Millisecond)
+	b.source = "ABC"
+	if !c.Sync(false, true) || len(b.calls) == 0 {
+		t.Fatal("a renewed focus was throttled")
+	}
+}
