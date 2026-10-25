@@ -126,6 +126,9 @@ func MergePanelConfigOntoDisk(panel *UserConfig) (*UserConfig, error) {
 	if panel.UI.ClearSearchOnOpen != nil {
 		merged.UI.ClearSearchOnOpen = panel.UI.ClearSearchOnOpen
 	}
+	if panel.UI.VisibleLineNumbers != nil { // matrix/hardened: same rule
+		merged.UI.VisibleLineNumbers = panel.UI.VisibleLineNumbers
+	}
 	if panel.UI.EmbeddedTerminal != nil {
 		merged.UI.EmbeddedTerminal = panel.UI.EmbeddedTerminal
 	}

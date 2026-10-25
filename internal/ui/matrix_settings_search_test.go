@@ -82,7 +82,7 @@ func TestMatrixSettingsClearSearchOnOpenScrollAndHighlight(t *testing.T) {
 	panel.cursor = int(SettingClearSearchOnOpen)
 	view := panel.View()
 	plain := ansi.Strip(view)
-	if !strings.Contains(plain, "LOCAL SEARCH") || !strings.Contains(plain, "[x] Clear search on open (/)") ||
+	if !strings.Contains(plain, "SESSION LIST") || !strings.Contains(plain, "[x] Clear search on open (/)") ||
 		!strings.Contains(plain, "more above") || !strings.Contains(plain, "more below") {
 		t.Fatalf("short window did not show the focused local-search setting:\n%s", view)
 	}

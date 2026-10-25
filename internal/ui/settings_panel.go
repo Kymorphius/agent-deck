@@ -31,7 +31,8 @@ const (
 	SettingLogMaxSize
 	SettingLogMaxLines
 	SettingRemoveOrphans
-	SettingClearSearchOnOpen // matrix/hardened: local-search reopening preference
+	SettingClearSearchOnOpen  // matrix/hardened: local-search reopening preference
+	SettingVisibleLineNumbers // matrix/hardened: number rows from the top visible row
 	SettingGlobalSearchEnabled
 	SettingSearchTier
 	SettingRecentDays
@@ -61,7 +62,7 @@ const (
 )
 
 // Total number of navigable settings.
-const settingsCount = 41 // matrix/hardened: append AI updates without renumbering existing settings
+const settingsCount = 42 // matrix/hardened: AI updates, then visible line numbers (SettingVisibleLineNumbers)
 
 // SettingsPanel displays and edits user configuration
 type SettingsPanel struct {
@@ -93,6 +94,7 @@ type SettingsPanel struct {
 	logMaxLines         int
 	removeOrphans       bool
 	clearSearchOnOpen   bool // matrix/hardened: clear / and Alt+/ on each open
+	visibleLineNumbers  bool // matrix/hardened: line numbers start at the top visible row
 	globalSearchEnabled bool
 	searchTier          int // 0=auto, 1=instant, 2=balanced
 	recentDays          int
@@ -190,6 +192,7 @@ func NewSettingsPanel() *SettingsPanel {
 		logMaxLines:         10000,
 		removeOrphans:       true,
 		clearSearchOnOpen:   true,  // matrix/hardened: fresh local-search query by default
+		visibleLineNumbers:  true,  // matrix/hardened: visible-range numbering by default
 		checkForUpdates:     false, // matrix/hardened: no update polling by default
 		autoInstall:         false, // matrix/hardened: no unattended installs by default
 		autoRestart:         true,
@@ -332,6 +335,7 @@ func (s *SettingsPanel) LoadConfig(config *session.UserConfig) {
 
 	// matrix/hardened: local search is separate from G's conversation search.
 	s.clearSearchOnOpen = config.UI.GetClearSearchOnOpen()
+	s.visibleLineNumbers = config.UI.GetVisibleLineNumbers()
 
 	// Global search settings
 	s.globalSearchEnabled = config.GlobalSearch.GetEnabled()
@@ -491,6 +495,8 @@ func (s *SettingsPanel) GetConfig() *session.UserConfig {
 	// matrix/hardened: keep explicit false so the user's retention choice persists.
 	clearSearchOnOpen := s.clearSearchOnOpen
 	config.UI.ClearSearchOnOpen = &clearSearchOnOpen
+	visibleLineNumbers := s.visibleLineNumbers
+	config.UI.VisibleLineNumbers = &visibleLineNumbers
 
 	// Global search settings
 	globalSearchEnabled := s.globalSearchEnabled
@@ -827,6 +833,10 @@ func (s *SettingsPanel) toggleValue() bool {
 		s.clearSearchOnOpen = !s.clearSearchOnOpen
 		return true
 
+	case SettingVisibleLineNumbers: // matrix/hardened: applies on save
+		s.visibleLineNumbers = !s.visibleLineNumbers
+		return true
+
 	case SettingGlobalSearchEnabled:
 		s.globalSearchEnabled = !s.globalSearchEnabled
 		s.needsRestart = true
@@ -1134,10 +1144,16 @@ func (s *SettingsPanel) View() string {
 	content.WriteString("  " + labelStyle.Render(line) + "\n\n")
 
 	// matrix/hardened: distinguish / and Alt+/ from the G conversation-search controls.
-	content.WriteString(sectionStyle.Render("LOCAL SEARCH"))
+	content.WriteString(sectionStyle.Render("SESSION LIST"))
 	content.WriteString("\n")
 	line = s.renderCheckbox("Clear search on open (/)", s.clearSearchOnOpen) + " - /, Alt+/; off keeps query"
 	if s.cursor == int(SettingClearSearchOnOpen) {
+		line = highlightStyle.Render(line)
+	}
+	content.WriteString("  " + labelStyle.Render(line) + "\n")
+	// matrix/hardened: visible-range line numbers (matrix_line_numbers.go).
+	line = s.renderCheckbox("Number visible rows", s.visibleLineNumbers) + " - top row on screen is 1; off numbers the whole list"
+	if s.cursor == int(SettingVisibleLineNumbers) {
 		line = highlightStyle.Render(line)
 	}
 	content.WriteString("  " + labelStyle.Render(line) + "\n\n")
@@ -1427,32 +1443,33 @@ func (s *SettingsPanel) View() string {
 			30, // SettingLogMaxLines (shares line with LogMaxSize)
 			31, // SettingRemoveOrphans
 			34, // SettingClearSearchOnOpen (matrix/hardened: LOCAL SEARCH adds three lines)
-			37, // SettingGlobalSearchEnabled
-			38, // SettingSearchTier
-			39, // SettingRecentDays
-			42, // SettingShowOutput
-			43, // SettingShowAnalytics
-			44, // SettingShowNotes
-			45, // SettingNotesOutputSplit
-			48, // SettingMaintenanceEnabled
-			51, // SettingStatsEnabled
-			52, // SettingStatsRefresh
-			53, // SettingStatsFormat
-			55, // SettingStatsShowCPU (row with RAM, Disk)
-			55, // SettingStatsShowRAM
-			55, // SettingStatsShowDisk
-			56, // SettingStatsShowNetwork (row with GPU, Load)
-			56, // SettingStatsShowGPU
-			56, // SettingStatsShowLoad
-			59, // SettingSyncTitle (SESSIONS section, after stats)
-			62, // SettingShowSessionTimestamps (DISPLAY section, after SESSIONS)
-			63, // SettingShowPaneTitles (DISPLAY section, after timestamps)
-			66, // SettingShowOnlyInstalledTools (TOOL PICKER section)
-			67, // SettingVisibleTools
-			70, // SettingEmbeddedTerminal (INTERFACE section)
-			71, // SettingSidebarDensity
-			76, // SettingPrivacy (PRIVACY section)
-			80, // SettingAIUpdates (matrix/hardened: AI UPDATES section)
+			35, // SettingVisibleLineNumbers (matrix/hardened: second SESSION LIST row)
+			38, // SettingGlobalSearchEnabled
+			39, // SettingSearchTier
+			40, // SettingRecentDays
+			43, // SettingShowOutput
+			44, // SettingShowAnalytics
+			45, // SettingShowNotes
+			46, // SettingNotesOutputSplit
+			49, // SettingMaintenanceEnabled
+			52, // SettingStatsEnabled
+			53, // SettingStatsRefresh
+			54, // SettingStatsFormat
+			56, // SettingStatsShowCPU (row with RAM, Disk)
+			56, // SettingStatsShowRAM
+			56, // SettingStatsShowDisk
+			57, // SettingStatsShowNetwork (row with GPU, Load)
+			57, // SettingStatsShowGPU
+			57, // SettingStatsShowLoad
+			60, // SettingSyncTitle (SESSIONS section, after stats)
+			63, // SettingShowSessionTimestamps (DISPLAY section, after SESSIONS)
+			64, // SettingShowPaneTitles (DISPLAY section, after timestamps)
+			67, // SettingShowOnlyInstalledTools (TOOL PICKER section)
+			68, // SettingVisibleTools
+			71, // SettingEmbeddedTerminal (INTERFACE section)
+			72, // SettingSidebarDensity
+			77, // SettingPrivacy (PRIVACY section)
+			81, // SettingAIUpdates (matrix/hardened: AI UPDATES section)
 		}
 		cursorLine := rowOf[cursorToLine[s.cursor]]
 

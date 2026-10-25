@@ -503,6 +503,11 @@ type UISettings struct {
 	// nil defaults to true, while false preserves the previous query.
 	ClearSearchOnOpen *bool `toml:"clear_search_on_open,omitempty"`
 
+	// matrix/hardened: number session-list rows from the top visible row
+	// (1 = the first row on screen) so N+l, N+Enter and :N reach what is
+	// shown; false numbers the whole list from its first row. nil = true.
+	VisibleLineNumbers *bool `toml:"visible_line_numbers,omitempty"`
+
 	// EmbeddedTerminal enables a compact persistent session sidebar whose Enter
 	// key focuses a full-fidelity embedded tmux client. It is opt-in so an
 	// omitted setting preserves the classic layout and Enter-to-attach behavior.
@@ -1008,6 +1013,12 @@ func (u UISettings) GetNewSessionEnterAdvances() bool {
 // an empty query; users may explicitly opt out to retain their last query.
 func (u UISettings) GetClearSearchOnOpen() bool {
 	return u.ClearSearchOnOpen == nil || *u.ClearSearchOnOpen
+}
+
+// matrix/hardened: GetVisibleLineNumbers defaults to numbering from the top
+// visible row; false restores whole-list numbering.
+func (u UISettings) GetVisibleLineNumbers() bool {
+	return u.VisibleLineNumbers == nil || *u.VisibleLineNumbers
 }
 
 // GetAttachOnCreate reports whether the TUI should attach to a newly created

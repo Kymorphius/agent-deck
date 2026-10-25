@@ -34,11 +34,21 @@ const (
 
 // matrixRowNumbers maps flatItems indices to 1-based line numbers (0 for
 // dividers) and returns the highest number.
+//
+// matrix/hardened: by default ([ui] visible_line_numbers) numbering starts at
+// the top visible row (viewOffset), so the numbers on screen stay small and
+// "5l" reaches the fifth row shown; rows scrolled off above get 0 (no
+// address) and rows below continue the count. Every number-to-row lookup
+// (":N", N+l/h/Enter) and the drawn column use this one mapping.
 func (h *Home) matrixRowNumbers() ([]int, int) {
 	nums := make([]int, len(h.flatItems))
+	start := 0
+	if !h.navCount.absNumbers {
+		start = min(max(h.viewOffset, 0), len(h.flatItems))
+	}
 	n := 0
 	for i, it := range h.flatItems {
-		if it.Type == session.ItemTypeDivider {
+		if i < start || it.Type == session.ItemTypeDivider {
 			continue
 		}
 		n++
@@ -203,8 +213,12 @@ func (h *Home) matrixRunCmd(text string, action matrixNumericAction) tea.Cmd {
 		h.navCount.noNumbers = false
 	case "set nonu", "set nonumber":
 		h.navCount.noNumbers = true
+	case "set visnu": // matrix/hardened: this run only; [ui] visible_line_numbers persists
+		h.navCount.absNumbers = false
+	case "set absnu":
+		h.navCount.absNumbers = true
 	default:
-		h.setError(fmt.Errorf("unknown command :%s (use :N, :set nu, :set nonu)", text))
+		h.setError(fmt.Errorf("unknown command :%s (use :N, :set nu, :set nonu, :set visnu, :set absnu)", text))
 	}
 	return nil
 }

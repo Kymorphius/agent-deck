@@ -36,6 +36,7 @@ type matrixNavCount struct {
 	cmdBuf      string // text typed after ":"
 	cmdOverflow bool   // matrix/hardened: never activate a truncated numeric command.
 	noNumbers   bool   // ":set nonu"; survives resets
+	absNumbers  bool   // matrix/hardened: whole-list numbering ([ui] visible_line_numbers = false or ":set absnu"); survives resets
 
 	// Jump mark for "''", survives resets: the row before the last jump.
 	hasMark bool
@@ -46,7 +47,7 @@ type matrixNavCount struct {
 // matrixResetNav drops any pending count, "'" or ":" prompt.
 func (h *Home) matrixResetNav() {
 	c := h.navCount
-	h.navCount = matrixNavCount{noNumbers: c.noNumbers, hasMark: c.hasMark, markID: c.markID, markIdx: c.markIdx}
+	h.navCount = matrixNavCount{noNumbers: c.noNumbers, absNumbers: c.absNumbers, hasMark: c.hasMark, markID: c.markID, markIdx: c.markIdx}
 }
 
 // matrixJump runs a cursor jump and, when the cursor moved, remembers the row

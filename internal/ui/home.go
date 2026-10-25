@@ -2258,6 +2258,7 @@ func NewHomeWithRuntimeSource(profile string, source session.RuntimeObservationS
 		h.embeddedLayout = cfg.UI.GetEmbeddedTerminal()
 		h.compactSidebar = h.embeddedLayout
 		h.sidebarDensity = cfg.UI.GetSidebarDensity()
+		h.navCount.absNumbers = !cfg.UI.GetVisibleLineNumbers() // matrix/hardened: matrix_line_numbers.go
 		h.remoteLatencyRefreshSec = cfg.UI.GetRemoteLatencyRefreshSecs(cfg.SystemStats.GetRefreshSeconds())
 		h.remoteSessionRefreshSec = cfg.UI.GetRemoteSessionRefreshSecs()
 		h.footerMode = cfg.UI.GetFooter()
@@ -4173,6 +4174,7 @@ func (h *Home) cleanupNotifications() {
 // launch, and the user is told so.
 func (h *Home) applySavedLayoutSettings(ui session.UISettings) {
 	h.sidebarDensity = ui.GetSidebarDensity()
+	h.navCount.absNumbers = !ui.GetVisibleLineNumbers() // matrix/hardened: line numbers
 	if want := ui.GetEmbeddedTerminal(); want != h.embeddedLayout {
 		state := "off"
 		if want {

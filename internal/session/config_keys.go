@@ -128,6 +128,10 @@ var configKeys = []ConfigKey{
 	{Key: "ui.clear_search_on_open", Section: "Local search", Label: "Clear search on open (/)", Help: "Clear the previous query when opening / or Alt+/; off keeps the last query", Type: "bool",
 		get: func(c *UserConfig) any { return c.UI.GetClearSearchOnOpen() },
 		set: func(c *UserConfig, v any) { c.UI.ClearSearchOnOpen = boolRef(v.(bool)) }},
+	// matrix/hardened: session-list line numbers start at the top visible row.
+	{Key: "ui.visible_line_numbers", Section: "Session list", Label: "Number visible rows", Help: "Line numbers start at 1 on the top visible row (off: number the whole list)", Type: "bool",
+		get: func(c *UserConfig) any { return c.UI.GetVisibleLineNumbers() },
+		set: func(c *UserConfig, v any) { c.UI.VisibleLineNumbers = boolRef(v.(bool)) }},
 	{Key: "global_search.enabled", Section: "Global search", Label: "Enabled", Help: "Search message content across Claude sessions", Type: "bool", RestartRequired: true,
 		get: func(c *UserConfig) any { return c.GlobalSearch.GetEnabled() },
 		set: func(c *UserConfig, v any) { c.GlobalSearch.Enabled = boolRef(v.(bool)) }},
