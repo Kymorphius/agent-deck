@@ -13730,7 +13730,7 @@ func (h *Home) changeStatusFilter(filter session.Status) tea.Cmd {
 	default:
 		h.statusFilter = filter
 	}
-	h.matrixRebuildAfterViewChange(selectedBefore) // matrix/hardened: Recent starts at the newest match.
+	h.matrixRebuildAnchoringProject(selectedBefore) // matrix/hardened: Recent starts at the newest match; other views anchor on the project.
 	return h.fetchSelectedPreview()
 }
 
