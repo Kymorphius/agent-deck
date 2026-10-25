@@ -9,6 +9,7 @@ package ui
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/asheshgoplani/agent-deck/internal/agentpaths"
@@ -184,6 +185,27 @@ func (h *Home) jumpToIndex(idx int) {
 // group. If no current group can be determined, falls back to the normal
 // unscoped search flow so the user never gets a silent no-op.
 func (h *Home) openInGroupSearch() {
+	// matrix/hardened: a remote group search is exact within its origin.
+	if h.cursor >= 0 && h.cursor < len(h.flatItems) {
+		item := h.flatItems[h.cursor]
+		group := ""
+		if item.Type == session.ItemTypeRemoteSession && item.RemoteSession != nil {
+			group = normalizeRemoteGroupPath(item.RemoteSession.Group)
+		}
+		if item.Type == session.ItemTypeRemoteGroup && item.RemoteName != "" {
+			group = strings.TrimPrefix(item.Path, "remotes/"+item.RemoteName+"/")
+			if item.Path == "remotes/"+item.RemoteName {
+				group = ""
+			}
+		}
+		if group != "" {
+			h.search.SetRemoteGroup(item.RemoteName, group)
+			h.search.SetSize(h.width, h.height)
+			h.setSessionSearchItems()
+			h.search.Show()
+			return
+		}
+	}
 	groupPath := h.currentGroupPath()
 	// matrix/hardened: an unset session group still belongs to Default.
 	if groupPath == "" && h.getSelectedSession() != nil {
@@ -191,7 +213,7 @@ func (h *Home) openInGroupSearch() {
 	}
 	if groupPath == "" {
 		h.openSessionSearch()
-		h.search.SetNotice("请选择本机分组；当前搜索全部本机会话")
+		h.search.SetNotice("请选择分组；当前搜索全部本机与远程会话")
 		return
 	}
 	h.search.SetScopedGroup(groupPath)

@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.112`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.113`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -66,7 +66,7 @@
 - `internal/session/claude_hooks.go`：`isAgentDeckHookCommand` 的判断规则：先去掉开头的 `VAR=值`，再要求第二个词是 `hook-handler`、程序名的文件名部分是 `agent-deck`。`RemoveClaudeHooks` 会扫描全部事件，并做 UTC 时间戳备份（约 387–414 行）。
 - `cmd/agent-deck/main.go`（约 4845、5070 行）：`agent-deck uninstall` 会移除这些钩子。`uninstall.sh` 第 253 行附近的 jq 过滤用的是同一套规则（正则），写回时用 `cat >` 保持软链接和权限。
 
-**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.112`。
+**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.113`。
 
 **测试**：以 `_hardened_test.go` 结尾的文件、`update_check_disable_test.go`、`update_timer_wiring_test.go` 等是新增或调整过的测试；`testdata/goldens/*` 里的快照已经按加固后的输出更新。
 
@@ -805,6 +805,8 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 
 `1.16.26+matrix.92` 将 `/` 全部本机会话、`Alt+?` 当前视图和 `Alt+/` 当前分组搜索分别标明范围。详情见 [会话搜索范围](docs/session-search.md)。
 
+`matrix.113` 将同一组入口扩展到本机和已加载的远端会话，保留设备身份并按设备与完整 ID 定位；不改变 Recall 全文搜索的数据源。
+
 - **matrix/hardened:** 全部及分组搜索在选择后清除遮挡目标的状态、时间、置顶、最近及分组范围，展开分组并定位；归档目标只切换展示分区。Recall 已管理结果使用同一定位规则。打开和取消搜索不改变视图。
 - **matrix/hardened:** 当前视图搜索对完整注册集合组合筛选，包含折叠组与子会话，回车保留视图；后台刷新保持范围和关键词。各入口重新装载候选，避免退出分组搜索后 `/` 沿用子集。定位前重新核对注册表身份与当前范围，失效目标显示错误。
 - 新 `[hotkeys].view_search = "alt+?"` 支持重绑或禁用；兼容 Mac 普通 Option 字符 `¿`、`÷`。验证使用第 4 节隔离入口，覆盖范围组合、归档互跳、后台刷新、删除/移动/过期目标、取消、按键和输入法，以及 30/60/80/120 列布局及相关界面快照。旧 TUI 在列表按 `Ctrl+T` 加载新构建。
@@ -990,3 +992,11 @@ snapshots, compatibility, and validation boundaries.
 - **matrix/hardened:** `matrix.112` 读取对话记录里最新一条主对话回复的 `message.usage.speed`（Claude Code 写 `"standard"` 或 `"fast"`），复用用量上限检测已有的倒序扫描和按文件签名的缓存（`usagelimit.go`、`matrix_usage_limit_cache.go`），不额外读文件；结果和用量上限判定共用同一个会话 ID 校验，换绑时一起清空。monitor 把它写进快照的 `fast_mode` 字段（旧 monitor 没有这个字段时视为不是 fast），TUI 从渲染快照读取，渲染时不碰锁和文件。
 - **显示**：经典列表在行尾徽标区加红色粗体 `[fast]`（选中行仍为红字）；内嵌侧栏在标题前加红色 `fast`，长标题被截断时它也保留。判断依据是最近一次回复，所以刚打开或刚关闭 `/fast` 后要等下一条回复才会变化；被用量上限拒绝的回复不带 speed，此时不显示。SSH 会话和非 Claude 工具不显示。Web UI 暂未接入。
 - **测试**：`internal/session/matrix_fast_mode_test.go`（最新回复 fast/standard、无 usage、null、子代理不算、monitor 快照读取）、`internal/ui/matrix_fast_badge_test.go`（两种布局、选中与未选中）。
+
+## 97. 会话搜索包含远端会话
+
+- **问题**：列表已加载远端会话，但 `/`、当前视图和当前分组搜索只将本机 registry 放入候选，选中结果也仅能定位本机。远端会话并非匹配失败，而是从未进入搜索集合。
+- **matrix/hardened:** `matrix.113` 以带来源身份的搜索条目合并本机与已加载远端快照。远端 metadata 投影仅用于匹配与渲染，不加入本机 registry 或持久化；结果保留设备名称和完整会话 ID，同 ID 的本机与多台远端不混淆。
+- **matrix/hardened:** 当前视图沿用各自的状态、归档、时间、最近、置顶与分组范围规则；远端分组搜索同时限定设备和直属分组。所有本地候选刷新统一走同一构造器，打开的搜索也接收远端快照更新，保留关键词和仍有效的选中项，不新增搜索专用 SSH 请求。
+- **matrix/hardened:** 搜索回车只定位。远端结果先按设备和完整 ID 在最新快照重验，再处理视图与折叠祖先并定位；后续普通打开沿用既有 prepare-open。Recall 全文索引与联邦搜索的数据源保持原有范围。
+- **测试**：隔离 UI 回归覆盖本机及两个远端同 ID、设备与分组定位、折叠、归档、状态/时间/最近/置顶组合、过期结果无副作用，以及 local reload 与 remote fetch 后的 query/scope/selection 保留；同时运行既有会话和分组搜索定向回归。

@@ -32,20 +32,31 @@ var (
 			Padding(1, 2)
 )
 
-// Search represents the search overlay component
+// matrix/hardened: metadata alone is not a session identity: different hosts
+// can contain the same full ID. Keep the origin through filtering and selection.
+type SessionSearchItem struct {
+	Instance   *session.Instance
+	RemoteName string
+	Remote     *session.RemoteSessionInfo
+}
+
+// Search represents the session metadata search overlay component.
 type Search struct {
-	input          textinput.Model
-	results        []*session.Instance
-	cursor         int
-	width          int
-	height         int
-	visible        bool
-	allItems       []*session.Instance
-	switchToGlobal bool   // Flag to signal switch to global search
-	scopedGroup    string // Non-empty => filter items to this exact GroupPath (v1.7.60)
-	viewFilter     func(*session.Instance) bool
-	scopeLabel     string // Display name of the current view; empty outside view scope.
-	notice         string // why G landed here instead of Recall; drawn under the input until Hide
+	input           textinput.Model
+	results         []*session.Instance
+	cursor          int
+	width           int
+	height          int
+	visible         bool
+	allItems        []*session.Instance
+	switchToGlobal  bool   // Flag to signal switch to global search
+	scopedGroup     string // Non-empty => filter items to this exact GroupPath (v1.7.60)
+	viewFilter      func(*session.Instance) bool
+	candidateFilter func(SessionSearchItem) bool
+	scopedRemote    string
+	candidates      map[*session.Instance]SessionSearchItem
+	scopeLabel      string // Display name of the current view; empty outside view scope.
+	notice          string // why G landed here instead of Recall; drawn under the input until Hide
 }
 
 // NewSearch creates a new search overlay
@@ -69,25 +80,55 @@ func NewSearch() *Search {
 // applied before storage so background reloads cannot leak hidden sessions
 // into a view-scoped or exact-group search. The current query stays intact.
 func (s *Search) SetItems(items []*session.Instance) {
+	candidates := make([]SessionSearchItem, 0, len(items))
+	for _, inst := range items {
+		candidates = append(candidates, SessionSearchItem{Instance: inst})
+	}
+	s.SetCandidates(candidates)
+}
+
+// matrix/hardened: retain typed origins alongside the metadata projection used
+// by the established local matcher. Pointer keys prevent cross-host ID clashes.
+func (s *Search) SetCandidates(items []SessionSearchItem) {
+	previous := s.SelectedItem()
 	filtered := make([]*session.Instance, 0, len(items))
-	for _, it := range items {
+	s.candidates = make(map[*session.Instance]SessionSearchItem, len(items))
+	for _, item := range items {
+		it := item.Instance
 		if it == nil {
 			continue
 		}
-		group := it.GroupPath
-		if group == "" {
-			group = session.DefaultGroupPath
-		}
-		if s.scopedGroup != "" && group != s.scopedGroup {
+		if s.scopedGroup != "" && (item.RemoteName != s.scopedRemote || sessionSearchGroupPath(it) != s.scopedGroup) {
 			continue
 		}
 		if s.viewFilter != nil && !s.viewFilter(it) {
 			continue
 		}
+		if s.candidateFilter != nil && !s.candidateFilter(item) {
+			continue
+		}
 		filtered = append(filtered, it)
+		s.candidates[it] = item
 	}
 	s.allItems = filtered
 	s.updateResults()
+	if previous.Instance != nil {
+		for index, inst := range s.results {
+			current := s.candidates[inst]
+			if current.RemoteName == previous.RemoteName && inst.ID == previous.Instance.ID {
+				s.cursor = index
+				break
+			}
+		}
+	}
+}
+
+func (s *Search) SelectedItem() SessionSearchItem {
+	inst := s.Selected()
+	if item, ok := s.candidates[inst]; ok {
+		return item
+	}
+	return SessionSearchItem{Instance: inst}
 }
 
 // SetNotice sets a warning line drawn under the input for as long as the
@@ -100,6 +141,8 @@ func (s *Search) SetNotice(notice string) {
 // SetScopedGroup restricts SetItems to a single group path. Pass "" to clear.
 func (s *Search) SetScopedGroup(groupPath string) {
 	s.scopedGroup = groupPath
+	s.scopedRemote = ""
+	s.candidateFilter = nil
 	s.viewFilter = nil
 	s.scopeLabel = ""
 }
@@ -108,8 +151,28 @@ func (s *Search) SetScopedGroup(groupPath string) {
 // The caller supplies the complete list again after changing scope.
 func (s *Search) SetViewScope(label string, filter func(*session.Instance) bool) {
 	s.scopedGroup = ""
+	s.scopedRemote = ""
+	s.candidateFilter = nil
 	s.viewFilter = filter
 	s.scopeLabel = strings.TrimSpace(label)
+}
+
+// matrix/hardened: remote exact-group scope includes its host identity.
+func (s *Search) SetRemoteGroup(remote, group string) {
+	s.SetScopedGroup(group)
+	s.scopedRemote = remote
+}
+
+func (s *Search) SetCandidateViewScope(label string, filter func(SessionSearchItem) bool) {
+	s.SetViewScope(label, nil)
+	s.candidateFilter = filter
+}
+
+func (s *Search) matchesView(item SessionSearchItem) bool {
+	if s.candidateFilter != nil {
+		return s.candidateFilter(item)
+	}
+	return s.viewFilter != nil && s.viewFilter(item.Instance)
 }
 
 // SetSize sets the dimensions of the search overlay
@@ -147,6 +210,8 @@ func (s *Search) Hide() {
 	s.visible = false
 	s.input.Blur()
 	s.scopedGroup = ""
+	s.scopedRemote = ""
+	s.candidateFilter = nil
 	s.viewFilter = nil
 	s.scopeLabel = ""
 	s.notice = ""
@@ -236,7 +301,7 @@ func (s *Search) View() string {
 	header := lipgloss.NewStyle().
 		Foreground(ColorAccent).
 		Bold(true).
-		Render("🔍 Local Search (Agent Deck sessions)")
+		Render("🔍 Session Search (local + remote)")
 
 	// Build search input box at a fixed width. If the box's total width
 	// (border + padding) exceeds the overlay's content budget, lipgloss
@@ -258,7 +323,15 @@ func (s *Search) View() string {
 	end := min(start+maxResults, len(s.results))
 	resultRows := make([]string, 0, end-start)
 	for i := start; i < end; i++ {
-		resultRows = append(resultRows, renderSearchResult(s.results[i], i == s.cursor, overlayWidth-overlayStyle.GetHorizontalFrameSize()-resultItemStyle.GetHorizontalFrameSize()))
+		item := s.results[i]
+		if origin := s.candidates[item].RemoteName; origin != "" {
+			// Show origin before the title so it survives narrow-row truncation.
+			item = &session.Instance{
+				Title: "[" + origin + "] " + item.Title, Tool: item.Tool,
+				GroupPath: item.GroupPath, ProjectPath: item.ProjectPath,
+			}
+		}
+		resultRows = append(resultRows, renderSearchResult(item, i == s.cursor, overlayWidth-overlayStyle.GetHorizontalFrameSize()-resultItemStyle.GetHorizontalFrameSize()))
 	}
 	if len(resultRows) == 0 {
 		resultRows = []string{""}
@@ -266,10 +339,13 @@ func (s *Search) View() string {
 
 	// Keep the scope beside the count, pinned above the key hints. Long view
 	// and group labels are cell-truncated rather than wrapping over results.
-	scope := "全部本机会话"
+	scope := "全部本机与远程会话"
 	if s.scopedGroup != "" {
 		scope = "当前分组 · " + s.scopedGroup
-	} else if s.viewFilter != nil {
+		if s.scopedRemote != "" {
+			scope = "当前分组 · " + s.scopedRemote + "/" + s.scopedGroup
+		}
+	} else if s.viewFilter != nil || s.candidateFilter != nil {
 		scope = "当前视图"
 		if s.scopeLabel != "" {
 			scope += " · " + s.scopeLabel

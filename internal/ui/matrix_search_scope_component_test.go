@@ -139,7 +139,7 @@ func TestMatrixSearchScopeComponent_ScopeLabelsFit(t *testing.T) {
 				s := NewSearch()
 				s.SetSize(width, 12)
 				path := "工具/研发/很长的中文分组名称/agent-deck"
-				want := "全部本机会话"
+				want := "全部本机与远程会话"
 				switch scope {
 				case "view":
 					s.SetViewScope("已归档 · 很长的中文视图条件", func(*session.Instance) bool { return true })

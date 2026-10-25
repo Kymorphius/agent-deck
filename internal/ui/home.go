@@ -4599,6 +4599,11 @@ func (h *Home) applyRemoteFetch(msg remoteSessionsFetchedMsg) (tea.Model, tea.Cm
 	// Invalidate so the next View() recomputes.
 	h.cachedStatusCounts.valid.Store(false)
 	h.rebuildFlatItems()
+	// matrix/hardened: visible search follows remote updates; opening a hidden
+	// overlay will snapshot the fleet then, avoiding allocations every poll.
+	if h.search != nil && h.search.IsVisible() {
+		h.setSessionSearchItems()
+	}
 	if !roundDone {
 		return h, nil
 	}
@@ -8214,7 +8219,7 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				}
 			}
-			h.search.SetItems(h.instances)
+			h.setSessionSearchItems() // matrix/hardened: retain loaded remote search origins.
 
 			// Re-apply pending title changes that were lost during reload.
 			// This happens when a rename's save was skipped (isReloading=true)
@@ -8400,7 +8405,7 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Add to existing group tree instead of rebuilding
 			h.groupTree.AddSession(msg.instance)
 			h.rebuildFlatItems()
-			h.search.SetItems(h.instances)
+			h.setSessionSearchItems() // matrix/hardened: retain loaded remote search origins.
 
 			// Auto-select the new session
 			for i, item := range h.flatItems {
@@ -8493,7 +8498,7 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Add to existing group tree instead of rebuilding
 			h.groupTree.AddSession(msg.instance)
 			h.rebuildFlatItems()
-			h.search.SetItems(h.instances)
+			h.setSessionSearchItems() // matrix/hardened: retain loaded remote search origins.
 
 			// Auto-select the forked session
 			for i, item := range h.flatItems {
@@ -8585,7 +8590,7 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		h.rebuildFlatItems()
 		// Update search items
-		h.search.SetItems(h.instances)
+		h.setSessionSearchItems() // matrix/hardened: retain loaded remote search origins.
 		// Explicitly delete from database to prevent resurrection on reload
 		cleanup, err := h.storage.DeleteInstanceDeferredCleanup(msg.deletedID)
 		if err != nil {
@@ -8691,7 +8696,7 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Add to group tree and rebuild
 		h.groupTree.AddSession(msg.instance)
 		h.rebuildFlatItems()
-		h.search.SetItems(h.instances)
+		h.setSessionSearchItems() // matrix/hardened: retain loaded remote search origins.
 
 		// Move cursor to restored session
 		for i, item := range h.flatItems {
@@ -8848,7 +8853,7 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 					h.groupTree.SyncWithInstances(instances)
 				}
 				h.groupTree.ExpandGroupWithParents(target.GroupPath)
-				h.search.SetItems(instances)
+				h.setSessionSearchItems() // matrix/hardened: retain loaded remote search origins.
 				h.refreshSessionRenderSnapshot(instances)
 				h.cachedStatusCounts.valid.Store(false)
 				h.rebuildFlatItems()
@@ -10115,7 +10120,7 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			h.groupTree.RemoveSession(inst)
 		}
 		h.rebuildFlatItems()
-		h.search.SetItems(h.instances)
+		h.setSessionSearchItems() // matrix/hardened: retain loaded remote search origins.
 
 		// Delete from database and save
 		cleanup, err := h.storage.DeleteInstanceDeferredCleanup(msg.sessionID)
@@ -10773,11 +10778,11 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (h *Home) handleSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "enter":
-		selected := h.search.Selected()
-		if selected != nil {
+		selected := h.search.SelectedItem()
+		if selected.Instance != nil {
 			// matrix/hardened: global search reveals the target; view search
 			// retains its filters and revalidates current membership.
-			if !h.locateSearchSession(selected, h.search.viewFilter != nil) {
+			if !h.locateSearchItem(selected, h.search.viewFilter != nil || h.search.candidateFilter != nil) {
 				h.setError(fmt.Errorf("会话已变化或不再属于搜索范围，请重新搜索"))
 			}
 		}
