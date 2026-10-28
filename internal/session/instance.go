@@ -5368,7 +5368,7 @@ func (i *Instance) startWithClaudeAdmission(admission *claudeLaunchAdmission, lo
 
 // matrix/hardened: explicit remote recovery pins a validated native resume;
 // ordinary Start and automatic sleep retain their existing launch contracts.
-func (i *Instance) startWithClaudeAdmissionAndExactResume(admission *claudeLaunchAdmission, lockHeld bool, exact *exactCodexResumePlan) (returnErr error) {
+func (i *Instance) startWithClaudeAdmissionAndExactResume(admission *claudeLaunchAdmission, lockHeld bool, exact exactNativeResumePlan) (returnErr error) {
 	// matrix/hardened: exact sleep identity cannot degrade to a fresh/fork launch.
 	if i.hasAutoSleepState() {
 		if err := validateAutoSleepResume(i); err != nil {
@@ -5458,6 +5458,20 @@ func (i *Instance) startWithClaudeAdmissionAndExactResume(admission *claudeLaunc
 	var command string
 	switch {
 	case IsClaudeCompatible(i.Tool):
+		// matrix/hardened: strict remote resume revalidates the frozen plan at
+		// final assembly; admission cannot fall back to a new conversation.
+		if exact != nil {
+			var err error
+			command, err = exact.command(i)
+			if err != nil {
+				return err
+			}
+			if admission != nil {
+				admission.command = command
+				command = i.applyClaudeLaunchAdmission(admission)
+			}
+			break
+		}
 		// matrix/hardened: execute the exact command whose kind/UUID was admitted.
 		if admission != nil {
 			command = i.applyClaudeLaunchAdmission(admission)
@@ -5711,8 +5725,12 @@ func (i *Instance) startWithClaudeAdmissionAndExactResume(admission *claudeLaunc
 	// inside Docker sandbox containers that have no access to the host tmux socket.
 	// matrix/hardened: exact Codex recovery must not propagate stale bindings
 	// from another provider or run Claude's duplicate-session teardown.
-	if i.ClaudeSessionID != "" && exact == nil {
+	if i.ClaudeSessionID != "" && (exact == nil || i.Tool == "claude") {
 		_ = i.tmuxSession.SetEnvironment("CLAUDE_SESSION_ID", i.ClaudeSessionID)
+	}
+	// matrix/hardened: exact recovery already refused another owner; it
+	// must never kill another terminal as a side effect of an explicit visit.
+	if i.ClaudeSessionID != "" && exact == nil {
 		// Kill any other agentdeck tmux session with the same Claude session ID
 		// to prevent duplicates running `claude --resume` with the same conversation (#596).
 		tmux.KillSessionsWithEnvValue("CLAUDE_SESSION_ID", i.ClaudeSessionID, i.tmuxSession.Name)

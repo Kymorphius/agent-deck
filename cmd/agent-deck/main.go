@@ -45,7 +45,7 @@ import (
 )
 
 // matrix/hardened: identifies our hardened build.
-var Version = "1.16.26+matrix.118" // matrix/hardened: preserve the shared Codex runtime across session recovery; overridden via -ldflags.
+var Version = "1.16.26+matrix.119" // matrix/hardened: resume missing Claude terminals with the verified original conversation; overridden via -ldflags.
 
 // Table column widths for list command output
 const (

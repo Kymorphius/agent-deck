@@ -81,8 +81,10 @@ func (deps Deps) sessionPrepareOpen(_ context.Context, in SessionPrepareOpenIn) 
 	if !inst.IsAutoSleeping() && !inst.AutoSleepPending() && inst.Status != session.StatusQueued && inst.Status != session.StatusStopped && inst.Status != session.StatusError {
 		return SessionPrepareOpenOut{}, Errorf(CodeNotRunning, "session '%s' has no terminal but its state is %s; inspect it before restarting", inst.Title, inst.Status)
 	}
-	if inst.Status != session.StatusQueued && !inst.IsAutoSleeping() && !inst.AutoSleepPending() && inst.Tool != "codex" {
-		return SessionPrepareOpenOut{}, Errorf(CodeInvalid, "automatic remote recovery supports ordinary Codex sessions only; use explicit R restart for '%s' (%s)", inst.Title, inst.Tool)
+	// matrix/hardened: missing Claude terminals need the same exact-original
+	// recovery contract as Codex; custom tools still require explicit restart.
+	if inst.Status != session.StatusQueued && !inst.IsAutoSleeping() && !inst.AutoSleepPending() && inst.Tool != "codex" && inst.Tool != "claude" {
+		return SessionPrepareOpenOut{}, Errorf(CodeInvalid, "automatic remote recovery supports ordinary Codex and Claude sessions only; use explicit R restart for '%s' (%s)", inst.Title, inst.Tool)
 	}
 	tree := session.NewGroupTreeWithGroups(d.instances, d.groups)
 	max := session.GroupMaxConcurrent(tree, inst.GroupPath)
@@ -104,7 +106,13 @@ func (deps Deps) sessionPrepareOpen(_ context.Context, in SessionPrepareOpenIn) 
 		err = inst.Start()
 	} else {
 		disposition = "resumed"
-		err = session.ResumeExactCodexForOpen(d.storage, inst)
+		// matrix/hardened: each provider validates its own durable native ID;
+		// ordinary Restart may fall back to a fresh conversation and is unsafe here.
+		if inst.Tool == "claude" {
+			err = session.ResumeExactClaudeForOpen(d.storage, inst)
+		} else {
+			err = session.ResumeExactCodexForOpen(d.storage, inst)
+		}
 	}
 	if err != nil {
 		return SessionPrepareOpenOut{}, Errorf(CodeInvalid, "cannot prepare session '%s': %v", inst.Title, err)

@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.118`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.119`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -66,7 +66,7 @@
 - `internal/session/claude_hooks.go`：`isAgentDeckHookCommand` 的判断规则：先去掉开头的 `VAR=值`，再要求第二个词是 `hook-handler`、程序名的文件名部分是 `agent-deck`。`RemoveClaudeHooks` 会扫描全部事件，并做 UTC 时间戳备份（约 387–414 行）。
 - `cmd/agent-deck/main.go`（约 4845、5070 行）：`agent-deck uninstall` 会移除这些钩子。`uninstall.sh` 第 253 行附近的 jq 过滤用的是同一套规则（正则），写回时用 `cat >` 保持软链接和权限。
 
-**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.118`。
+**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.119`。
 
 **测试**：以 `_hardened_test.go` 结尾的文件、`update_check_disable_test.go`、`update_timer_wiring_test.go` 等是新增或调整过的测试；`testdata/goldens/*` 里的快照已经按加固后的输出更新。
 
@@ -1029,3 +1029,11 @@ snapshots, compatibility, and validation boundaries.
 - **matrix/hardened:** `matrix.118` 在会话层核对本实例 Codex home 的原生 daemon/updater 身份记录、进程启动身份、独立进程组、release 路径和命令角色。确认属于共享后台后，从会话归属视图中排除它及可验证的当前后代；会话 leader 和普通遗留进程仍受原有保护。新归属记录、已有记录检查、停止与显式 reconcile 共用这项保护，不按进程名称或目录片段猜测。
 - **恢复**：先运行 `session ownership inspect`。旧版记录需要人工处理时，必须独立核对所有存活 PID；只有确认它们全部是共享后台，才可备份记录后显式 `ownership abandon --yes`，保留进程运行，再用 `session prepare-open --json` 恢复原线程。不能将 `ownership reconcile` 当成通用的重新打开按钮。
 - **验证**：使用隔离环境和 fake prober 覆盖共享后台保护、旧记录恢复、真正遗留进程的阻挡与清理，以及身份、路径、元数据变化和不可读边界。安装后需重新加载已运行的列表进程，才能让该进程使用新的会话归属规则；AI 会话本身无需重启。
+
+## 102. 远程打开缺失终端的 Claude 原会话
+
+- **问题**：主机重启或终端退出后，Claude 的历史对话仍在，但 `prepare-open` 只允许普通 Codex 自动恢复；Claude 即使保留了原对话 ID，也只能人工重启。普通重启的历史兼容路径可能降级为新会话，不适合作为自动恢复入口。
+- **matrix/hardened:** `matrix.119` 为显式打开 stopped/error 且终端确实缺失的普通 Claude 会话增加严格恢复路径。恢复前核对已登记、已验证的完整对话 ID、实际配置目录、工作目录与主对话记录，并在启动锁内重读数据库和终端状态；命令只允许恢复该原对话，证据不足时拒绝，不扫描最近会话或降级为新会话。
+- **matrix/hardened:** 已存在的活终端直接复用；保留的死终端仍要求人工检查。分组并发上限、进程归属保护与已有 Codex／睡眠恢复规则继续生效。恢复不发送聊天内容、不执行 duplicate sweep，也不重启其他会话。
+- **范围**：自动恢复限于普通主 Claude 会话；自定义包装、子会话以及需要插件或频道 scratch 配置的会话仍走人工检查和显式重启。同一原生 ID 的严格恢复入口互相串行，外部原生启动和普通显式重启保持原有合同。
+- **验证**：通过隔离环境中的主对话记录、CLI 和私有 tmux 验证原 ID 恢复、重复打开只连接一次、并发打开、无效／缺失／不可信历史拒绝、并发上限、活终端复用与保留死终端拒绝。实际部署需核对远端执行入口和二进制版本，并保留原有 AI 进程。
