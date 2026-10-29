@@ -93,6 +93,31 @@ func TestInstance_CanFork(t *testing.T) {
 	}
 }
 
+// matrix/hardened: a stopped or idle Claude session stays forkable while its
+// transcript is on disk, even after the 5-minute detection window.
+func TestInstance_CanFork_StaleWithTranscript(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", configDir)
+	projectPath := t.TempDir()
+	inst := NewInstanceWithTool("test", projectPath, "claude")
+	inst.ClaudeSessionID = "0f1e2d3c-4b5a-4968-8776-655443322110"
+	inst.ClaudeDetectedAt = time.Now().Add(-time.Hour)
+	if inst.CanFork() {
+		t.Fatal("CanFork() should be false for a stale session without a transcript")
+	}
+
+	transcript := filepath.Join(configDir, "projects", ConvertToClaudeDirName(projectPath), inst.ClaudeSessionID+".jsonl")
+	if err := os.MkdirAll(filepath.Dir(transcript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(transcript, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !inst.CanFork() {
+		t.Error("CanFork() should be true for a stale session whose transcript exists")
+	}
+}
+
 // TestInstance_UpdateClaudeSession tests the UpdateClaudeSession method
 func TestInstance_UpdateClaudeSession(t *testing.T) {
 	inst := NewInstance("test", "/tmp/test")

@@ -11725,7 +11725,21 @@ func (i *Instance) canForkCurrentSource() bool {
 	if i.ClaudeSessionID == "" {
 		return false
 	}
-	return time.Since(i.ClaudeDetectedAt) < 5*time.Minute
+	if time.Since(i.ClaudeDetectedAt) < 5*time.Minute {
+		return true
+	}
+	// matrix/hardened: `claude --resume <id> --fork-session` only needs the
+	// on-disk transcript, so stopped or idle sessions stay forkable while it exists.
+	return i.claudeTranscriptExistsLocally()
+}
+
+// matrix/hardened: resolve against the per-instance config dir; remote
+// transcripts live on the remote host and never count as present here.
+func (i *Instance) claudeTranscriptExistsLocally() bool {
+	if !IsClaudeCompatible(i.Tool) || !i.TranscriptIsResolvableLocally() {
+		return false
+	}
+	return ResolveClaudeTranscriptPath(GetClaudeConfigDirForInstance(i), i.ProjectPath, i.ClaudeSessionID, i.EffectiveWorkingDir()) != ""
 }
 
 // CanForkOpenCode returns true if this OpenCode session can be forked
