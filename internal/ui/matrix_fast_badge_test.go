@@ -8,13 +8,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// matrix/hardened: a Claude session in /fast shows a "fast" tag on its row in
+// matrix/hardened: a Claude or Codex session in /fast shows a "fast" tag on its row in
 // both layouts, selected or not, and the tag never pushes the title out.
-func TestFastBadgeRendersOnClaudeRows(t *testing.T) {
-	inst := &session.Instance{ID: "fast-row", Title: "burning-tokens", Tool: "claude", Status: session.StatusIdle}
+func TestFastBadgeRendersOnClaudeAndCodexRows(t *testing.T) {
+	for _, tool := range []string{"claude", "codex"} {
+		t.Run(tool, func(t *testing.T) { checkFastBadge(t, tool) })
+	}
+}
+
+func checkFastBadge(t *testing.T, tool string) {
+	inst := &session.Instance{ID: "fast-row", Title: "burning-tokens", Tool: tool, Status: session.StatusIdle}
 	item := session.Item{Type: session.ItemTypeSession, Session: inst, Level: 1, Path: "work", IsLastInGroup: true}
 	for _, fast := range []bool{false, true} {
-		state := sessionRenderState{status: session.StatusIdle, tool: "claude", title: inst.Title, claudeFast: fast}
+		state := sessionRenderState{status: session.StatusIdle, tool: tool, title: inst.Title, fastMode: fast}
 		h := NewHome()
 		h.width, h.height = 240, 40
 		for _, selected := range []bool{false, true} {

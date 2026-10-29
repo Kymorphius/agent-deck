@@ -104,7 +104,7 @@ type RuntimeSessionSnapshot struct {
 	ToolOptions             json.RawMessage         `json:"tool_options,omitempty"`
 	CanFork                 bool                    `json:"can_fork"`
 	CanForkKnown            bool                    `json:"can_fork_known"`
-	// matrix/hardened: latest Claude assistant turn ran with usage.speed "fast".
+	// matrix/hardened: Claude usage.speed "fast" or Codex service_tier "priority".
 	FastMode bool `json:"fast_mode,omitempty"`
 }
 
@@ -353,7 +353,7 @@ func (i *Instance) RuntimeSnapshot(profile, epoch string, revision uint64, sampl
 	persistError := i.persistRuntimeNativeBindings()
 	sub := i.Substate()
 	detail := i.SubstateDetail()
-	fast := i.ClaudeFastMode()
+	fast := i.FastMode()
 	held, remedy := i.IsAuthHeld()
 	hold := i.AuthHold()
 	observed, observedKnown := i.LastObservedActivity()

@@ -23,6 +23,9 @@ type matrixTurnInterruptFileResult struct {
 	verdict   matrixTurnInterrupt
 	found     bool
 	cacheable bool
+	// matrix/hardened: latest thread_settings_applied asked for the priority
+	// ("fast") service tier.
+	codexFast bool
 }
 
 type matrixTurnInterruptFileSignature struct {
@@ -200,7 +203,9 @@ func matrixParseTurnInterruptFile(tool, path string) matrixTurnInterruptFileResu
 			return result
 		}
 		result.verdict, result.found, result.cacheable = matrixScanLatestCodexTurnInterrupt(path)
-		result.cacheable = result.cacheable && result.meta.valid
+		fast, fastComplete := matrixScanCodexFastTier(path)
+		result.codexFast = fast
+		result.cacheable = result.cacheable && fastComplete && result.meta.valid
 	}
 	return result
 }

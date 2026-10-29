@@ -1,6 +1,7 @@
 package session
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"os"
@@ -117,6 +118,8 @@ type matrixTurnInterruptMemo struct {
 	// matrix/hardened: retry work is throttled separately and detail stays in memory.
 	retryCheckedAt time.Time
 	retryDetail    string
+	// matrix/hardened: Codex /fast (service_tier "priority"), same key and gen.
+	codexFast bool
 }
 
 // matrixTurnInterruptKey is the memo key for the conversation the instance is
@@ -302,6 +305,38 @@ type matrixCodexEvent struct {
 	} `json:"payload"`
 }
 
+// matrixScanCodexFastTier reports whether the latest thread_settings_applied
+// event in the rollout at path asked for the priority service tier, which is
+// what Codex /fast selects. complete is false when the walk could not finish.
+// matrix/hardened: lines without the event name are skipped before decoding.
+func matrixScanCodexFastTier(path string) (fast, complete bool) {
+	marker := []byte(`"thread_settings_applied"`)
+	parsed := true
+	verdict, found, done := matrixWalkLinesBackwardComplete(path, func(line []byte) (matrixTurnInterrupt, bool, bool) {
+		if !bytes.Contains(line, marker) {
+			return matrixTurnInterrupt{}, false, false
+		}
+		var ev struct {
+			Type    string `json:"type"`
+			Payload struct {
+				Type     string `json:"type"`
+				Settings struct {
+					ServiceTier string `json:"service_tier"`
+				} `json:"thread_settings"`
+			} `json:"payload"`
+		}
+		if json.Unmarshal(line, &ev) != nil {
+			parsed = false
+			return matrixTurnInterrupt{}, false, false
+		}
+		if ev.Type != "event_msg" || ev.Payload.Type != "thread_settings_applied" {
+			return matrixTurnInterrupt{}, false, false
+		}
+		return matrixTurnInterrupt{Kind: ev.Payload.Settings.ServiceTier}, true, true
+	})
+	return found && strings.EqualFold(strings.TrimSpace(verdict.Kind), "priority"), done && parsed
+}
+
 // matrixLatestCodexTurnInterrupt reports whether the latest turn event in the
 // Codex rollout at path is turn_aborted. Same "cannot tell means no" rule as
 // the Claude scan.
@@ -378,7 +413,7 @@ func (i *Instance) matrixRefreshTurnInterruptWithCache(cache *matrixTurnInterrup
 
 	tool, id, _ := strings.Cut(key, ":")
 	var verdict matrixTurnInterrupt
-	var found bool
+	var found, codexFast bool
 	// matrix/hardened: failed discovery and a newly subagent-sourced file must
 	// publish a cleared verdict through the same key/gen guard as a good read.
 	switch tool {
@@ -398,13 +433,13 @@ func (i *Instance) matrixRefreshTurnInterruptWithCache(cache *matrixTurnInterrup
 		if result.meta.ThreadSource == "subagent" || result.meta.ParentThreadID != "" {
 			break
 		}
-		verdict, found = result.verdict, result.found
+		verdict, found, codexFast = result.verdict, result.found, result.codexFast
 	}
 
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	if i.matrixTurnInterruptKeyLocked() == key && m.key == key && m.gen == gen {
-		m.found, m.verdict = found, verdict
+		m.found, m.verdict, m.codexFast = found, verdict, codexFast
 	}
 }
 

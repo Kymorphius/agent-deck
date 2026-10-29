@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.121`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.124`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -66,7 +66,7 @@
 - `internal/session/claude_hooks.go`：`isAgentDeckHookCommand` 的判断规则：先去掉开头的 `VAR=值`，再要求第二个词是 `hook-handler`、程序名的文件名部分是 `agent-deck`。`RemoveClaudeHooks` 会扫描全部事件，并做 UTC 时间戳备份（约 387–414 行）。
 - `cmd/agent-deck/main.go`（约 4845、5070 行）：`agent-deck uninstall` 会移除这些钩子。`uninstall.sh` 第 253 行附近的 jq 过滤用的是同一套规则（正则），写回时用 `cat >` 保持软链接和权限。
 
-**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.119`。
+**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.124`。
 
 **测试**：以 `_hardened_test.go` 结尾的文件、`update_check_disable_test.go`、`update_timer_wiring_test.go` 等是新增或调整过的测试；`testdata/goldens/*` 里的快照已经按加固后的输出更新。
 
@@ -987,12 +987,13 @@ snapshots, compatibility, and validation boundaries.
 - **matrix/hardened:** 普通远程打开、嵌入终端、新窗口及 `remote attach` 共用准备流程，成功后才连接或接受输入；命令行先检查本地 TTY。异步结果核对设备身份、完整会话 ID 和本次打开意图；受限结果只提示。能力检查为只读 help，仅明确的旧版 unknown command 允许兼容处理；网络、鉴权和解析错误不当作旧版，变更请求中断后不自动重放。取消只废弃打开意图，不打断已经发出的恢复与保存。
 - **测试**：隔离 CLI/tmux 配合 fake Codex 验证原线程恢复、并发单次启动、已存活进程复用、分组限制、原记录证据与旧 provider 字段隔离；client/UI 定向回归覆盖旧版兼容、响应丢失不重放、输入等待、迟到结果、重连代际及各打开入口。保留原 queued attach、自动休眠和普通启动的既有合同。
 
-## 96. Claude fast 模式标记
+## 96. Claude 与 Codex 的 fast 模式标记
 
-- **问题**：Claude Code 的 `/fast` 打开后消耗用量快得多，但 agent-deck 列表上看不出哪个会话开着，忘了关就会很快耗掉用量。
+- **问题**：Claude Code 和 Codex 的 `/fast` 打开后消耗用量快得多，但 agent-deck 列表上看不出哪个会话开着，忘了关就会很快耗掉用量。
 - **matrix/hardened:** `matrix.112` 读取对话记录里最新一条主对话回复的 `message.usage.speed`（Claude Code 写 `"standard"` 或 `"fast"`），复用用量上限检测已有的倒序扫描和按文件签名的缓存（`usagelimit.go`、`matrix_usage_limit_cache.go`），不额外读文件；结果和用量上限判定共用同一个会话 ID 校验，换绑时一起清空。monitor 把它写进快照的 `fast_mode` 字段（旧 monitor 没有这个字段时视为不是 fast），TUI 从渲染快照读取，渲染时不碰锁和文件。
-- **显示**：经典列表在行尾徽标区加红色粗体 `[fast]`（选中行仍为红字）；内嵌侧栏在标题前加红色 `fast`，长标题被截断时它也保留。判断依据是最近一次回复，所以刚打开或刚关闭 `/fast` 后要等下一条回复才会变化；被用量上限拒绝的回复不带 speed，此时不显示。SSH 会话和非 Claude 工具不显示。Web UI 暂未接入。
-- **测试**：`internal/session/matrix_fast_mode_test.go`（最新回复 fast/standard、无 usage、null、子代理不算、monitor 快照读取）、`internal/ui/matrix_fast_badge_test.go`（两种布局、选中与未选中）。
+- **matrix/hardened:** `matrix.124` 加上 Codex：rollout 里每次设置生效都会写一条 `event_msg` / `thread_settings_applied`，取最后一条的 `thread_settings.service_tier`，`"priority"` 就是 `/fast`（关闭后是 `"default"`）。在回合中断检测的同一次解析里倒序查找（`matrixScanCodexFastTier`，不含事件名的行不解码），随它的文件签名缓存和会话绑定校验一起失效，子代理 rollout 不算。方法统一改名为 `FastMode` / `FastModeCached`。
+- **显示**：经典列表在行尾徽标区加红色粗体 `[fast]`（选中行仍为红字）；内嵌侧栏在标题前加红色 `fast`，长标题被截断时它也保留。判断依据是最近一次回复，所以刚打开或刚关闭 `/fast` 后要等下一条回复才会变化；被用量上限拒绝的回复不带 speed，此时不显示。Codex 的设置一生效就会写记录，不用等回复。SSH 会话和其他工具不显示。Web UI 暂未接入。
+- **测试**：`internal/session/matrix_fast_mode_test.go`（最新回复 fast/standard、无 usage、null、子代理不算、monitor 快照读取）、`internal/ui/matrix_fast_badge_test.go`（Claude 与 Codex、两种布局、选中与未选中）；Codex 另有 priority/default 切换、没有设置事件、正文里提到事件名不算、换绑后不继承的测试，并用一份真实 100MB rollout 的副本核对过（截到 fast 时段判定为 fast，完整文件判定为不是，单次读取不到 3 毫秒）。
 
 ## 97. 会话搜索包含远端会话
 

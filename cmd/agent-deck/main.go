@@ -45,7 +45,7 @@ import (
 )
 
 // matrix/hardened: identifies our hardened build.
-var Version = "1.16.26+matrix.119" // matrix/hardened: resume missing Claude terminals with the verified original conversation; overridden via -ldflags.
+var Version = "1.16.26+matrix.124" // matrix/hardened: flag Codex /fast sessions in the list too; overridden via -ldflags.
 
 // Table column widths for list command output
 const (

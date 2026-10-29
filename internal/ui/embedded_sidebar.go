@@ -315,10 +315,10 @@ func (h *Home) renderEmbeddedSessionItem(
 		toolPrefix = toolIcon + " "
 	}
 
-	// matrix/hardened: Claude /fast burns usage fast; lead the title with a
+	// matrix/hardened: Claude/Codex /fast burns usage fast; lead the title with a
 	// red tag so it survives truncation of long labels.
 	fastPlain, fastTag := "", ""
-	if state.claudeFast {
+	if state.fastMode {
 		fastPlain = "fast "
 		fastTag = lipgloss.NewStyle().Foreground(ColorRed).Bold(true).Render("fast") + " "
 	}

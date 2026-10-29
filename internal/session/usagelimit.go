@@ -489,23 +489,27 @@ func (i *Instance) usageLimited() bool {
 	return limited
 }
 
-// ClaudeFastMode reports whether the latest assistant turn of this Claude
-// session ran in fast mode, so the list can flag sessions burning usage faster.
+// FastMode reports whether this session is running in its tool's fast mode:
+// Claude's latest assistant turn has usage.speed "fast", or Codex's latest
+// thread settings ask for the priority service tier. The list flags these
+// sessions because they draw usage much faster.
 // matrix/hardened: consumers read the monitor's verdict; the producer reuses
-// the throttled usage-limit scan and the same three-way identity invariant.
-func (i *Instance) ClaudeFastMode() bool {
+// the throttled usage-limit scan (Claude) or turn-interrupt scan (Codex).
+func (i *Instance) FastMode() bool {
 	if row, consumer := i.runtimeView(); row != nil {
 		return row.FastMode
 	} else if consumer {
 		return false
 	}
-	i.usageLimited()
-	return i.ClaudeFastModeCached()
+	if IsClaudeCompatible(i.Tool) {
+		i.usageLimited()
+	}
+	return i.FastModeCached()
 }
 
-// ClaudeFastModeCached is ClaudeFastMode without IO, for render snapshots.
+// FastModeCached is FastMode without IO, for render snapshots.
 // matrix/hardened: it never scans; the status pass or monitor fills the memo.
-func (i *Instance) ClaudeFastModeCached() bool {
+func (i *Instance) FastModeCached() bool {
 	if row, consumer := i.runtimeView(); row != nil {
 		return row.FastMode
 	} else if consumer {
@@ -513,6 +517,10 @@ func (i *Instance) ClaudeFastModeCached() bool {
 	}
 	i.mu.RLock()
 	defer i.mu.RUnlock()
+	if IsCodexCompatible(i.Tool) {
+		m := i.matrixInterrupt
+		return m.codexFast && m.key != "" && m.key == i.matrixTurnInterruptKeyLocked()
+	}
 	sessionID := strings.TrimSpace(i.ClaudeSessionID)
 	return sessionID != "" && i.usageLimitSessionID == sessionID && i.usageFastCached
 }
