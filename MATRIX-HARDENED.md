@@ -1037,3 +1037,13 @@ snapshots, compatibility, and validation boundaries.
 - **matrix/hardened:** 已存在的活终端直接复用；保留的死终端仍要求人工检查。分组并发上限、进程归属保护与已有 Codex／睡眠恢复规则继续生效。恢复不发送聊天内容、不执行 duplicate sweep，也不重启其他会话。
 - **范围**：自动恢复限于普通主 Claude 会话；自定义包装、子会话以及需要插件或频道 scratch 配置的会话仍走人工检查和显式重启。同一原生 ID 的严格恢复入口互相串行，外部原生启动和普通显式重启保持原有合同。
 - **验证**：通过隔离环境中的主对话记录、CLI 和私有 tmux 验证原 ID 恢复、重复打开只连接一次、并发打开、无效／缺失／不可信历史拒绝、并发上限、活终端复用与保留死终端拒绝。实际部署需核对远端执行入口和二进制版本，并保留原有 AI 进程。
+
+## 103. World Store 看板派给已有会话
+
+`matrix/hardened`，提交 `01e880ef`。用户是一个一个会话在做事，养熟的会话就相当于一个智能体；任务可以直接交给它，Multica 的派发保持不变。
+
+- **看板 `d`**：打开本机会话列表（不含归档），按最近活跃排序，显示标题、分组、状态和活跃时间；`/` 筛选，`j/k` 移动，`Enter` 选中后确认，已关联的会话标 `↔`。
+- **确认后三步**（`worldstore.Dispatch`）：1）用 `agent-deck session send --queue --message-file -` 把任务排队发给会话（名称、分类、计划说明，加"做完时回报做了什么、结果、还有什么没收尾"）；2）未关联则 `task.link`（带原值基线），已关联同一会话时跳过、只补发消息；3）任务没有执行、也没有别的任务在运行时 `task.action start`（确认时固定 operationId），需要核对红线时提示到 World Store 开始，不绕过。
+- **失败**：在哪一步失败就说明已做到哪一步（例如 `message sent; link failed: …`）；`UNCONFIRMED` / `WRITE_UNCERTAIN` 照旧锁住看板、不重试；发送失败时什么都不写。开始被跳过（已有执行、别的任务在跑、周期任务）时在提示里写明原因。
+- **命令行**：`agent-deck tasks dispatch <task> [session]`，不写会话时派给当前会话。
+- **验证**：`TestDispatchToExistingSession`（全新、已关联、已有执行、别的任务在跑、发送失败、关联不确定、红线）、`TestKanbanDispatchToExistingSession`（选择器、筛选、确认文字、重派只补发）。
