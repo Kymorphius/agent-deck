@@ -1,6 +1,9 @@
 package session
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 // matrix/hardened: the list flags Claude /fast from usage.speed on the latest
 // main-conversation assistant turn; sidechains and older turns do not count.
@@ -86,5 +89,15 @@ func TestFastModeCachedCodexMemoFollowsBinding(t *testing.T) {
 	inst.CodexSessionID = "other"
 	if inst.FastModeCached() {
 		t.Fatal("a rebound Codex session must not inherit the old fast tier")
+	}
+}
+
+func TestRemoteSessionInfoDecodesFastMode(t *testing.T) {
+	var rows []RemoteSessionInfo
+	if err := json.Unmarshal([]byte(`[{"id":"a","fast_mode":true},{"id":"b"}]`), &rows); err != nil {
+		t.Fatal(err)
+	}
+	if !rows[0].FastMode || rows[1].FastMode {
+		t.Fatalf("fast_mode decode = %v/%v, want true/false (older remotes omit it)", rows[0].FastMode, rows[1].FastMode)
 	}
 }

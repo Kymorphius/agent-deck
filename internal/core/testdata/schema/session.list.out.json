@@ -96,6 +96,10 @@
             "type": "string"
           }
         },
+        "fast_mode": {
+          "description": "live; Claude or Codex /fast is on",
+          "type": "boolean"
+        },
         "favorite": {
           "description": "live",
           "type": "boolean"

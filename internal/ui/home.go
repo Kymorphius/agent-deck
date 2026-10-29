@@ -23668,10 +23668,18 @@ func (h *Home) renderRemoteSessionItemAtWidth(b *strings.Builder, item session.I
 		if rowLines == 1 && rs.Tool != "" {
 			toolPrefix = sidebarToolIcon(rs.Tool) + " "
 		}
-		firstPlain := indent + marker + chevron + statusIcon + " " + toolPrefix + remoteTitle
+		// matrix/hardened: red "fast" leads the title, as on local cards.
+		fastPlain := ""
+		if rs.FastMode {
+			fastPlain = "fast "
+		}
+		firstPlain := indent + marker + chevron + statusIcon + " " + toolPrefix + fastPlain + remoteTitle
 		first := indent + marker + chevron + statusStyle.Render(statusIcon) + " "
 		if toolPrefix != "" {
 			first += GetToolStyle(strings.ToLower(rs.Tool)).Bold(true).Render(sidebarToolIcon(rs.Tool)) + " "
+		}
+		if fastPlain != "" {
+			first += lipgloss.NewStyle().Foreground(ColorRed).Bold(true).Render("fast") + " "
 		}
 		first = fitCellWidth(first+remoteTitle, max(1, listWidth))
 		secondText := strings.TrimSpace(rs.Status)
@@ -23697,7 +23705,11 @@ func (h *Home) renderRemoteSessionItemAtWidth(b *strings.Builder, item session.I
 		second := fitCellWidth(indent+"  ╰ "+secondText, max(1, listWidth))
 		if selected || embedded {
 			style := lipgloss.NewStyle().Foreground(ColorText).Background(ColorSurface)
-			first = style.Render(fitCellWidth(firstPlain, max(1, listWidth)))
+			fitted := fitCellWidth(firstPlain, max(1, listWidth))
+			first = style.Render(fitted)
+			if at := strings.Index(fitted, fastPlain); fastPlain != "" && at >= 0 {
+				first = style.Render(fitted[:at]) + style.Foreground(ColorRed).Bold(true).Render("fast") + style.Render(fitted[at+len("fast"):])
+			}
 			second = style.Foreground(ColorTextDim).Render(second)
 		} else {
 			first = lipgloss.NewStyle().Foreground(ColorText).Render(first)
@@ -23737,6 +23749,15 @@ func (h *Home) renderRemoteSessionItemAtWidth(b *strings.Builder, item session.I
 			tStyle = SessionStatusSelStyle
 		}
 		toolStr = tStyle.Render(" " + rs.Tool)
+	}
+	// matrix/hardened: same red [fast] badge as local rows, from the remote's
+	// list --json verdict.
+	if rs.FastMode {
+		fastStyle := lipgloss.NewStyle().Foreground(ColorRed).Bold(true)
+		if selected {
+			fastStyle = SessionStatusSelStyle.Foreground(ColorRed).Bold(true)
+		}
+		toolStr += fastStyle.Render(" [fast]")
 	}
 
 	treeConnector := "├─"

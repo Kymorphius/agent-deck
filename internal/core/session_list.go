@@ -61,6 +61,7 @@ type SessionRow struct {
 	StatusSource      string         `json:"status_source,omitempty" doc:"cached for a stopped row whose stored status was used; live after a status refresh"`
 	Substate          string         `json:"substate,omitempty" doc:"live"`
 	SubstateDetail    string         `json:"substate_detail,omitempty" doc:"live"`
+	FastMode          bool           `json:"fast_mode,omitempty" doc:"live; Claude or Codex /fast is on"` // matrix/hardened
 	TmuxSession       string         `json:"tmux_session,omitempty" doc:"live"`
 	Profile           string         `json:"profile"`
 	CreatedAt         time.Time      `json:"created_at"`
@@ -182,6 +183,7 @@ func liveSessionRows(ctx context.Context, profile string, instances []*session.I
 		}
 		row.Substate = substate
 		row.SubstateDetail = inst.SubstateDetail()
+		row.FastMode = inst.FastMode() // matrix/hardened: remote controllers flag /fast rows
 		row.BackgroundWork = inst.BackgroundWorkJSON()
 		row.Channels = inst.Channels
 		row.ExtraArgs = inst.ExtraArgs

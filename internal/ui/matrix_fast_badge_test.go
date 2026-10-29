@@ -38,3 +38,28 @@ func checkFastBadge(t *testing.T, tool string) {
 		}
 	}
 }
+
+// matrix/hardened: a remote row shows the remote's fast_mode verdict in both
+// layouts; an older remote that omits it shows nothing.
+func TestFastBadgeRendersOnRemoteRows(t *testing.T) {
+	for _, fast := range []bool{false, true} {
+		rs := session.RemoteSessionInfo{ID: "remote-fast", Title: "pro-burning", Tool: "codex", Status: "waiting", RemoteName: "pro", FastMode: fast}
+		item := session.Item{Type: session.ItemTypeRemoteSession, RemoteSession: &rs, RemoteName: "pro", Level: 1, IsLastInGroup: true}
+		for _, embedded := range []bool{false, true} {
+			for _, selected := range []bool{false, true} {
+				h := NewHome()
+				h.width, h.height = 240, 40
+				h.embeddedLayout = embedded
+				var b strings.Builder
+				h.renderRemoteSessionItemAtWidth(&b, item, selected, 60)
+				row := stripAnsi(b.String())
+				require.Contains(t, row, "pro-burning")
+				want := "[fast]"
+				if embedded {
+					want = "fast pro-burning"
+				}
+				require.Equal(t, fast, strings.Contains(row, want), "embedded=%v selected=%v row=%q", embedded, selected, row)
+			}
+		}
+	}
+}

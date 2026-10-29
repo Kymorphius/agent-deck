@@ -2974,6 +2974,9 @@ type RemoteSessionInfo struct {
 	// (the codex usage-limit retry time), so a remote codex session's retry
 	// time reaches the controller. Omitted by older remotes → "".
 	SubstateDetail string `json:"substate_detail,omitempty"`
+	// matrix/hardened: the remote's Claude/Codex /fast verdict; older remotes
+	// omit it and the row simply shows no fast badge.
+	FastMode bool `json:"fast_mode,omitempty"`
 
 	// LastActivityAt is the remote session's Instance.DisplayLastActivityTime(),
 	// RFC3339Nano-formatted (fractional seconds kept: TimeFilterMode's 3/7/30-day

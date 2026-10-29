@@ -45,7 +45,7 @@ import (
 )
 
 // matrix/hardened: identifies our hardened build.
-var Version = "1.16.26+matrix.124" // matrix/hardened: flag Codex /fast sessions in the list too; overridden via -ldflags.
+var Version = "1.16.26+matrix.125" // matrix/hardened: carry /fast to remote rows via list --json; overridden via -ldflags.
 
 // Table column widths for list command output
 const (
@@ -3124,6 +3124,7 @@ func buildListJSON(profileName string, instances []*session.Instance, cachedStat
 		StatusSource      string    `json:"status_source,omitempty"`
 		Substate          string    `json:"substate,omitempty"`        // Honest Status v2: additive refinement
 		SubstateDetail    string    `json:"substate_detail,omitempty"` // free text for the substate (codex usage-limit retry time)
+		FastMode          bool      `json:"fast_mode,omitempty"`       // matrix/hardened: Claude or Codex /fast is on
 		TmuxSession       string    `json:"tmux_session,omitempty"`
 		Profile           string    `json:"profile"`
 		CreatedAt         time.Time `json:"created_at"`
@@ -3190,6 +3191,7 @@ func buildListJSON(profileName string, instances []*session.Instance, cachedStat
 			StatusSource:      "live",
 			Substate:          substate,
 			SubstateDetail:    inst.SubstateDetail(),
+			FastMode:          inst.FastMode(),
 			BackgroundWork:    inst.BackgroundWorkJSON(),
 			Profile:           profileName,
 			CreatedAt:         inst.CreatedAt,
