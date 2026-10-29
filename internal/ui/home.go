@@ -1528,6 +1528,11 @@ func (h *Home) activateSelectedItem() (tea.Model, tea.Cmd) {
 				return h, nil
 			}
 		}
+		// matrix/hardened: keep an archived open bound to this ID through
+		// restart, even when restoring it removes the row from this view.
+		if item.Type == session.ItemTypeSession && item.Session != nil && item.Session.IsArchived() {
+			return h, h.restartArchivedForOpen(item.Session, false)
+		}
 		// matrix/hardened: opening an automatic sleeper resumes its exact
 		// conversation before the ordinary stopped/dead-pane restart path.
 		if item.Type == session.ItemTypeSession && item.Session != nil && (item.Session.IsAutoSleeping() || item.Session.AutoSleepPending()) {
@@ -9007,8 +9012,20 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
-		// Clear animation so ENTER can attach immediately.
+		// Clear animation before continuing the original open request.
 		delete(h.resumingSessions, msg.sessionID)
+		// matrix/hardened: locate by identity after the archive filter drops
+		// the row, then use the ordinary embedded/classic opening route.
+		if msg.err == nil && msg.openAfterRestart {
+			if inst := h.getInstanceByID(msg.sessionID); inst != nil && !inst.IsArchived() && h.locateSearchSession(inst, false) {
+				if msg.legacyOpen || !h.embeddedLayout {
+					return h, h.attachSession(inst)
+				}
+				if h.enterEmbeddedMode() {
+					return h, h.startEmbeddedModeCmd()
+				}
+			}
+		}
 		return h, nil
 
 	case mcpRestartedMsg:
@@ -13755,6 +13772,10 @@ func (h *Home) attachSelectedLegacy() tea.Cmd {
 			h.setError(err)
 			return nil
 		}
+		// matrix/hardened: legacy attach also continues after archive recovery.
+		if item.Session.IsArchived() {
+			return h.restartArchivedForOpen(item.Session, true)
+		}
 		// matrix/hardened: Alt+Enter uses the same exact-resume gate as Enter.
 		if item.Session.IsAutoSleeping() || item.Session.AutoSleepPending() {
 			return h.matrixWakeSelectedSession(item.Session, true)
@@ -17965,11 +17986,13 @@ func (h *Home) switchSessionHarnessWithOptions(sessionID, harness, account strin
 }
 
 type sessionRestartedMsg struct {
-	sessionID  string
-	err        error
-	warning    string
-	fresh      bool
-	unarchived bool
+	sessionID        string
+	err              error
+	warning          string
+	fresh            bool
+	unarchived       bool
+	openAfterRestart bool // matrix/hardened: explicit archived Enter/o intent only.
+	legacyOpen       bool
 }
 
 // mcpRestartedMsg signals that an MCP-triggered restart completed and should auto-attach
@@ -18005,6 +18028,22 @@ func restartWithArchiveTransition(
 		return false, err
 	}
 	return true, nil
+}
+
+// matrix/hardened: carry explicit opening intent in the completion itself;
+// background restarts and fresh restarts never acquire this behavior.
+func (h *Home) restartArchivedForOpen(inst *session.Instance, legacy bool) tea.Cmd {
+	if h.hasActiveAnimation(inst.ID) {
+		return nil
+	}
+	h.resumingSessions[inst.ID] = time.Now()
+	cmd := h.restartSession(inst)
+	return func() tea.Msg {
+		msg := cmd().(sessionRestartedMsg)
+		msg.openAfterRestart = true
+		msg.legacyOpen = legacy
+		return msg
+	}
 }
 
 // restartSession restarts a session, unarchiving it first when invoked from
