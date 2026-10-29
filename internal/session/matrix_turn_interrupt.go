@@ -1,7 +1,6 @@
 package session
 
 import (
-	"bytes"
 	"encoding/json"
 	"io"
 	"os"
@@ -303,38 +302,6 @@ type matrixCodexEvent struct {
 			Code    string `json:"codex_error_info"`
 		} `json:"error"`
 	} `json:"payload"`
-}
-
-// matrixScanCodexFastTier reports whether the latest thread_settings_applied
-// event in the rollout at path asked for the priority service tier, which is
-// what Codex /fast selects. complete is false when the walk could not finish.
-// matrix/hardened: lines without the event name are skipped before decoding.
-func matrixScanCodexFastTier(path string) (fast, complete bool) {
-	marker := []byte(`"thread_settings_applied"`)
-	parsed := true
-	verdict, found, done := matrixWalkLinesBackwardComplete(path, func(line []byte) (matrixTurnInterrupt, bool, bool) {
-		if !bytes.Contains(line, marker) {
-			return matrixTurnInterrupt{}, false, false
-		}
-		var ev struct {
-			Type    string `json:"type"`
-			Payload struct {
-				Type     string `json:"type"`
-				Settings struct {
-					ServiceTier string `json:"service_tier"`
-				} `json:"thread_settings"`
-			} `json:"payload"`
-		}
-		if json.Unmarshal(line, &ev) != nil {
-			parsed = false
-			return matrixTurnInterrupt{}, false, false
-		}
-		if ev.Type != "event_msg" || ev.Payload.Type != "thread_settings_applied" {
-			return matrixTurnInterrupt{}, false, false
-		}
-		return matrixTurnInterrupt{Kind: ev.Payload.Settings.ServiceTier}, true, true
-	})
-	return found && strings.EqualFold(strings.TrimSpace(verdict.Kind), "priority"), done && parsed
 }
 
 // matrixLatestCodexTurnInterrupt reports whether the latest turn event in the

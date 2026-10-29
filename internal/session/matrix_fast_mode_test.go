@@ -2,6 +2,8 @@ package session
 
 import (
 	"encoding/json"
+	"os"
+	"strings"
 	"testing"
 )
 
@@ -72,7 +74,7 @@ func TestScanCodexFastTier(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			fast, complete := matrixScanCodexFastTier(writeUsageLimitTranscript(t, tt.records...))
+			fast, complete := (&codexTierTracker{entries: map[string]*codexTierEntry{}}).fast(writeUsageLimitTranscript(t, tt.records...))
 			if !complete || fast != tt.want {
 				t.Fatalf("fast=%v complete=%v, want fast=%v", fast, complete, tt.want)
 			}
@@ -99,5 +101,67 @@ func TestRemoteSessionInfoDecodesFastMode(t *testing.T) {
 	}
 	if !rows[0].FastMode || rows[1].FastMode {
 		t.Fatalf("fast_mode decode = %v/%v, want true/false (older remotes omit it)", rows[0].FastMode, rows[1].FastMode)
+	}
+}
+
+func codexSettingsLine(tier string) string {
+	return `{"timestamp":"2026-10-29T18:59:47.478Z","type":"event_msg","payload":{"type":"thread_settings_applied","thread_id":"t","thread_settings":{"model":"gpt-6.1-sol","service_tier":"` + tier + `"}}}`
+}
+
+// matrix/hardened: real rollouts had a 7.9 MiB tool-output line, and 28 MiB of
+// records, after the latest settings event; both hid /fast from the list.
+func TestCodexTierSurvivesHugeOutputAfterSettings(t *testing.T) {
+	big := `{"type":"response_item","payload":{"type":"function_call_output","output":"` + strings.Repeat("x", 3<<20) + `"}}`
+	medium := `{"type":"response_item","payload":{"type":"function_call_output","output":"` + strings.Repeat("y", 200<<10) + `"}}`
+	records := []string{codexSettingsLine("default"), codexSettingsLine("priority"), big}
+	for n := 0; n < 50; n++ { // ~10 MiB of ordinary records
+		records = append(records, medium)
+	}
+	tracker := &codexTierTracker{entries: map[string]*codexTierEntry{}}
+	fast, ok := tracker.fast(writeUsageLimitTranscript(t, records...))
+	if !ok || !fast {
+		t.Fatalf("fast=%v ok=%v, want the priority tier found behind the large output", fast, ok)
+	}
+}
+
+func TestCodexTierFollowsAppendsAndRewrites(t *testing.T) {
+	path := writeUsageLimitTranscript(t, codexSettingsLine("priority"))
+	tracker := &codexTierTracker{entries: map[string]*codexTierEntry{}}
+	if fast, ok := tracker.fast(path); !ok || !fast {
+		t.Fatalf("initial: fast=%v ok=%v", fast, ok)
+	}
+	appendLine := func(line string, newline bool) {
+		f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if newline {
+			line += "\n"
+		}
+		if _, err := f.WriteString(line); err != nil {
+			t.Fatal(err)
+		}
+		f.Close()
+	}
+	// A partial line is not read until it is complete.
+	half := codexSettingsLine("default")
+	appendLine(half[:20], false)
+	if fast, _ := tracker.fast(path); !fast {
+		t.Fatal("a partial line must not change the tier")
+	}
+	appendLine(half[20:], true)
+	if fast, ok := tracker.fast(path); !ok || fast {
+		t.Fatalf("after /fast off: fast=%v ok=%v", fast, ok)
+	}
+	appendLine(`{"type":"event_msg","payload":{"type":"task_started"}}`, true)
+	if fast, _ := tracker.fast(path); fast {
+		t.Fatal("unrelated appends keep the last tier")
+	}
+	// A rewritten (shorter) file is read again from the end.
+	if err := os.WriteFile(path, []byte(codexSettingsLine("priority")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if fast, ok := tracker.fast(path); !ok || !fast {
+		t.Fatalf("after rewrite: fast=%v ok=%v", fast, ok)
 	}
 }

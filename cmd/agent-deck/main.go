@@ -45,7 +45,7 @@ import (
 )
 
 // matrix/hardened: identifies our hardened build.
-var Version = "1.16.26+matrix.125" // matrix/hardened: carry /fast to remote rows via list --json; overridden via -ldflags.
+var Version = "1.16.26+matrix.126" // matrix/hardened: find Codex /fast behind huge rollout output; overridden via -ldflags.
 
 // Table column widths for list command output
 const (

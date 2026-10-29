@@ -203,9 +203,10 @@ func matrixParseTurnInterruptFile(tool, path string) matrixTurnInterruptFileResu
 			return result
 		}
 		result.verdict, result.found, result.cacheable = matrixScanLatestCodexTurnInterrupt(path)
-		fast, fastComplete := matrixScanCodexFastTier(path)
+		// matrix/hardened: incremental and unbounded; see matrix_codex_tier_tracker.go.
+		fast, fastOK := matrixCodexTiers.fast(path)
 		result.codexFast = fast
-		result.cacheable = result.cacheable && fastComplete && result.meta.valid
+		result.cacheable = result.cacheable && fastOK && result.meta.valid
 	}
 	return result
 }
