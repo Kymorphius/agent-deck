@@ -328,6 +328,7 @@ type Home struct {
 	kanbanPanel          *KanbanPanel          // matrix/hardened: World Store task board (alt+t)
 	adoptPanel           *AdoptPanel           // matrix/hardened: adopt a running Claude from tmux (alt+u)
 	webServicePanel      *WebServicePanel      // matrix/hardened: the user's own `agent-deck web` service (alt+w)
+	codexFastPanel       *CodexFastPanel       // matrix/hardened: switch live Codex sessions to /fast or back (alt+x)
 	aiUpdatesPanel       *AIUpdatesPanel       // matrix/hardened: explicit local Codex install / activation
 	webServiceWatch      *webServiceWatch      // matrix/hardened: background reading for the header's "web" mark
 	deadLetterPanel      *DeadLetterPanel      // Inspect, retry, and explicitly purge delivery failures
@@ -7719,6 +7720,9 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if cmd, ok := h.handleAdoptMsg(msg); ok { // matrix/hardened: alt+u (matrix_adopt_home.go)
 		return h, cmd
 	}
+	if cmd, ok := h.handleCodexFastMsg(msg); ok { // matrix/hardened: alt+x (matrix_codex_fast_home.go)
+		return h, cmd
+	}
 	if cmd, ok := h.handleWebServiceMsg(msg); ok { // matrix/hardened: alt+w (matrix_webservice_home.go)
 		return h, cmd
 	}
@@ -7766,6 +7770,7 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		h.kanbanPanel.SetSize(msg.Width, msg.Height)     // matrix/hardened
 		h.adoptPanel.SetSize(msg.Width, msg.Height)      // matrix/hardened
 		h.webServicePanel.SetSize(msg.Width, msg.Height) // matrix/hardened
+		h.codexFastPanel.SetSize(msg.Width, msg.Height)  // matrix/hardened
 		h.aiUpdatesPanel.SetSize(msg.Width, msg.Height)  // matrix/hardened
 		if h.deadLetterPanel != nil {
 			h.deadLetterPanel.SetSize(msg.Width, msg.Height)
@@ -10599,6 +10604,11 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			h.webServicePanel, cmd = h.webServicePanel.Update(msg)
 			return h, cmd
 		}
+		if h.codexFastPanel.IsVisible() { // matrix/hardened
+			var cmd tea.Cmd
+			h.codexFastPanel, cmd = h.codexFastPanel.Update(msg)
+			return h, cmd
+		}
 		if h.watcherPanel.IsVisible() {
 			var cmd tea.Cmd
 			h.watcherPanel, cmd = h.watcherPanel.Update(msg)
@@ -11710,6 +11720,7 @@ func (h *Home) hasModalVisible() bool {
 		h.kanbanPanel.IsVisible() || // matrix/hardened: hotkeyTaskBoard overlay
 		h.adoptPanel.IsVisible() || // matrix/hardened: hotkeyAdoptPanel overlay
 		h.webServicePanel.IsVisible() || // matrix/hardened: hotkeyWebService overlay
+		h.codexFastPanel.IsVisible() || // matrix/hardened: hotkeyCodexFast overlay
 		(h.deadLetterPanel != nil && h.deadLetterPanel.IsVisible()) || // hotkeyDeadLetters overlay
 		h.helpOverlay.IsVisible() || h.search.IsVisible() || h.globalSearch.IsVisible() ||
 		(h.groupSearch != nil && h.groupSearch.IsVisible()) || // matrix/hardened
@@ -12928,6 +12939,9 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case defaultHotkeyBindings[hotkeyWebService]: // matrix/hardened: watch/control the `agent-deck web` service
 		return h, h.openWebServicePanel()
+
+	case defaultHotkeyBindings[hotkeyCodexFast]: // matrix/hardened: switch live Codex sessions to /fast or back
+		return h, h.openCodexFastPanel()
 
 	case "E":
 		// Exec an interactive shell inside the sandbox container.
@@ -19653,6 +19667,9 @@ func (h *Home) renderFrame() string {
 	}
 	if h.webServicePanel.IsVisible() { // matrix/hardened
 		return h.webServicePanel.View()
+	}
+	if h.codexFastPanel.IsVisible() { // matrix/hardened
+		return h.codexFastPanel.View()
 	}
 	if h.watcherPanel.IsVisible() {
 		return h.watcherPanel.View()

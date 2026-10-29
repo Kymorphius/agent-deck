@@ -249,6 +249,7 @@ func (h *HelpOverlay) View() string {
 	importKey := h.key(hotkeyImport, "i")
 	adoptKey := h.key(hotkeyAdoptPanel, "Alt+U")      // matrix/hardened
 	webServiceKey := h.key(hotkeyWebService, "Alt+W") // matrix/hardened
+	codexFastKey := h.key(hotkeyCodexFast, "Alt+X")   // matrix/hardened
 	reloadKey := h.key(hotkeyReload, "Ctrl+R")
 	restartDeckKey := h.key(hotkeyRestartDeck, "Ctrl+T")
 	installUpdateKey := h.key(hotkeyInstallUpdate, "Ctrl+Y")
@@ -487,6 +488,7 @@ func (h *HelpOverlay) View() string {
 				{importKey, "Import tmux sessions"},
 				{adoptKey, "Adopt a running Claude from tmux (here or on the remote)"},             // matrix/hardened
 				{webServiceKey, "Web service: status, start/stop/restart (here or on the remote)"}, // matrix/hardened
+				{codexFastKey, "Codex fast: switch every live Codex session (all hosts) on/off"},   // matrix/hardened
 				{switchKey, "Switch session (here or attached)"},
 				{scrollbackKey, "Scrollback pager (while attached)"},
 				{quitKey, "Quit"},

@@ -205,6 +205,7 @@ func (h *Home) inputMethodNavigation() bool {
 		h.agentsPanel != nil && h.agentsPanel.IsVisible() ||
 		h.adoptPanel != nil && h.adoptPanel.IsVisible() ||
 		h.webServicePanel != nil && h.webServicePanel.IsVisible() ||
+		h.codexFastPanel != nil && h.codexFastPanel.IsVisible() ||
 		h.deadLetterPanel != nil && h.deadLetterPanel.IsVisible() ||
 		h.toolVisibilityPanel != nil && h.toolVisibilityPanel.IsVisible() {
 		return true

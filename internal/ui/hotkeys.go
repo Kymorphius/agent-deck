@@ -89,6 +89,7 @@ const (
 	hotkeyAdoptPanel = "adopt_panel"
 	// matrix/hardened: watch/control the user's `agent-deck web` service (matrix_webservice_panel.go).
 	hotkeyWebService = "web_service"
+	hotkeyCodexFast  = "codex_fast" // matrix/hardened
 	// Session switcher. While attached it is intercepted in the tmux attach
 	// loop (see internal/tmux/pty.go AttachOptions); on the home screen it is
 	// dispatched like any other hotkey. Must resolve to a "ctrl+<letter>" chord.
@@ -185,6 +186,7 @@ var hotkeyActionOrder = []string{
 	hotkeyTaskBoard,
 	hotkeyAdoptPanel,
 	hotkeyWebService,
+	hotkeyCodexFast,
 	hotkeySwitchSession,
 	hotkeyAltSession,
 	hotkeyMRUBack,
@@ -253,6 +255,7 @@ var defaultHotkeyBindings = map[string]string{
 	hotkeyTaskBoard:        "alt+t", // matrix/hardened
 	hotkeyAdoptPanel:       "alt+u", // matrix/hardened
 	hotkeyWebService:       "alt+w", // matrix/hardened
+	hotkeyCodexFast:        "alt+x", // matrix/hardened
 	hotkeySwitchSession:    "ctrl+s",
 	hotkeyAltSession:       "`",
 	hotkeyMRUBack:          "alt+left",

@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.126`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.127`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -66,7 +66,7 @@
 - `internal/session/claude_hooks.go`：`isAgentDeckHookCommand` 的判断规则：先去掉开头的 `VAR=值`，再要求第二个词是 `hook-handler`、程序名的文件名部分是 `agent-deck`。`RemoveClaudeHooks` 会扫描全部事件，并做 UTC 时间戳备份（约 387–414 行）。
 - `cmd/agent-deck/main.go`（约 4845、5070 行）：`agent-deck uninstall` 会移除这些钩子。`uninstall.sh` 第 253 行附近的 jq 过滤用的是同一套规则（正则），写回时用 `cat >` 保持软链接和权限。
 
-**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.126`。
+**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.127`。
 
 **测试**：以 `_hardened_test.go` 结尾的文件、`update_check_disable_test.go`、`update_timer_wiring_test.go` 等是新增或调整过的测试；`testdata/goldens/*` 里的快照已经按加固后的输出更新。
 
@@ -1050,3 +1050,12 @@ snapshots, compatibility, and validation boundaries.
 - **失败**：在哪一步失败就说明已做到哪一步（例如 `message sent; link failed: …`）；`UNCONFIRMED` / `WRITE_UNCERTAIN` 照旧锁住看板、不重试；发送失败时什么都不写。开始被跳过（已有执行、别的任务在跑、周期任务）时在提示里写明原因。
 - **命令行**：`agent-deck tasks dispatch <task> [session]`，不写会话时派给当前会话。
 - **验证**：`TestDispatchToExistingSession`（全新、已关联、已有执行、别的任务在跑、发送失败、关联不确定、红线）、`TestKanbanDispatchToExistingSession`（选择器、筛选、确认文字、重派只补发）。
+
+## 97. 一键切换所有 Codex 会话的 fast
+
+- **问题**：Codex 的 `/fast` 只能在每个会话里各自切换，开了很多会话时，想统一打开或关闭 fast 要逐个进入；正在跑的会话还得先中断，切完再让它继续。
+- **实测的 Codex 行为**（0.162 与 0.165）：`/fast` 是开关，不接受参数，`/fast off` 会被当成普通消息发给模型。切换后底栏模型名后面出现或消失 `fast`，并显示 "Service tier set to priority/default"，同时立刻写一条 `thread_settings_applied`。它还会把 `service_tier` 写进全局 `config.toml`，所以之后新开的会话也跟着最后一次切换走。Esc 中断回合；打开 Vim 编辑（底栏显示 `Vim: Insert/Normal`）时，插入模式下第一次 Esc 只是退到普通模式，要再按一次才中断。空闲时连按两次 Esc 会进入"编辑上一条消息"，所以不能对空闲会话按 Esc。输入 `/fast` 后，补全弹窗有时会吃掉第一次回车。
+- **matrix/hardened:** `matrix.127` 新增 `agent-deck codex-fast on|off [--dry-run] [--json]`（`internal/session/matrix_codex_fast_switch.go`、`cmd/agent-deck/matrix_codex_fast_cmd.go`），并加入远程命令白名单。对本 profile 下每个活着的本地 Codex 会话并行处理：从画面底栏读当前状态，已经是目标状态的跳过；输入框有未发送的草稿、有打开的菜单或审批、读不出底栏的，都不碰。在跑的会话先按 Esc 中断（Vim 插入模式按两次），等运行状态行消失；中断后输入框若冒出被退回的排队消息，就停下来报告，不再输入。然后输入 `/fast`，确认输入框里正好是 `/fast` 再回车，必要时补一次回车，并以底栏变化作为成功依据；原本在跑的会话再发"继续"（同样先确认输入框内容再回车）。空闲会话只切换，不发"继续"。
+- **matrix/hardened:** 草稿判断没有复用 `send.ComposerDraft`：它不认识 `»` 输入框，会退回去拿上面一条历史消息，误判为有草稿。这里只看当前输入框那一行及其续行，整段灰色（SGR 2）的占位文字不算草稿。
+- **TUI**：`alt+x` 打开 CODEX FAST 面板（`matrix_codex_fast_panel.go`、`matrix_codex_fast_home.go`；`home.go` 只加了字段、尺寸、按键路由、模态判断、热键分支、绘制、消息分发共 7 处挂钩，另外改了 `hotkeys.go`、`help.go`、`matrix_input_method.go`）。打开时对本机和每台已配置的远程并行预演，按机器列出每个会话的 fast/std、running/idle，以及会被跳过的原因；`o` 全部打开、`f` 全部关闭，确认框会写明多少个运行中、多少个空闲的会话受影响，以及运行中的会被中断并收到"继续"；确认后各机器并行执行，逐个会话显示结果。远程要装 `matrix.127` 以上；旧版会显示原始错误并提示可能是版本太旧。
+- **测试**：`internal/session/matrix_codex_fast_switch_test.go`，用模拟 Codex 画面覆盖空闲/运行中、Vim 插入与普通模式、补全吃掉回车、已是目标状态、草稿、菜单、预演、底栏不变、中断不了等情况，并断言空闲会话从不收到 Esc、Vim 普通模式下从不打字；真实画面形状（`»` 加灰色占位、历史 `›` 行不算草稿）。`internal/ui/matrix_codex_fast_panel_test.go` 覆盖预演只读、确认文案、执行、拒绝时不发送、旧版远程。另在本机隔离环境里用真实 tmux 和 Codex 0.165（Vim 模式）端到端跑过：运行中会话中断后切到 priority，发"继续"后接着做完；空闲时切回 default，不发"继续"，不按 Esc。上线前在 Air 和 Pro 的真实会话上跑过 `--dry-run`，结果与画面一致。

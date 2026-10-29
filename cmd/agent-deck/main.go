@@ -45,7 +45,7 @@ import (
 )
 
 // matrix/hardened: identifies our hardened build.
-var Version = "1.16.26+matrix.126" // matrix/hardened: find Codex /fast behind huge rollout output; overridden via -ldflags.
+var Version = "1.16.26+matrix.127" // matrix/hardened: switch all live Codex sessions to /fast or back; overridden via -ldflags.
 
 // Table column widths for list command output
 const (
@@ -486,6 +486,9 @@ func main() {
 			return
 		case "webservice": // matrix/hardened: this host's own `agent-deck web` service
 			handleWebService(args[1:])
+			return
+		case "codex-fast": // matrix/hardened: switch live Codex sessions to /fast or back
+			handleCodexFast(profile, args[1:])
 			return
 		case "mcp":
 			handleMCP(profile, args[1:])
@@ -1560,6 +1563,7 @@ var commandRegistry = map[string]bool{
 	"tasks":           true, // matrix/hardened: World Store task board
 	"ai-update":       true, // matrix/hardened: separate AI package installation from activation.
 	"webservice":      true, // matrix/hardened: this host's own `agent-deck web` service
+	"codex-fast":      true, // matrix/hardened: switch live Codex sessions to /fast or back
 	"telegram-doctor": true, "watcher": true, "openclaw": true, "oc": true,
 	"remote": true, "remote-agent": true, "system": true, "worktree": true, "wt": true, "costs": true, "events": true, "daemon": true, "monitor": true, "usage": true, "web": true, "config": true, "recall": true,
 	"uninstall": true, "migrate-paths": true, "hook-handler": true,

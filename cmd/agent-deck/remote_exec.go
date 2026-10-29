@@ -23,6 +23,8 @@ func remoteCommandArgs(args []string) ([]string, error) {
 			return append([]string(nil), args...), nil
 		case "webservice": // matrix/hardened: the remote's own `agent-deck web` service
 			return append([]string(nil), args...), nil
+		case "codex-fast": // matrix/hardened: acts on the remote's own Codex panes
+			return append([]string(nil), args...), nil
 		case "remote":
 			if len(args) > 1 && (args[1] == "list" || args[1] == "ls") {
 				return append([]string(nil), args...), nil
