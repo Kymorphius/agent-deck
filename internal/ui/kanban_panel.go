@@ -30,6 +30,8 @@ type kanbanSession struct {
 	Path   string
 	Group  string
 	Status session.Status
+	// LastActivity orders the dispatch picker (matrix/hardened).
+	LastActivity time.Time
 }
 
 // kanbanEnv is everything the panel needs to reach World Store and launch.
@@ -51,6 +53,8 @@ type kanbanConfirm struct {
 	task worldstore.Task
 	// reason is the text typed for a rejected review (matrix/hardened).
 	reason string
+	// target is the session a dispatch sends to (matrix/hardened).
+	target *kanbanSession
 	// operationID is fixed when the confirmation opens, so a start the user
 	// confirms is one World Store operation however it ends.
 	operationID string
@@ -81,6 +85,10 @@ type KanbanPanel struct {
 	// links and whose path `n` launches in.
 	context *kanbanSession
 	lookup  func(id string) (kanbanSession, bool)
+	// sessions lists this deck's sessions, most recently active first, for
+	// the dispatch picker; picker is open while choosing (matrix/hardened).
+	sessions func() []kanbanSession
+	picker   *kanbanPicker
 
 	board  *worldstore.Board
 	cols   []worldstore.Column
@@ -123,6 +131,7 @@ func (p *KanbanPanel) Hide() {
 	}
 	p.visible = false
 	p.confirm = nil
+	p.picker = nil
 	p.filterEditing = false
 }
 
@@ -279,6 +288,9 @@ func (p *KanbanPanel) Update(msg tea.Msg) (*KanbanPanel, tea.Cmd) {
 	}
 	k := key.String()
 
+	if p.picker != nil { // matrix/hardened: dispatch picker owns the keys while open
+		return p, p.updatePicker(key)
+	}
 	if p.confirm != nil {
 		// matrix/hardened: a rejection asks for its reason; q types into it.
 		if p.confirm.kind == "reject" {
@@ -374,6 +386,8 @@ func (p *KanbanPanel) Update(msg tea.Msg) (*KanbanPanel, tea.Cmd) {
 		p.rebuild(selected)
 	case "s", "p", "c", "x", "e", "L", "U", "n", "v", "b":
 		p.startConfirm(k)
+	case "d": // matrix/hardened: send the task to an existing session
+		p.openPicker()
 	case "o": // matrix/hardened: open the task's Multica issue
 		p.openMultica()
 	case "enter":
@@ -539,6 +553,8 @@ func (p *KanbanPanel) confirmText() string {
 			return fmt.Sprintf("Accept %q: mark it complete (records completion time)", name)
 		}
 		return fmt.Sprintf("Mark %q complete (records completion time, closes its executions)", name)
+	case "dispatch":
+		return p.dispatchConfirmText(c)
 	case "review":
 		if c.task.Execution != nil {
 			return fmt.Sprintf("Hand %q over for review: finish its execution round, then set 待验收", name)
@@ -574,6 +590,7 @@ func (p *KanbanPanel) execute() tea.Cmd {
 	p.busy, p.err = true, ""
 	// Captured here: the closure runs off the UI goroutine and must not touch p.
 	env, owner, task, linksReady, sessions := *p.env, p.board.Owner, c.task, p.board.LinksReady, p.liveLinks(c.task)
+	running := p.board.Running // matrix/hardened: dispatch skips the start while another runs
 
 	var ctxSession kanbanSession
 	if p.context != nil {
@@ -605,6 +622,8 @@ func (p *KanbanPanel) execute() tea.Cmd {
 			return done(env.client.Resume(bg, owner, task), "Resumed "+name)
 		case "done":
 			return done(env.client.Complete(bg, owner, task, ""), name+" → "+worldstore.StatusDone)
+		case "dispatch":
+			return dispatchMsg(bg, env, owner, task, *c.target, c.operationID, running)
 		case "review":
 			return done(env.client.SubmitForReview(bg, owner, task), name+" → "+worldstore.StatusReview)
 		case "reject":
@@ -868,6 +887,8 @@ func (p *KanbanPanel) View() string {
 		sb.WriteString(dim.Render(kanbanFit("No tasks have 执行分类 = "+p.env.execCategory+" yet.", inner)) + "\n")
 		sb.WriteString(dim.Render(kanbanFit("Press a to see all tasks, pick one, press e to put it on the board.", inner)) + "\n")
 		sb.WriteString(strings.Repeat("\n", bodyH-1))
+	case p.picker != nil: // matrix/hardened
+		sb.WriteString(p.renderPicker(inner, bodyH))
 	default:
 		sb.WriteString(p.renderColumns(inner, bodyH))
 	}
@@ -1046,8 +1067,10 @@ func (p *KanbanPanel) renderFooter(inner int) string {
 	default:
 		status = ""
 	}
-	keys := "[a] All/AI  [e] On/off board  [s] Start  [p] Pause  [c] Resume  [v] To review  [x] Done/Accept  [b] Send back  [o] Open issue  [L/U] Link  [n] New session  [Enter] Go to session  [/] Filter  [r] Reload  [Esc] Close"
-	if p.confirm != nil && p.confirm.kind == "reject" {
+	keys := "[a] All/AI  [e] On/off board  [s] Start  [p] Pause  [c] Resume  [v] To review  [x] Done/Accept  [b] Send back  [d] Send to session  [o] Open issue  [L/U] Link  [n] New session  [Enter] Go to session  [/] Filter  [r] Reload  [Esc] Close"
+	if p.picker != nil { // matrix/hardened
+		keys = "[j/k] Move  [/] Filter  [Enter] Choose  [Esc] Cancel   ↔ already linked"
+	} else if p.confirm != nil && p.confirm.kind == "reject" {
 		keys = "Type the reason (optional)  [Enter] Send back  [Esc] Cancel"
 	} else if p.confirm != nil {
 		keys = "[Enter] Confirm  [Esc] Cancel"

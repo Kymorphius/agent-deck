@@ -442,3 +442,92 @@ func TestTriggerMulticaSyncNeedsTheScript(t *testing.T) {
 		t.Fatalf("url = %+v", m)
 	}
 }
+
+// matrix/hardened: dispatch to an existing session — send, link, start.
+func TestDispatchToExistingSession(t *testing.T) {
+	answers := map[string]string{}
+	f := &fakeEntry{answer: func(req map[string]any) (string, error) {
+		if req["op"] == "snapshot" {
+			return ok(snapshotJSON), nil
+		}
+		if a, okk := answers[req["op"].(string)]; okk {
+			return a, nil
+		}
+		return ok(`{"verified":true,"links":[]}`), nil
+	}}
+	c := f.client()
+	board, err := c.Board(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sent []string
+	req := func(id, session string) DispatchRequest {
+		task := *board.Find(id)
+		task.PlanText = "先复现"
+		return DispatchRequest{Owner: board.Owner, Task: task, DeviceID: "host", SessionID: session, OperationID: "agentdeck-0123456789abcdef",
+			Send: func(_ context.Context, text string) error { sent = append(sent, session+"|"+text); return nil }}
+	}
+	ops := func() (out []string) {
+		for _, r := range f.requests {
+			if r["op"] != "snapshot" {
+				out = append(out, r["op"].(string))
+			}
+		}
+		return out
+	}
+
+	f.requests = nil
+	res, err := c.Dispatch(context.Background(), req("t1", "s9"))
+	if err != nil || !res.Sent || !res.Linked || !res.Started || res.Done() != "message sent, linked, started" {
+		t.Fatalf("fresh dispatch: %+v %v", res, err)
+	}
+	if strings.Join(ops(), ",") != "task.link,task.action" || !strings.Contains(sent[0], "写周报") || !strings.Contains(sent[0], "先复现") || !strings.Contains(sent[0], "做完时回报") {
+		t.Fatalf("ops %v sent %q", ops(), sent)
+	}
+	if p := f.requests[len(f.requests)-1]["payload"].(map[string]any); p["mode"] != "start" || p["operationId"] != "agentdeck-0123456789abcdef" {
+		t.Fatalf("start payload %v", p)
+	}
+
+	// t2 is linked to host/s1 and already running: message only.
+	f.requests = nil
+	res, err = c.Dispatch(context.Background(), req("t2", "s1"))
+	if err != nil || !res.AlreadyLinked || res.Linked || res.Started || !strings.Contains(res.StartSkipped, "already has an execution") || len(ops()) != 0 {
+		t.Fatalf("re-dispatch: %+v %v %v", res, err, ops())
+	}
+
+	// Another task running: linked, start skipped.
+	r := req("t1", "s9")
+	r.Running = &Execution{ID: "e1", Status: ExecRunning}
+	f.requests = nil
+	if res, err = c.Dispatch(context.Background(), r); err != nil || !res.Linked || res.Started || !strings.Contains(res.StartSkipped, "another task") {
+		t.Fatalf("running elsewhere: %+v %v", res, err)
+	}
+
+	// A failed send writes nothing.
+	r = req("t1", "s9")
+	r.Send = func(context.Context, string) error { return errors.New("session gone") }
+	f.requests = nil
+	if _, err = c.Dispatch(context.Background(), r); err == nil || len(ops()) != 0 || !strings.Contains(err.Error(), "nothing done; send failed") {
+		t.Fatalf("send failure: %v %v", err, ops())
+	}
+
+	// An unconfirmed link stops before the start and stays uncertain.
+	answers["task.link"] = `{"ok":false,"error":{"code":"UNCONFIRMED","message":"读回未确认"}}`
+	f.requests = nil
+	_, err = c.Dispatch(context.Background(), req("t1", "s9"))
+	if !Uncertain(err) || !strings.Contains(err.Error(), "message sent; link failed") || strings.Join(ops(), ",") != "task.link" {
+		t.Fatalf("uncertain link: %v %v", err, ops())
+	}
+	delete(answers, "task.link")
+
+	// Red lines: the start is refused with a pointer to World Store.
+	answers["task.action"] = `{"ok":false,"error":{"code":"REDLINE_REVIEW_REQUIRED","message":"关联红线尚未核对"}}`
+	_, err = c.Dispatch(context.Background(), req("t1", "s9"))
+	if CodeOf(err) != CodeRedlineReview || !strings.Contains(err.Error(), "message sent, linked; start failed") || !strings.Contains(err.Error(), "World Store") {
+		t.Fatalf("redline: %v", err)
+	}
+
+	if CheckDispatch(*board.Find("t1"), false) == nil || CheckDispatch(*board.Find("t5"), true) == nil {
+		t.Fatal("links not set up / closed or imported tasks must be refused up front")
+	}
+}

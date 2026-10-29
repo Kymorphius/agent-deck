@@ -35,6 +35,8 @@ func handleTasks(profile string, args []string) {
 		handleTasksLink(profile, args[0] == "link", args[1:])
 	case "launch":
 		handleTasksLaunch(profile, args[1:])
+	case "dispatch": // matrix/hardened: send a task to an existing session
+		handleTasksDispatch(profile, args[1:])
 	case "mark", "unmark":
 		handleTasksMark(args[0] == "mark", args[1:])
 	case "init", "init-links":
@@ -81,6 +83,7 @@ func printTasksHelp() {
 	fmt.Println("  link <task> [session]       Link a session (default: current session)")
 	fmt.Println("  unlink <task> [session]     Remove a session link")
 	fmt.Println("  launch <task> [path]        Start a session on the task and link it")
+	fmt.Println("  dispatch <task> [session]   Send the task to an existing session (queued), link it, start it")
 	fmt.Println("  init --yes                  Create the 执行分类 and session-link fields in World Store")
 	fmt.Println()
 	fmt.Println("<task> is a task ID, a unique ID prefix (6+ chars), or an exact task name.")
@@ -518,4 +521,59 @@ func handleTasksInit(args []string) {
 		}
 	}
 	out.Success("created: "+strings.Join(missing, ", "), map[string]any{"success": true, "ready": true, "created": missing})
+}
+
+// handleTasksDispatch sends a task to an existing session: the message is
+// queued for the session, the task is linked to it (unless already) and
+// started in World Store (unless it already runs or another task does).
+// matrix/hardened.
+func handleTasksDispatch(profile string, args []string) {
+	fs := flag.NewFlagSet("tasks dispatch", flag.ExitOnError)
+	jsonOut := fs.Bool("json", false, "Output as JSON")
+	out, client, ws, board := tasksSetup(fs, args, jsonOut)
+	t, err := resolveTask(board, fs.Arg(0))
+	if err != nil {
+		out.Error(err.Error(), ErrCodeNotFound)
+		os.Exit(1)
+	}
+	if err := worldstore.CheckDispatch(*t, board.LinksReady); err != nil {
+		out.Error(tasksErrorText(err), tasksErrorCode(err))
+		os.Exit(1)
+	}
+	_, instances, _, err := loadSessionData(profile)
+	if err != nil {
+		out.Error(err.Error(), ErrCodeNotFound)
+		os.Exit(1)
+	}
+	inst, msg, code := ResolveSessionOrCurrent(fs.Arg(1), instances)
+	if inst == nil {
+		out.Error(msg, code)
+		os.Exit(1)
+	}
+	ctx := context.Background()
+	task := *t
+	if full, err := client.Get(ctx, board.Owner, t.ID); err == nil {
+		task.PlanText, task.Category = full.PlanText, full.Category
+	} else {
+		out.Error("nothing sent: "+tasksErrorText(err), tasksErrorCode(err))
+		os.Exit(1)
+	}
+	exe, _ := os.Executable()
+	res, err := client.Dispatch(ctx, worldstore.DispatchRequest{
+		Owner: board.Owner, Task: task, DeviceID: worldstore.DeviceID(ws.DeviceID), SessionID: inst.ID,
+		OperationID: worldstore.NewOperationID(), Running: board.Running,
+		Send: func(ctx context.Context, text string) error {
+			return worldstore.SendToSession(ctx, exe, profile, inst.ID, text)
+		},
+	})
+	if err != nil {
+		out.Error(tasksErrorText(err), tasksErrorCode(err))
+		os.Exit(1)
+	}
+	text := fmt.Sprintf("sent %s to %s: %s", t.Name, inst.Title, res.Done())
+	if res.StartSkipped != "" {
+		text += " (not started: " + res.StartSkipped + ")"
+	}
+	out.Success(text, map[string]any{"success": true, "taskId": t.ID, "sessionId": inst.ID,
+		"sent": res.Sent, "linked": res.Linked, "alreadyLinked": res.AlreadyLinked, "started": res.Started, "startSkipped": res.StartSkipped})
 }

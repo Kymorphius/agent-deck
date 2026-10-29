@@ -5,6 +5,7 @@ package ui
 
 import (
 	"os"
+	"sort"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -36,11 +37,25 @@ func (h *Home) openKanbanPanel() tea.Cmd {
 		s := kanbanSessionOf(inst)
 		ctx = &s
 	}
+	h.kanbanPanel.sessions = h.kanbanSessions // matrix/hardened: dispatch picker
 	return h.kanbanPanel.Open(env, setupErr, ctx, h.kanbanLookup)
 }
 
 func kanbanSessionOf(inst *session.Instance) kanbanSession {
-	return kanbanSession{ID: inst.ID, Title: inst.Title, Path: inst.ProjectPath, Group: inst.GroupPath, Status: inst.GetStatusThreadSafe()}
+	return kanbanSession{ID: inst.ID, Title: inst.Title, Path: inst.ProjectPath, Group: inst.GroupPath, Status: inst.GetStatusThreadSafe(), LastActivity: inst.DisplayLastActivityTime()}
+}
+
+// kanbanSessions lists this deck's sessions for the dispatch picker, most
+// recently active first; archived sessions are left out. matrix/hardened.
+func (h *Home) kanbanSessions() []kanbanSession {
+	var out []kanbanSession
+	for _, inst := range session.FilterInstancesByArchive(h.instances, false) {
+		if inst != nil {
+			out = append(out, kanbanSessionOf(inst))
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].LastActivity.After(out[j].LastActivity) })
+	return out
 }
 
 // kanbanLookup resolves a linked session against the live deck. Called from

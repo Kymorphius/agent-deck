@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
@@ -454,5 +455,82 @@ func TestKanbanOpensMulticaIssue(t *testing.T) {
 	p.Update(kanbanKey("o"))
 	if len(opened) != 1 || !strings.Contains(p.notice, "not been dispatched") {
 		t.Fatalf("undispatched: %v %q", opened, p.notice)
+	}
+}
+
+// matrix/hardened: d sends a task to an existing session chosen from a list.
+func TestKanbanDispatchToExistingSession(t *testing.T) {
+	f := kanbanEntry()
+	p := openKanban(t, f, nil)
+	now := time.Now()
+	p.sessions = func() []kanbanSession {
+		return []kanbanSession{
+			{ID: "sess-1", Title: "login-fix", Group: "Work", Status: session.StatusWaiting, LastActivity: now.Add(-time.Minute)},
+			{ID: "sess-2", Title: "uniray 研究", Group: "Research/uniray", Status: session.StatusIdle, LastActivity: now.Add(-3 * time.Hour)},
+		}
+	}
+	var sent []string
+	p.env.send = func(_ context.Context, id, text string) error { sent = append(sent, id+"|"+text); return nil }
+
+	selectTask(t, p, "t1")
+	p.Update(kanbanKey("d"))
+	if p.picker == nil || len(p.picker.shown()) != 2 {
+		t.Fatalf("d must open the session picker: %+v %q", p.picker, p.notice)
+	}
+	if v := p.View(); !strings.Contains(v, "login-fix") || !strings.Contains(v, "Research/uniray") || !strings.Contains(v, "[Enter] Choose") {
+		t.Fatalf("picker view:\n%s", v)
+	}
+	for _, l := range strings.Split(p.View(), "\n") {
+		if w := ansi.StringWidth(l); w > 140 {
+			t.Fatalf("picker line wider than terminal (%d): %q", w, l)
+		}
+	}
+	p.Update(kanbanKey("esc"))
+	if p.picker != nil || !strings.Contains(p.notice, "nothing sent") {
+		t.Fatal("esc closes the picker without sending")
+	}
+
+	p.Update(kanbanKey("d"))
+	p.Update(kanbanKey("/"))
+	for _, r := range "uni" {
+		p.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	p.Update(kanbanKey("enter")) // keep the filter
+	if got := p.picker.shown(); len(got) != 1 || got[0].ID != "sess-2" {
+		t.Fatalf("filter: %+v", got)
+	}
+	p.Update(kanbanKey("enter"))
+	if p.confirm == nil || p.confirm.kind != "dispatch" || p.confirm.target.ID != "sess-2" || !strings.Contains(p.confirmText(), "link them") {
+		t.Fatalf("confirm: %+v", p.confirm)
+	}
+	f.ops = nil
+	_, cmd := p.Update(kanbanKey("enter"))
+	w := cmd().(kanbanWrittenMsg)
+	var ops []string
+	for _, o := range f.ops {
+		ops = append(ops, o["op"].(string))
+	}
+	// t2 is running elsewhere, so the start is skipped and said so.
+	if w.err != nil || !strings.Contains(w.notice, "message sent, linked") || !strings.Contains(w.notice, "not started: another task") || strings.Join(ops, ",") != "task.get,task.link" {
+		t.Fatalf("dispatch: %+v ops %v", w, ops)
+	}
+	if len(sent) != 1 || !strings.HasPrefix(sent[0], "sess-2|World Store 任务：写周报") {
+		t.Fatalf("sent %v", sent)
+	}
+	p.handleWritten(w)
+
+	// Already linked: message only, nothing written.
+	p.loading = false
+	selectTask(t, p, "t2")
+	p.Update(kanbanKey("d"))
+	p.Update(kanbanKey("enter")) // sess-1 is first (most recent)
+	if !strings.Contains(p.confirmText(), "already linked") {
+		t.Fatalf("re-dispatch confirm: %q", p.confirmText())
+	}
+	f.ops = nil
+	_, cmd = p.Update(kanbanKey("enter"))
+	w = cmd().(kanbanWrittenMsg)
+	if w.err != nil || !strings.Contains(w.notice, "message sent, already linked") || len(f.ops) != 1 {
+		t.Fatalf("re-dispatch: %+v %v", w, f.ops)
 	}
 }
