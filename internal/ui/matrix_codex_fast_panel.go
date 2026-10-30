@@ -25,12 +25,13 @@ import (
 const codexFastCommandTimeout = 3 * time.Minute
 
 type codexFastHostMsg struct {
-	seq     int
-	target  string
-	applied bool // false: dry run
-	results []session.CodexFastResult
-	summary string
-	err     error
+	seq         int
+	target      string
+	applied     bool // false: dry run
+	results     []session.CodexFastResult
+	summary     string
+	err         error
+	unsupported bool // the host's agent-deck predates codex-fast
 }
 
 type codexFastHost struct {
@@ -41,6 +42,8 @@ type codexFastHost struct {
 	results []session.CodexFastResult
 	summary string
 	err     string
+	// matrix/hardened: an older agent-deck is a note, not a failure.
+	unsupported bool
 }
 
 // CodexFastPanel is the alt+x overlay.
@@ -106,7 +109,11 @@ func (p *CodexFastPanel) dispatch(want string, apply bool) tea.Cmd {
 				if err == nil {
 					err = jerr
 				}
-				err = fmt.Errorf("%v (is agent-deck there older than codex-fast?)", adoptCommandError(out, err))
+				err = adoptCommandError(out, err)
+				if codexFastUnsupported(err) {
+					return codexFastHostMsg{seq: seq, target: target, applied: apply, unsupported: true}
+				}
+				err = fmt.Errorf("%v (is agent-deck there older than codex-fast?)", err)
 				return codexFastHostMsg{seq: seq, target: target, applied: apply, err: err}
 			}
 			// A failed session exits non-zero but still reports every result.
@@ -124,8 +131,10 @@ func (p *CodexFastPanel) handleHost(m codexFastHostMsg) {
 		if h.target != m.target {
 			continue
 		}
-		h.loading, h.applied = false, m.applied
-		if m.err != nil {
+		h.loading, h.applied, h.unsupported = false, m.applied, m.unsupported
+		if m.unsupported {
+			h.err, h.results, h.summary = "", nil, ""
+		} else if m.err != nil {
 			h.err, h.results, h.summary = m.err.Error(), nil, ""
 		} else {
 			h.err, h.results, h.summary = "", m.results, m.summary
@@ -234,6 +243,8 @@ func (p *CodexFastPanel) View() string {
 		switch {
 		case h.loading:
 			status = dim.Render(" …")
+		case h.unsupported:
+			status = dim.Render(" agent-deck there is too old for codex-fast; skipped")
 		case h.err != "":
 			status = red.Render(" " + kanbanFit(h.err, inner-cellWidth(where)-2))
 		case len(h.results) == 0:
@@ -311,4 +322,14 @@ func codexFastTargets() []string {
 	}
 	sort.Strings(names)
 	return append(targets, names...)
+}
+
+// codexFastUnsupported recognises the refusals of an agent-deck that predates
+// codex-fast: the remote channel's verb allowlist, or the CLI itself.
+func codexFastUnsupported(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "verb not allowed") || strings.Contains(msg, "not a recognized command")
 }
