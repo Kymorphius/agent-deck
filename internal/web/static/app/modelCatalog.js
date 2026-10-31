@@ -42,6 +42,7 @@ export const MODEL_ID_CATALOG = {
     { value: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5 pinned' },
   ],
   codex: [
+    { value: 'gpt-6.1-sol', label: 'GPT-6.1 Sol' }, // matrix/hardened: same fallback list as the TUI.
     { value: 'gpt-6-astra', label: 'GPT-6 Astra' },
     { value: 'gpt-6-sol', label: 'GPT-6 Sol' },
     { value: 'gpt-6-luna', label: 'GPT-6 Luna' },

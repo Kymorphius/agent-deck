@@ -119,6 +119,12 @@ effect(() => {
   document.body.dataset.rail = railSignal.value
 })
 
+// matrix/hardened: sidebar layout, 'groups' (the tree) or 'recent' (every
+// visited session in one list, newest operator visit first — the web mirror of
+// the TUI's 最近 / Recent view). Persisted like the other layout choices.
+export const sidebarViewSignal = signal(loadJSON('agentdeck.sidebarView', 'groups'))
+persist(sidebarViewSignal, 'agentdeck.sidebarView')
+
 // Sidebar `/ filter` text. Lifted out of Sidebar.js useState so
 // sidebarRowsSignal — and therefore keyboard nav — sees the same filter the
 // user does. Session-scoped, as before.

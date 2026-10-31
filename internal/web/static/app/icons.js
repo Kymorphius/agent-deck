@@ -55,6 +55,8 @@ export const ICONS = {
   menu:    'M4 6h16 M4 12h16 M4 18h16',
   // matrix/hardened: image (frame + sun + hill) -- terminal strip upload button.
   image:   'M3 5h18v14H3z M8.5 8.5a1.5 1.5 0 100 3 1.5 1.5 0 100-3 M21 15l-5-5L5 19',
+  // matrix/hardened: clock -- sidebar recent-view toggle.
+  clock:   'M12 3a9 9 0 100 18 9 9 0 100-18 M12 7v5l3 2',
 }
 
 export function Dot({ status, size = 7 }) {

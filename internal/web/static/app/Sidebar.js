@@ -16,7 +16,7 @@ import {
 } from './state.js'
 import {
   statusFiltersSignal, showColsSignal, activeTabSignal,
-  sidebarFilterSignal, groupExpandedSignal,
+  sidebarFilterSignal, groupExpandedSignal, sidebarViewSignal,
 } from './uiState.js'
 import { apiFetch } from './api.js'
 import { addToast } from './Toast.js'
@@ -114,7 +114,7 @@ function doAction(action, s) {
 // per-row padding to lean on.)
 const indentVar = (levels) => `--depth:${Math.max(0, levels)}`
 
-function SessionItem({ s, sel, rowKey, onSelect, showCols, depth, groupDepth }) {
+function SessionItem({ s, sel, rowKey, onSelect, showCols, depth, groupDepth, recent }) {
   const [exp, setExp] = useState(false)
   // Nested UNDER ANOTHER SESSION, not merely inside a nested group — only that
   // needs the continuation guide. s.isSubSession alone would be wrong: the
@@ -130,7 +130,7 @@ function SessionItem({ s, sel, rowKey, onSelect, showCols, depth, groupDepth }) 
     (showCols.branch && s.branch && s.branch !== '—') ||
     (showCols.attach && (mcpCount > 0 || skillCount > 0)) ||
     (showCols.sandbox && (s.sandbox || s.worktree)) ||
-    showCols.lastSeen
+    showCols.lastSeen || recent
   return html`
     <div class=${`sess ${sel ? 'sel' : ''} ${s.kind} ${exp ? 'exp' : ''} ${indented ? 'sub' : ''}`}
          data-row-key=${rowKey}
@@ -158,7 +158,9 @@ function SessionItem({ s, sel, rowKey, onSelect, showCols, depth, groupDepth }) 
           ${showCols.attach && skillCount > 0 && html`<span class="att-count skill">${skillCount} skill${skillCount > 1 ? 's' : ''}</span>`}
           ${showCols.sandbox && s.sandbox && html`<span class="att-count warn">docker</span>`}
           ${showCols.sandbox && s.worktree && html`<span class="att-count">worktree</span>`}
-          ${showCols.lastSeen && html`<span class="att-count" title="Last active">⏱ ${s.status === 'running' ? 'active now' : formatRelativeTime(s.lastAccessedAt)}</span>`}
+          ${recent && html`<span class="att-count" title="Last visited (orders this list)">◷ ${formatRelativeTime(s.lastAccessedAt)}</span>`}
+          ${recent && s.group && html`<span class="trunc" title=${s.group}>${s.group}</span>`}
+          ${!recent && showCols.lastSeen && html`<span class="att-count" title="Last active">⏱ ${s.status === 'running' ? 'active now' : formatRelativeTime(s.lastAccessedAt)}</span>`}
         </div>
       `}
       ${exp && html`
@@ -194,6 +196,8 @@ export function Sidebar() {
   const filter = sidebarFilterSignal.value
   const expandedMap = groupExpandedSignal.value
   const [showMenu, setShowMenu] = useState(false)
+  // matrix/hardened: flat list by last operator visit, like the TUI's Ctrl+E.
+  const recent = sidebarViewSignal.value === 'recent'
 
   const totalVisible = useMemo(
     () => rows.reduce((n, r) => n + (r.type === 'session' ? 1 : 0), 0),
@@ -216,9 +220,16 @@ export function Sidebar() {
   return html`
     <div class="sidebar">
       <div class="side-head">
-        <span class="label">SESSIONS</span>
+        <span class="label">${recent ? '最近 RECENT' : 'SESSIONS'}</span>
         <span class="count">${totalVisible}</span>
         <div class="spacer"/>
+        <button class=${`icon-btn ${recent ? 'active' : ''}`}
+                title=${recent ? 'Back to groups' : '最近 / Recent: latest visited first'}
+                aria-label="Toggle recent view" aria-pressed=${recent}
+                data-testid="recent-view-btn"
+                onClick=${() => (sidebarViewSignal.value = recent ? 'groups' : 'recent')}>
+          <${Icon} d=${ICONS.clock}/>
+        </button>
         <div style="position: relative;">
           <button class=${`icon-btn ${showMenu ? 'active' : ''}`} title="Show columns" aria-label="Show columns"
                   data-testid="show-cols-btn"
@@ -285,9 +296,14 @@ export function Sidebar() {
           : html`
             <${SessionItem} key=${r.key} s=${r.session} sel=${selected === r.id}
                             rowKey=${r.key} depth=${r.depth} groupDepth=${r.groupDepth}
-                            onSelect=${onSelect} showCols=${showCols}/>
+                            onSelect=${onSelect} showCols=${showCols} recent=${recent}/>
           `,
         )}
+        ${recent && sessions.length > 0 && rows.length === 0 && html`
+          <div data-testid="recent-empty" style="padding: 16px; font-family: var(--mono); font-size: 11px; color: var(--muted); text-align: center;">
+            No recently visited sessions${filter || statusFilters.length ? ' matching these filters' : ''}. Open a session to see it here.
+          </div>
+        `}
         ${sessions.length === 0 && html`
           <div style="padding: 16px; font-family: var(--mono); font-size: 11px; color: var(--muted); text-align: center;">
             No sessions yet. Press <span class="kbd" style="border:1px solid var(--border); padding: 0 4px; border-radius: 3px;">n</span> to create one.

@@ -9,7 +9,7 @@
 // data (e.g. RightRail Usage card) fall back to "no data" placeholders.
 import { computed, effect } from '@preact/signals'
 import { sessionsSignal, sessionCostsSignal, selectedIdSignal, selectedGroupSignal, createSessionDialogSignal, archivedSessionsSignal, mutationsEnabledSignal } from './state.js'
-import { sidebarFilterSignal, groupExpandedSignal, statusFiltersSignal } from './uiState.js'
+import { sidebarFilterSignal, groupExpandedSignal, statusFiltersSignal, sidebarViewSignal } from './uiState.js'
 import { apiFetch } from './api.js'
 
 // kind heuristic from session metadata (no API field today).
@@ -438,9 +438,11 @@ export function sessionMatches(s, filter, statuses) {
 // truth: the Sidebar renders it and keyboard nav walks it, so they cannot
 // disagree about what is on screen.
 export const sidebarRowsSignal = computed(() => {
-  const { groups, byGroup } = menuModelSignal.value
+  const { groups, byGroup, sessions } = menuModelSignal.value
   const filter = (sidebarFilterSignal.value || '').trim().toLowerCase()
   const statuses = statusFiltersSignal.value
+  // matrix/hardened: the recent view ignores groups, folds and pins.
+  if (sidebarViewSignal.value === 'recent') return recentSessionRows(sessions, filter, statuses)
   const expandedMap = groupExpandedSignal.value
 
   // Direct members first, then roll them up the tree. `groups` is depth-first
@@ -514,6 +516,22 @@ export const sidebarRowsSignal = computed(() => {
   }
   return rows
 })
+
+// matrix/hardened: epoch ms of the last operator visit (TUI attach, web
+// terminal input), or 0 when never visited. Go's zero time reads as unset.
+export function visitTime(s) {
+  const t = new Date(s && s.lastAccessedAt || '').getTime()
+  return Number.isFinite(t) && t > 0 ? t : 0
+}
+
+// matrix/hardened: same rule as the TUI (matrix_recent_view.go): only sessions
+// with a recorded visit, newest first, ties by id so the order is stable.
+export function recentSessionRows(sessions, filter, statuses) {
+  return (sessions || [])
+    .filter((s) => visitTime(s) > 0 && sessionMatches(s, filter, statuses))
+    .sort((a, b) => (visitTime(b) - visitTime(a)) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+    .map((s) => ({ type: 'session', key: 's:' + s.id, id: s.id, session: s, depth: 1, groupDepth: 0 }))
+}
 
 // Map a status onto one of the five display buckets. Deliberate divergence:
 // the TUI's switch lets `starting`/`queued` fall through uncounted, so its

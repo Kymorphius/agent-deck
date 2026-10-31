@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.128`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.129`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -66,7 +66,7 @@
 - `internal/session/claude_hooks.go`：`isAgentDeckHookCommand` 的判断规则：先去掉开头的 `VAR=值`，再要求第二个词是 `hook-handler`、程序名的文件名部分是 `agent-deck`。`RemoveClaudeHooks` 会扫描全部事件，并做 UTC 时间戳备份（约 387–414 行）。
 - `cmd/agent-deck/main.go`（约 4845、5070 行）：`agent-deck uninstall` 会移除这些钩子。`uninstall.sh` 第 253 行附近的 jq 过滤用的是同一套规则（正则），写回时用 `cat >` 保持软链接和权限。
 
-**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.128`。
+**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.129`。
 
 **测试**：以 `_hardened_test.go` 结尾的文件、`update_check_disable_test.go`、`update_timer_wiring_test.go` 等是新增或调整过的测试；`testdata/goldens/*` 里的快照已经按加固后的输出更新。
 
@@ -768,6 +768,7 @@ for k in claude.dangerous_mode updates.check_enabled updates.auto_update updates
 - **matrix/hardened:** `matrix.90` 起，每次主动切入「最近」或在其中切换状态/时间筛选，都从最新匹配的第 1 行开始并回到列表顶部；后台刷新和打开会话后的返回继续按会话身份保持选择。
 - 状态、归档、分组范围与时间窗口继续组合；「最近」中的时间窗口和行内时间都使用交互时间。没有匹配时保持空视图，显示返回入口。所选模式沿用 `ui_state.group_view_mode`，重开后恢复。
 - **matrix/hardened:** `list --json` 增加 `last_accessed_at`，供远程列表合并排序；旧远端未报告时不猜测时间，需要更新目标端后才能纳入「最近」。保持原同步频率，不增加后台扫描或定时器。
+- **matrix/hardened:** `matrix.129` 起网页侧栏也有「最近」：标题栏的时钟按钮在分组树和最近列表之间切换，选择存在浏览器 `localStorage`（`agentdeck.sidebarView`）。规则与 TUI 相同：只列有交互记录的本机会话，按 `lastAccessedAt` 倒序、同时间按 ID；不分组、不受折叠影响，文字筛选和状态按钮照常组合，每行显示访问时间和所属分组，没有匹配时提示原因。菜单快照本来每 2 秒整体重读，所以 TUI 或网页的新访问不刷新页面也会排上来。改动：`internal/web/static/app/uiState.js`（`sidebarViewSignal`）、`dataModel.js`（`visitTime`、`recentSessionRows`，`sidebarRowsSignal` 分支，键盘上下移动随之生效）、`Sidebar.js`、`icons.js`（clock）。测试：`tests/web/unit/matrixRecentSidebar.test.js`。同一版本补上网页模型目录缺的 `gpt-6.1-sol`（`modelCatalog.js`，10-16 的 c12e069e 只改了 TUI 目录，`TestIssue2388_WebStaticCatalogMatchesTUI` 自那以后一直因此失败）。
 - 验证使用第 4 节隔离入口，覆盖混合主机倒序、折叠与子会话、固定和状态干扰、筛选组合、稳定同时间排序、窗口跟随、真实快捷键和持久化、交互写入与背景不写入、宽度与空列表。安装后旧 TUI 在列表按 `Ctrl+T` 重载；AI pane 无需重启。
 
 ## 74. Codex 共享后台的延后更新
