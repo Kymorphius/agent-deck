@@ -45,7 +45,7 @@ import (
 )
 
 // matrix/hardened: identifies our hardened build.
-var Version = "1.16.26+matrix.129" // matrix/hardened: web sidebar gains the 最近 / Recent list; overridden via -ldflags.
+var Version = "1.16.26+matrix.130" // matrix/hardened: Codex Computer Use refresh after Codex app updates; overridden via -ldflags.
 
 // Table column widths for list command output
 const (

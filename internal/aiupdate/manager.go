@@ -105,6 +105,19 @@ func parseVersion(output []byte) (string, error) {
 	return fields[1], nil
 }
 
+// matrix/hardened: the desktop app's bundled CLI reports prerelease versions
+// such as 0.166.0-alpha.5.1. The CLI version is display-only, so accept them
+// there; package selection and daemon comparison still require stable versions.
+var cliVersion = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]{0,63})?$`)
+
+func parseCLIVersion(output []byte) (string, error) {
+	fields := strings.Fields(string(output))
+	if len(fields) != 2 || fields[0] != "codex-cli" || !cliVersion.MatchString(fields[1]) {
+		return "", errors.New("unsupported Codex version output")
+	}
+	return fields[1], nil
+}
+
 type lifecycleOutput struct {
 	Status              string `json:"status"`
 	ManagedCodexPath    string `json:"managedCodexPath"`
@@ -123,7 +136,7 @@ func (m *Manager) Inspect(ctx context.Context) (Status, error) {
 	if err != nil {
 		return status, err
 	}
-	status.CLIVersion, err = parseVersion(cli)
+	status.CLIVersion, err = parseCLIVersion(cli)
 	if err != nil {
 		return status, err
 	}

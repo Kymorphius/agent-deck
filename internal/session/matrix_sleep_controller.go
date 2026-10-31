@@ -20,12 +20,12 @@ func RunAutoSleepController(ctx context.Context, profile string) {
 		return
 	}
 	var storage *Storage
-	var lease, archiveLease *os.File
+	var lease, archiveLease, computerUseLease *os.File
 	defer func() {
 		if storage != nil {
 			_ = storage.Close()
 		}
-		for _, f := range []*os.File{lease, archiveLease} {
+		for _, f := range []*os.File{lease, archiveLease, computerUseLease} {
 			if f != nil {
 				_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 				_ = f.Close()
@@ -34,6 +34,7 @@ func RunAutoSleepController(ctx context.Context, profile string) {
 	}()
 	watcher := NewAutoSleepWatcher(AutoSleepWatcherConfig{})
 	archiver := NewAutoArchiveWatcher(AutoArchiveWatcherConfig{})
+	computerUse := NewCodexComputerUseWatcher()
 	timer := time.NewTimer(time.Minute)
 	defer timer.Stop()
 	for {
@@ -80,6 +81,23 @@ func RunAutoSleepController(ctx context.Context, profile string) {
 				}
 			} else {
 				archiver = NewAutoArchiveWatcher(AutoArchiveWatcherConfig{})
+			}
+			// matrix/hardened: Computer Use refresh has its own opt-in and lease.
+			if err == nil && cfg != nil && cfg.Lifecycle.AutoRefreshComputerUse {
+				var refreshErr error
+				if computerUseLease == nil {
+					computerUseLease, refreshErr = tryLifecycleLease(profile, "codex-computer-use")
+				}
+				if refreshErr == nil && computerUseLease != nil && storage == nil {
+					storage, refreshErr = NewStorageWithProfile(profile)
+				}
+				if refreshErr == nil && computerUseLease != nil {
+					if instances, loadErr := storage.Load(); loadErr == nil {
+						computerUse.Tick(ctx, instances)
+					}
+				}
+			} else {
+				computerUse = NewCodexComputerUseWatcher()
 			}
 			timer.Reset(time.Minute)
 		}

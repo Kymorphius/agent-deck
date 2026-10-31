@@ -275,3 +275,63 @@ func TestMatrixAIUpdatesConfigurationMatchesCodexHomeScope(t *testing.T) {
 		t.Fatalf("literal absolute executable path with spaces rejected: %q %v", binary, err)
 	}
 }
+
+type fakeAIComputerUse struct {
+	report    session.CodexComputerUseReport
+	results   []session.CodexComputerUseRefreshResult
+	refreshes int
+}
+
+func (f *fakeAIComputerUse) Inspect() (session.CodexComputerUseReport, error) { return f.report, nil }
+
+func (f *fakeAIComputerUse) Refresh(context.Context) ([]session.CodexComputerUseRefreshResult, error) {
+	f.refreshes++
+	f.report.Findings = nil // the refreshed host is current on the next readback
+	return f.results, nil
+}
+
+// matrix/hardened: Computer Use refresh is shown with the readback and needs its own confirmation.
+func TestMatrixAIUpdatesComputerUseRefreshNeedsConfirmation(t *testing.T) {
+	cu := &fakeAIComputerUse{
+		report: session.CodexComputerUseReport{
+			Bundles:  map[string]aiupdate.ComputerUseBundle{"/test/codex": {Present: true, Enabled: true, PluginVersion: "2"}},
+			Findings: []session.CodexComputerUseFinding{{ID: "a", Title: "Alpha", State: session.CodexComputerUseStale, Reason: "shared Codex daemon 7 started before", Host: &session.CodexComputerUseHost{PID: 7, Daemon: true}}},
+		},
+		results: []session.CodexComputerUseRefreshResult{{HostPID: 7, Titles: []string{"Alpha"}, Ready: true, Refreshed: true, Verified: true}},
+	}
+	f := &fakeAIUpdatesManager{status: aiupdate.Status{Home: "/test/codex", DaemonStatus: "running"}}
+	p := NewAIUpdatesPanel()
+	p.SetSize(100, 40)
+	p.SetComputerUse(cu)
+	finishAIUpdates(t, p, p.Open(f, ""))
+	frame := strings.Join(strings.Fields(ansi.Strip(p.View())), " ")
+	for _, required := range []string{"1 Codex session(s) started before", "Alpha", "u Refresh CU"} {
+		if !strings.Contains(frame, required) {
+			t.Fatalf("Computer Use summary omits %q:\n%s", required, frame)
+		}
+	}
+	_, cmd := p.Update(aiUpdatesKey("u"))
+	if cmd != nil || !p.confirmRefresh || cu.refreshes != 0 {
+		t.Fatal("u must ask before refreshing")
+	}
+	if frame := ansi.Strip(p.View()); !strings.Contains(frame, "REFRESH CODEX COMPUTER USE?") {
+		t.Fatalf("missing confirmation:\n%s", frame)
+	}
+	p.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if p.confirmRefresh || cu.refreshes != 0 {
+		t.Fatal("Esc must cancel without refreshing")
+	}
+	p.Update(aiUpdatesKey("u"))
+	_, cmd = p.Update(aiUpdatesKey("y"))
+	finishAIUpdates(t, p, cmd)
+	if cu.refreshes != 1 || strings.Join(f.calls, ",") != "inspect,inspect" {
+		t.Fatalf("refresh ran %d times; manager calls %v", cu.refreshes, f.calls)
+	}
+	frame = strings.Join(strings.Fields(ansi.Strip(p.View())), " ")
+	if !strings.Contains(frame, "Alpha · refreshed") || !strings.Contains(frame, "running Codex sessions have the installed plugin") {
+		t.Fatalf("refresh result missing:\n%s", frame)
+	}
+	if _, cmd = p.Update(aiUpdatesKey("u")); cmd != nil || p.confirmRefresh {
+		t.Fatal("nothing left to refresh")
+	}
+}

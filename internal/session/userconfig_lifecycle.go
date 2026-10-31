@@ -13,6 +13,9 @@ type LifecycleSettings struct {
 	// matrix/hardened: archive long-dead (error/stopped) sessions; opt-in.
 	AutoArchive  bool   `toml:"auto_archive,omitempty"`
 	ArchiveAfter string `toml:"archive_after,omitempty"`
+	// matrix/hardened: restart quiet Codex hosts that predate the desktop
+	// app's Computer Use plugin; opt-in.
+	AutoRefreshComputerUse bool `toml:"auto_refresh_computer_use,omitempty"`
 }
 
 func (s LifecycleSettings) SleepDuration() (time.Duration, error) {

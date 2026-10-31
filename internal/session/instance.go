@@ -2481,7 +2481,32 @@ func (i *Instance) resolveCodexCommand(baseCommand string) string {
 	if command == "" {
 		return "codex"
 	}
+	if i.Tool == "codex" {
+		return currentCodexDaemonPackageCommand(command)
+	}
 	return command
+}
+
+// matrix/hardened: a session created from inside a Codex process can record
+// the absolute path of one daemon package release, e.g.
+// <CODEX_HOME>/packages/app-server-daemon/releases/0.165.0-<target>/bin/codex.
+// That client then talks to a newer daemon, and stops launching once the old
+// release is removed. Launch the selected package instead.
+func currentCodexDaemonPackageCommand(command string) string {
+	if !filepath.IsAbs(command) || strings.ContainsAny(command, " \t\n'\"") {
+		return command
+	}
+	bin := filepath.Dir(command)
+	release := filepath.Dir(bin)
+	releases := filepath.Dir(release)
+	if filepath.Base(command) != "codex" || filepath.Base(bin) != "bin" || filepath.Base(releases) != "releases" || filepath.Base(filepath.Dir(releases)) != "app-server-daemon" {
+		return command
+	}
+	current := filepath.Join(filepath.Dir(releases), "current", "bin", "codex")
+	if info, err := os.Stat(current); err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
+		return command
+	}
+	return current
 }
 
 func codexHomeFromCommand(command string) string {
@@ -2664,7 +2689,8 @@ func (i *Instance) buildCodexCommand(baseCommand string) string {
 	// get the full treatment regardless of their command name.
 	trimmed := strings.TrimSpace(baseCommand)
 	if i.Tool == "codex" && trimmed != "codex" && trimmed != "" {
-		return envPrefix + trimmed
+		// matrix/hardened: a recorded daemon package release launches the selected one.
+		return envPrefix + currentCodexDaemonPackageCommand(trimmed)
 	}
 	if codexHome := i.codexHomeToExport(); codexHome != "" {
 		if err := os.MkdirAll(codexHome, 0o755); err != nil {

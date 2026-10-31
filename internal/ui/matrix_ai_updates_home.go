@@ -3,6 +3,7 @@ package ui
 // matrix/hardened: the settings action manages the local configured Codex home;
 // it never follows the selected remote session or starts background polling.
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -39,7 +40,44 @@ func (h *Home) openAIUpdatesPanel() tea.Cmd {
 		h.aiUpdatesPanel.scroll = 0
 		h.aiUpdatesPanel.scope = scope
 	}
+	h.aiUpdatesPanel.SetComputerUse(homeComputerUse{profile: h.profile})
 	return h.aiUpdatesPanel.Open(aiupdate.New(binary, home), "")
+}
+
+// homeComputerUse loads its own storage handle, like the lifecycle controller,
+// so a refresh never mutates the list's in-memory sessions; Restart records
+// each new terminal in the database and the list follows that change.
+type homeComputerUse struct{ profile string }
+
+func (c homeComputerUse) load() (*session.Storage, []*session.Instance, error) {
+	storage, err := session.NewStorageWithProfile(c.profile)
+	if err != nil {
+		return nil, nil, err
+	}
+	instances, err := storage.Load()
+	if err != nil {
+		_ = storage.Close()
+		return nil, nil, err
+	}
+	return storage, instances, nil
+}
+
+func (c homeComputerUse) Inspect() (session.CodexComputerUseReport, error) {
+	storage, instances, err := c.load()
+	if err != nil {
+		return session.CodexComputerUseReport{}, err
+	}
+	defer storage.Close()
+	return session.InspectCodexComputerUse(instances), nil
+}
+
+func (c homeComputerUse) Refresh(ctx context.Context) ([]session.CodexComputerUseRefreshResult, error) {
+	storage, instances, err := c.load()
+	if err != nil {
+		return nil, err
+	}
+	defer storage.Close()
+	return session.RefreshCodexComputerUse(ctx, instances, session.InspectCodexComputerUse(instances), session.CodexComputerUseRefreshOptions{}), nil
 }
 
 func aiUpdatesConfiguration(cfg *session.UserConfig, profile string) (string, string, error) {

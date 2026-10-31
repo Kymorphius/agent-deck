@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.129`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.130`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -66,7 +66,7 @@
 - `internal/session/claude_hooks.go`：`isAgentDeckHookCommand` 的判断规则：先去掉开头的 `VAR=值`，再要求第二个词是 `hook-handler`、程序名的文件名部分是 `agent-deck`。`RemoveClaudeHooks` 会扫描全部事件，并做 UTC 时间戳备份（约 387–414 行）。
 - `cmd/agent-deck/main.go`（约 4845、5070 行）：`agent-deck uninstall` 会移除这些钩子。`uninstall.sh` 第 253 行附近的 jq 过滤用的是同一套规则（正则），写回时用 `cat >` 保持软链接和权限。
 
-**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.129`。
+**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.130`。
 
 **测试**：以 `_hardened_test.go` 结尾的文件、`update_check_disable_test.go`、`update_timer_wiring_test.go` 等是新增或调整过的测试；`testdata/goldens/*` 里的快照已经按加固后的输出更新。
 
@@ -1060,3 +1060,15 @@ snapshots, compatibility, and validation boundaries.
 - **matrix/hardened:** 草稿判断没有复用 `send.ComposerDraft`：它不认识 `»` 输入框，会退回去拿上面一条历史消息，误判为有草稿。这里只看当前输入框那一行及其续行，整段灰色（SGR 2）的占位文字不算草稿。
 - **TUI**：`alt+x` 打开 CODEX FAST 面板（`matrix_codex_fast_panel.go`、`matrix_codex_fast_home.go`；`home.go` 只加了字段、尺寸、按键路由、模态判断、热键分支、绘制、消息分发共 7 处挂钩，另外改了 `hotkeys.go`、`help.go`、`matrix_input_method.go`）。打开时对本机和每台已配置的远程并行预演，按机器列出每个会话的 fast/std、running/idle，以及会被跳过的原因；`o` 全部打开、`f` 全部关闭，确认框会写明多少个运行中、多少个空闲的会话受影响，以及运行中的会被中断并收到"继续"；确认后各机器并行执行，逐个会话显示结果。远程要装 `matrix.127` 以上。`matrix.128` 起，旧版远程（远程通道回 "verb not allowed"，或 CLI 回 "not a recognized command"）只显示一行灰字"agent-deck there is too old for codex-fast; skipped"，不再当成红色错误；其他读不懂的回复仍显示原始错误。
 - **测试**：`internal/session/matrix_codex_fast_switch_test.go`，用模拟 Codex 画面覆盖空闲/运行中、Vim 插入与普通模式、补全吃掉回车、已是目标状态、草稿、菜单、预演、底栏不变、中断不了等情况，并断言空闲会话从不收到 Esc、Vim 普通模式下从不打字；真实画面形状（`»` 加灰色占位、历史 `›` 行不算草稿）。`internal/ui/matrix_codex_fast_panel_test.go` 覆盖预演只读、确认文案、执行、拒绝时不发送、旧版远程。另在本机隔离环境里用真实 tmux 和 Codex 0.165（Vim 模式）端到端跑过：运行中会话中断后切到 priority，发"继续"后接着做完；空闲时切回 default，不发"继续"，不按 Esc。上线前在 Air 和 Pro 的真实会话上跑过 `--dry-run`，结果与画面一致。
+
+## 104. Codex 应用更新后刷新 Computer Use
+
+- **问题**：Codex 应用更新时会把自带的 Computer Use 插件（MCP 服务 `cua_repl`）写进 `CODEX_HOME`。已经在运行的 Codex 进程不会重新加载 MCP，它的会话从此拿不到桌面控制工具。共享 app-server daemon 更隐蔽：daemon 一直把线程留在内存里，重开 TUI 只是重新连上旧会话（daemon 日志里是 `thread/resume overrides ignored for loaded thread`），`codex resume --no-daemon` 又会和 daemon 争同一个线程的写锁。
+- **matrix/hardened:** `matrix.130` 新增 `internal/aiupdate/computer_use.go`（只读：`.materialization-key` 里的插件版本和写入时间、插件缓存里 `cua_repl` 的启动命令、`config.toml` 是否启用）与 `internal/session/matrix_codex_computer_use.go`。线程的宿主是持有 `thread-writer-locks/<id>.lock` 的进程：会话自己的 codex，或 `app-server-daemon/daemon.pid` 记录、启动时间核对一致的共享 daemon。宿主的直接子进程里没有当前版本的 `cua_repl`，并且启动早于插件写入（`stale`）或跑的是旧版本（`outdated`）时需要刷新；比插件新的宿主缺服务只报告（`missing`），不自动处理。
+- **刷新的前提**：宿主上的每条线程都必须属于空闲的 Agent Deck 会话，或是已经结束的子代理。逐个核对 Agent Deck 状态、输入框（沿用 CODEX FAST 的 `readCodexFooter`，因为 `send.ComposerDraft` 不认识 `»` 输入框）、输入框上方状态行（运行中、排队输入、待回答的问题、后台任务、附件）、待投递消息，以及每条线程 rollout 末尾 4MB 里最后一个回合是否已结束（`task_complete` / `turn_aborted`）。宿主还服务 Agent Deck 之外的线程（比如 Codex 应用正开着的）时拒绝。
+- **刷新的步骤**：`KillAndWait` 停掉这个宿主上的会话，宿主是 daemon 时用它自己的 `current` 包执行 `codex app-server daemon restart`，再对每个会话 `Restart`（同一线程 resume，新 tmux 名由 `Restart` 定点写回），最后最多等 90 秒确认新宿主下出现当前版本的 `cua_repl`。daemon 重启失败也会把已停掉的会话恢复。
+- **命令**：`agent-deck ai-update computer-use [--json]` 只读列出每个运行中 Codex 会话的状态；`agent-deck ai-update refresh [session...]` 只做就绪检查，加 `--yes` 才执行；`ai-update status` 的文本输出末尾多一行摘要。TUI 的 AI UPDATES 面板显示同样的摘要，`u` 确认后刷新（独立的 storage 句柄，不改列表里的内存会话）。
+- **自动模式**：`lifecycle.auto_refresh_computer_use`，默认关闭。挂在生命周期控制器上，有自己的租约锁。只在某个 Codex home 的插件记录变化后才检查进程；刷新时额外要求没有交互式客户端连着、会话安静 10 分钟以上；执行过的宿主 30 分钟内不重试。
+- **顺带**：从 Codex 进程里创建的会话可能把 `<CODEX_HOME>/packages/app-server-daemon/releases/<版本>/bin/codex` 记成命令。启动、fork 和自定义命令透传时改用同目录的 `current/bin/codex`（存在且可执行时），让客户端跟 daemon 版本一致，旧版本目录被清掉后也能启动。`ai-update status` 接受 Codex 应用自带 CLI 的预发布版本号（如 `0.166.0-alpha.5.1`），只用于显示，安装与 daemon 版本比较仍只认正式版本。
+- **测试**：`internal/aiupdate/computer_use_test.go`；`internal/session/matrix_codex_computer_use_test.go` 用假的进程表覆盖进程内宿主和 daemon 宿主的状态判定、daemon 刷新顺序、拒绝条件（运行中、回合未结束、子代理未结束、输入框忙、外部线程）、只检查不执行、daemon 重启失败后恢复、自动模式的退避和"无变化不扫描"、rollout 末尾判定、输入框真实形状、带包装命令时的 `current` 替换；`cmd/agent-deck/matrix_ai_computer_use_cmd_test.go`；`internal/ui/matrix_ai_updates_test.go` 的确认流程。
+- **已知**：自动休眠的输入框检查仍用 `send.ComposerDraft`，测试里它把 `»`（Vim 编辑）输入框的空闲画面判成忙，本节没有改动它。`TestMatrixAIUpdatesSettingsEntryAndHomeModalRouting` 的设置行号断言在 `matrix.128` 上已经失败，与本节无关。

@@ -26,6 +26,15 @@ type aiUpdateService interface {
 }
 
 func handleAIUpdate(profile string, args []string) {
+	// matrix/hardened: Computer Use freshness reads and restarts sessions, so it
+	// loads the profile's sessions instead of the package manager.
+	computerUse := func() (aiComputerUseService, func(), error) { return newLocalAIComputerUse(profile) }
+	if isAIComputerUseAction(args) {
+		if err := runAIComputerUse(context.Background(), args, os.Stdout, os.Stderr, computerUse); err != nil {
+			os.Exit(1)
+		}
+		return
+	}
 	err := runAIUpdate(context.Background(), args, os.Stdout, os.Stderr, func() (aiUpdateService, error) {
 		cfg, err := session.LoadUserConfig()
 		if err != nil {
@@ -48,9 +57,30 @@ func handleAIUpdate(profile string, args []string) {
 		}
 		return aiupdate.New(binary, home), nil
 	})
+	// matrix/hardened: the text status also summarizes Computer Use, which does
+	// not depend on the daemon package readback that may have failed above.
+	if aiUpdateTextStatus(args) {
+		if svc, closeSvc, loadErr := computerUse(); loadErr == nil {
+			fmt.Fprint(os.Stdout, formatAIComputerUse(svc.Inspect(), true))
+			closeSvc()
+		}
+	}
 	if err != nil {
 		os.Exit(1)
 	}
+}
+
+func aiUpdateTextStatus(args []string) bool {
+	action := "status"
+	for _, arg := range args {
+		switch {
+		case arg == "--json" || arg == "-json" || strings.HasPrefix(arg, "--json=") || arg == "-h" || arg == "--help" || arg == "-help":
+			return false
+		case !strings.HasPrefix(arg, "-"):
+			action = arg
+		}
+	}
+	return action == "status"
 }
 
 func runAIUpdate(ctx context.Context, args []string, stdout, stderr io.Writer, factory func() (aiUpdateService, error)) error {
@@ -59,13 +89,16 @@ func runAIUpdate(ctx context.Context, args []string, stdout, stderr io.Writer, f
 	jsonOutput := fs.Bool("json", false, "Output as JSON")
 	yes := fs.Bool("yes", false, "Confirm restarting the shared backend (may interrupt all connected tasks)")
 	fs.Usage = func() {
-		fmt.Fprintln(stdout, "Usage: agent-deck ai-update [status|check|install|restart] [--json] [--yes]")
+		fmt.Fprintln(stdout, "Usage: agent-deck ai-update [status|check|install|restart|computer-use|refresh] [--json] [--yes]")
 		fmt.Fprintln(stdout, "\nManage Codex on this host in the selected profile's Codex home.")
 		fmt.Fprintln(stdout, "  status   Read CLI, installed backend and running backend versions (no release request)")
 		fmt.Fprintln(stdout, "  check    Check the latest official stable Codex release")
 		fmt.Fprintln(stdout, "  install  Install for the next backend start; keep current tasks running")
 		fmt.Fprintln(stdout, "           Pins the installed backend and disables Codex's native automatic updater.")
 		fmt.Fprintln(stdout, "  restart  Activate the installed backend now; requires --yes and may interrupt tasks")
+		fmt.Fprintln(stdout, "  computer-use  Show which running Codex sessions lack the Codex app's installed Computer Use plugin")
+		fmt.Fprintln(stdout, "  refresh [session...]  Check that stale Codex hosts are idle; with --yes restart them (and a")
+		fmt.Fprintln(stdout, "           shared daemon) and resume their sessions. Set lifecycle.auto_refresh_computer_use to automate.")
 		fmt.Fprintln(stdout, "\nOpening another Codex client reuses a running backend; it does not activate the new package.")
 		fmt.Fprintln(stdout, "Restart only when all users of this shared backend are ready. Old releases are retained.")
 		fmt.Fprintln(stdout, "\nOptions:")
