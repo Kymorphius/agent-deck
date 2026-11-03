@@ -202,3 +202,32 @@ func TestMatrixRecentColumnsWideDeviceKeepsNarrowLocalTitle(t *testing.T) {
 		t.Fatalf("wide device column consumed narrow local title: %q", local)
 	}
 }
+
+func TestMatrixRecentDeviceSpacingDoesNotFollowLongestAlias(t *testing.T) {
+	for _, embedded := range []bool{false, true} {
+		for _, compact := range []bool{false, true} {
+			t.Run(fmt.Sprintf("embedded=%v/compact=%v", embedded, compact), func(t *testing.T) {
+				h := matrixRecentColumnsHome(t, "pro")
+				h.embeddedLayout, h.compactSidebar, h.sidebarDensity = embedded, compact, session.SidebarDensityCompact
+				near := matrixRecentColumnsLine(t, h.renderSessionList(80, 20), "Remote")
+				// A different host may need a wide source column; it must not
+				// insert that padding between this short alias and its title.
+				h.remoteSessions["long-workstation-alias"] = nil
+				wide := matrixRecentColumnsLine(t, h.renderSessionList(80, 20), "Remote")
+				gap := func(line string) int {
+					return cellWidth(line[strings.Index(line, "pro")+len("pro") : strings.Index(line, "Remote")])
+				}
+				if gap(near) != gap(wide) {
+					t.Fatalf("long alias widened the device/title gap: %q -> %q", near, wide)
+				}
+				wantGap := 5 // separator, selection, window slot, status, title gap
+				if embedded {
+					wantGap = 7 // card marker and window slots are two cells each
+				}
+				if got := gap(wide); got != wantGap {
+					t.Fatalf("device/title gap = %d, want %d: %q", got, wantGap, wide)
+				}
+			})
+		}
+	}
+}

@@ -22387,7 +22387,7 @@ func (h *Home) renderSessionList(width, height int) string {
 		} else {
 			h.renderItem(&rowBuf, item, i == h.cursor, i, groupStats, snapshot, itemWidth)
 		}
-		row := matrixRecentDeviceRow(rowBuf.String(), item, deviceW, width-numW, i == h.cursor)
+		row := h.matrixRecentDeviceRow(rowBuf.String(), item, deviceW, width-numW, itemWidth, i == h.cursor)
 		if numW > 0 {
 			b.WriteString(matrixNumberRow(row, lineNums[i], numW, width, i == h.cursor))
 		} else {

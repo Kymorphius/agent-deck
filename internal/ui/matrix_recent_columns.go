@@ -8,6 +8,7 @@ import (
 	"unicode"
 
 	"github.com/asheshgoplani/agent-deck/internal/session"
+	"github.com/charmbracelet/x/ansi"
 )
 
 func matrixRecentDeviceName(name string) string {
@@ -40,7 +41,7 @@ func (h *Home) matrixRecentContentWidth(width int) int {
 	return width - h.matrixRecentDeviceWidth(width)
 }
 
-func matrixRecentDeviceRow(row string, item session.Item, columnWidth, width int, selected bool) string {
+func (h *Home) matrixRecentDeviceRow(row string, item session.Item, columnWidth, width, contentWidth int, selected bool) string {
 	if columnWidth == 0 {
 		return row
 	}
@@ -55,6 +56,12 @@ func matrixRecentDeviceRow(row string, item session.Item, columnWidth, width int
 	if selected {
 		style = SessionStatusSelStyle
 	}
+	// matrix/hardened: the separate device column replaces the old hotkey
+	// gutter. Compact cards already omit it; jump mode still needs its hints.
+	gutterWidth := leftGutterWidth
+	if h.jumpMode || (h.embeddedLayout && contentWidth >= embeddedCardMinWidth && h.compactSidebar && item.Type != session.ItemTypeWindow) {
+		gutterWidth = 0
+	}
 	lines := strings.Split(row, "\n")
 	for i, line := range lines {
 		if i == len(lines)-1 && line == "" {
@@ -62,8 +69,12 @@ func matrixRecentDeviceRow(row string, item session.Item, columnWidth, width int
 		}
 		prefix := strings.Repeat(" ", columnWidth)
 		if i == 0 && label != "" {
-			prefix = style.Render(fitCellWidth(cellTruncate(label, columnWidth-1, "…"), columnWidth-1)) + " "
+			// matrix/hardened: put padding before short device names so even a
+			// fleet with a long alias keeps each device close to its session.
+			clipped := cellTruncate(label, columnWidth-1, "…")
+			prefix = style.Render(strings.Repeat(" ", max(0, columnWidth-1-cellWidth(clipped)))+clipped) + " "
 		}
+		line = ansi.Cut(line, gutterWidth, cellWidth(line))
 		// matrix/hardened: window rows have no internal width budget. Clip
 		// after decoration too so their extra source padding cannot wrap.
 		lines[i] = cellTruncate(prefix+line, width, "")

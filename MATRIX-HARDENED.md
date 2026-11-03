@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.131`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.132`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -66,7 +66,7 @@
 - `internal/session/claude_hooks.go`：`isAgentDeckHookCommand` 的判断规则：先去掉开头的 `VAR=值`，再要求第二个词是 `hook-handler`、程序名的文件名部分是 `agent-deck`。`RemoveClaudeHooks` 会扫描全部事件，并做 UTC 时间戳备份（约 387–414 行）。
 - `cmd/agent-deck/main.go`（约 4845、5070 行）：`agent-deck uninstall` 会移除这些钩子。`uninstall.sh` 第 253 行附近的 jq 过滤用的是同一套规则（正则），写回时用 `cat >` 保持软链接和权限。
 
-**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.131`。
+**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.132`。
 
 **测试**：以 `_hardened_test.go` 结尾的文件、`update_check_disable_test.go`、`update_timer_wiring_test.go` 等是新增或调整过的测试；`testdata/goldens/*` 里的快照已经按加固后的输出更新。
 
@@ -1079,3 +1079,4 @@ snapshots, compatibility, and validation boundaries.
 - **matrix/hardened:** `matrix.131` 的经典数字栏至少预留三位数字，以完整已知会话／分组容量扩展更大位宽；数字到会话的映射、可见行编号、`:N` 和 `nonu` 保持原语义。Recent 在数字之后、选择标记之前加入独立设备列，本机显示“本机”，远端显示配置别名；不再把 `[设备]` 重复加到标题或卡片元数据里。设备列最多十格文字，按终端单元截断，窄栏优先保留会话内容，元数据和窗口子行只保留空列。
 - **matrix/hardened:** 自动密度、行高、点击定位和分页都扣除同一设备列宽度；卡片因此落入单行回退时不会错选下一行。设备列装饰后的窗口长行再次按外宽截断，避免无数字栏时发生换行。字母跳转提示继续使用原有 gutter。
 - **测试**：新增 `matrix_recent_columns_test.go` 覆盖普通／Recent 数字列、105／1001 条库存、滚动、来源列、选中项、跳转提示、中文长设备名与窄栏标题；`matrix_recent_geometry_test.go` 覆盖卡片阈值、鼠标、分页、自动密度和长窗口行。同步数字栏断言及分组树显示快照，保留 Recent 排序／游标和 Pinned 对齐回归。
+- **matrix/hardened:** `matrix.132` 将设备列补白移到名称前面，并移除 Recent 会话行重复的两格 hotkey gutter，让短设备名紧邻选择／状态和标题。compact 卡片原本没有 gutter，保留其标记；跳转提示模式保留原 gutter。数字位置、窗口展开占位和卡片行高不变；新增长别名不再扩大其它设备到会话名的距离。

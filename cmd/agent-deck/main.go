@@ -45,7 +45,7 @@ import (
 )
 
 // matrix/hardened: identifies our hardened build.
-var Version = "1.16.26+matrix.131" // matrix/hardened: stable row numbers and a leading device column in Recent; overridden via -ldflags.
+var Version = "1.16.26+matrix.132" // matrix/hardened: keep Recent device labels close to their session titles; overridden via -ldflags.
 
 // Table column widths for list command output
 const (
