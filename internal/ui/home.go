@@ -23681,6 +23681,11 @@ func (h *Home) renderRemoteSessionItemAtWidth(b *strings.Builder, item session.I
 		if standalone {
 			chevron = "  "
 		}
+		if h.groupViewMode == session.GroupViewRecent && item.Level == 0 {
+			// matrix/hardened: match the compact one-cell local card markers.
+			marker = fitCellWidth(strings.TrimRight(marker, " "), 1)
+			chevron = fitCellWidth(strings.TrimRight(chevron, " "), 1)
+		}
 		// A one-line rail carries the tool marker inline, like local rows.
 		rowLines := h.sidebarRowLines()
 		toolPrefix := ""

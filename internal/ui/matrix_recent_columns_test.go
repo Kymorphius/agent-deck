@@ -221,9 +221,6 @@ func TestMatrixRecentDeviceSpacingDoesNotFollowLongestAlias(t *testing.T) {
 					t.Fatalf("long alias widened the device/title gap: %q -> %q", near, wide)
 				}
 				wantGap := 5 // separator, selection, window slot, status, title gap
-				if embedded {
-					wantGap = 7 // card marker and window slots are two cells each
-				}
 				if got := gap(wide); got != wantGap {
 					t.Fatalf("device/title gap = %d, want %d: %q", got, wantGap, wide)
 				}

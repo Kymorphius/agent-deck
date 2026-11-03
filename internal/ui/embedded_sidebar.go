@@ -311,6 +311,12 @@ func (h *Home) renderEmbeddedSessionItem(
 			chevron = "▸ "
 		}
 	}
+	if h.groupViewMode == session.GroupViewRecent && item.Level == 0 {
+		// matrix/hardened: Recent cards need only one cell per marker, like
+		// classic rows, so the device stays equally close to the title.
+		marker = fitCellWidth(strings.TrimRight(marker, " "), 1)
+		chevron = fitCellWidth(strings.TrimRight(chevron, " "), 1)
+	}
 	rowLines := h.sidebarRowLines()
 
 	// At one line per session the metadata lines are gone, and with them the

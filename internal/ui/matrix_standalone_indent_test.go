@@ -105,10 +105,15 @@ func TestMatrixStandaloneEmbeddedCardsShareColumns(t *testing.T) {
 							if compact {
 								gutter = 0
 							}
+							statusColumn, titleColumn, chevronColumn := gutter+4, gutter+6, gutter+2
+							if mode == session.GroupViewRecent {
+								// matrix/hardened: Recent cards use single-cell markers.
+								statusColumn, titleColumn, chevronColumn = gutter+2, gutter+4, gutter+1
+							}
 							for name, lines := range matrixStandaloneIndentRows(t, h, selected, width) {
 								line := lines[0]
-								matrixAssertStandaloneColumn(t, line, "○", gutter+4)
-								title, titleCol := "LOCAL", gutter+6
+								matrixAssertStandaloneColumn(t, line, "○", statusColumn)
+								title, titleCol := "LOCAL", titleColumn
 								if mode == session.GroupViewPinnedOnly {
 									title = "📌"
 								} else if name == "remote" {
@@ -122,7 +127,7 @@ func TestMatrixStandaloneEmbeddedCardsShareColumns(t *testing.T) {
 									matrixAssertStandaloneColumn(t, line, "▶", gutter)
 								}
 								if name == "local windows" {
-									matrixAssertStandaloneColumn(t, line, "▾", gutter+2)
+									matrixAssertStandaloneColumn(t, line, "▾", chevronColumn)
 								}
 								if density != session.SidebarDensityMinimal {
 									matrixAssertStandaloneColumn(t, lines[len(lines)-1], "╰", gutter+2)
