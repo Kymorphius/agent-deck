@@ -63,7 +63,36 @@ func (h *Home) matrixLineNumberWidth(total int) int {
 	if h.navCount.noNumbers || h.embeddedLayout || total == 0 {
 		return 0
 	}
-	return len(strconv.Itoa(total)) + 1
+	// matrix/hardened: filtering, Recent and visible-row numbering must not
+	// move the number column. Reserve three digits, growing for the complete
+	// known inventory rather than only the current filtered/remaining rows.
+	capacity := len(h.instances)
+	if h.groupTree != nil {
+		capacity += 2 * len(h.groupTree.Groups)
+	}
+	for _, rows := range h.remoteSessions {
+		capacity += len(rows) + 1
+		groups := make(map[string]struct{})
+		for _, row := range rows {
+			path := row.Group
+			for path != "" {
+				groups[path] = struct{}{}
+				at := strings.LastIndex(path, "/")
+				if at < 0 {
+					break
+				}
+				path = path[:at]
+			}
+		}
+		capacity += 2 * len(groups)
+	}
+	// matrix/hardened: empty remote groups and off-screen window rows also
+	// reserve capacity without expanding groups or querying tmux.
+	for _, groups := range h.remoteGroups {
+		capacity += 2 * len(groups)
+	}
+	capacity = max(capacity, len(h.flatItems))
+	return max(3, len(strconv.Itoa(max(total, capacity)))) + 1
 }
 
 // matrixNumberRow prefixes a rendered row with its line number (blank for

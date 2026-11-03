@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.130`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.131`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -66,7 +66,7 @@
 - `internal/session/claude_hooks.go`：`isAgentDeckHookCommand` 的判断规则：先去掉开头的 `VAR=值`，再要求第二个词是 `hook-handler`、程序名的文件名部分是 `agent-deck`。`RemoveClaudeHooks` 会扫描全部事件，并做 UTC 时间戳备份（约 387–414 行）。
 - `cmd/agent-deck/main.go`（约 4845、5070 行）：`agent-deck uninstall` 会移除这些钩子。`uninstall.sh` 第 253 行附近的 jq 过滤用的是同一套规则（正则），写回时用 `cat >` 保持软链接和权限。
 
-**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.130`。
+**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.131`。
 
 **测试**：以 `_hardened_test.go` 结尾的文件、`update_check_disable_test.go`、`update_timer_wiring_test.go` 等是新增或调整过的测试；`testdata/goldens/*` 里的快照已经按加固后的输出更新。
 
@@ -1072,3 +1072,10 @@ snapshots, compatibility, and validation boundaries.
 - **顺带**：从 Codex 进程里创建的会话可能把 `<CODEX_HOME>/packages/app-server-daemon/releases/<版本>/bin/codex` 记成命令。启动、fork 和自定义命令透传时改用同目录的 `current/bin/codex`（存在且可执行时），让客户端跟 daemon 版本一致，旧版本目录被清掉后也能启动。`ai-update status` 接受 Codex 应用自带 CLI 的预发布版本号（如 `0.166.0-alpha.5.1`），只用于显示，安装与 daemon 版本比较仍只认正式版本。
 - **测试**：`internal/aiupdate/computer_use_test.go`；`internal/session/matrix_codex_computer_use_test.go` 用假的进程表覆盖进程内宿主和 daemon 宿主的状态判定、daemon 刷新顺序、拒绝条件（运行中、回合未结束、子代理未结束、输入框忙、外部线程）、只检查不执行、daemon 重启失败后恢复、自动模式的退避和"无变化不扫描"、rollout 末尾判定、输入框真实形状、带包装命令时的 `current` 替换；`cmd/agent-deck/matrix_ai_computer_use_cmd_test.go`；`internal/ui/matrix_ai_updates_test.go` 的确认流程。
 - **已知**：自动休眠的输入框检查仍用 `send.ComposerDraft`，测试里它把 `»`（Vim 编辑）输入框的空闲画面判成忙，本节没有改动它。`TestMatrixAIUpdatesSettingsEntryAndHomeModalRouting` 的设置行号断言在 `matrix.128` 上已经失败，与本节无关。
+
+## 105. 最近列表使用稳定数字栏和前置设备列
+
+- **问题**：数字栏宽度取当前视图剩余行数，普通列表和 Recent 的行数位数不同，或滚动后剩余行数变少，数字就会左右移动；远程设备名混在标题里，也难以纵向辨认来源。
+- **matrix/hardened:** `matrix.131` 的经典数字栏至少预留三位数字，以完整已知会话／分组容量扩展更大位宽；数字到会话的映射、可见行编号、`:N` 和 `nonu` 保持原语义。Recent 在数字之后、选择标记之前加入独立设备列，本机显示“本机”，远端显示配置别名；不再把 `[设备]` 重复加到标题或卡片元数据里。设备列最多十格文字，按终端单元截断，窄栏优先保留会话内容，元数据和窗口子行只保留空列。
+- **matrix/hardened:** 自动密度、行高、点击定位和分页都扣除同一设备列宽度；卡片因此落入单行回退时不会错选下一行。设备列装饰后的窗口长行再次按外宽截断，避免无数字栏时发生换行。字母跳转提示继续使用原有 gutter。
+- **测试**：新增 `matrix_recent_columns_test.go` 覆盖普通／Recent 数字列、105／1001 条库存、滚动、来源列、选中项、跳转提示、中文长设备名与窄栏标题；`matrix_recent_geometry_test.go` 覆盖卡片阈值、鼠标、分页、自动密度和长窗口行。同步数字栏断言及分组树显示快照，保留 Recent 排序／游标和 Pinned 对齐回归。

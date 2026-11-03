@@ -72,7 +72,7 @@ func TestMatrixStandaloneClassicRowsShareColumns(t *testing.T) {
 							if mode == session.GroupViewPinnedOnly {
 								title = "📌"
 							} else if name == "remote" {
-								title = "[dev]"
+								title = "REMOTE" // matrix/hardened: Recent renders the device in the list's source column.
 							}
 							matrixAssertStandaloneColumn(t, line, title, leftGutterWidth+4)
 							if selected {
@@ -112,7 +112,7 @@ func TestMatrixStandaloneEmbeddedCardsShareColumns(t *testing.T) {
 								if mode == session.GroupViewPinnedOnly {
 									title = "📌"
 								} else if name == "remote" {
-									title = "[dev]"
+									title = "REMOTE" // matrix/hardened: the title no longer repeats the source column.
 								}
 								if density == session.SidebarDensityMinimal {
 									titleCol += cellWidth(sidebarToolIcon("codex")) + 1

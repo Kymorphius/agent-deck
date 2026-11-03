@@ -45,7 +45,7 @@ import (
 )
 
 // matrix/hardened: identifies our hardened build.
-var Version = "1.16.26+matrix.130" // matrix/hardened: Codex Computer Use refresh after Codex app updates; overridden via -ldflags.
+var Version = "1.16.26+matrix.131" // matrix/hardened: stable row numbers and a leading device column in Recent; overridden via -ldflags.
 
 // Table column widths for list command output
 const (

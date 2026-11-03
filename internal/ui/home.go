@@ -22346,7 +22346,10 @@ func (h *Home) renderSessionList(width, height int) string {
 	// render numW narrower into rowBuf; the number is prefixed afterwards.
 	lineNums, lineTotal := h.matrixRowNumbers()
 	numW := h.matrixLineNumberWidth(lineTotal)
-	itemWidth := width - numW
+	// matrix/hardened: Recent places device origin before the ordinary row
+	// gutter; render and geometry share the remaining content width.
+	deviceW := h.matrixRecentDeviceWidth(width - numW)
+	itemWidth := width - numW - deviceW
 
 	nextItem := h.viewOffset
 	rowLines := h.sidebarRowLines()
@@ -22384,10 +22387,11 @@ func (h *Home) renderSessionList(width, height int) string {
 		} else {
 			h.renderItem(&rowBuf, item, i == h.cursor, i, groupStats, snapshot, itemWidth)
 		}
+		row := matrixRecentDeviceRow(rowBuf.String(), item, deviceW, width-numW, i == h.cursor)
 		if numW > 0 {
-			b.WriteString(matrixNumberRow(rowBuf.String(), lineNums[i], numW, width, i == h.cursor))
+			b.WriteString(matrixNumberRow(row, lineNums[i], numW, width, i == h.cursor))
 		} else {
-			b.WriteString(rowBuf.String())
+			b.WriteString(row)
 		}
 		usedLines += rowHeight
 		nextItem = i + 1
@@ -23642,9 +23646,7 @@ func (h *Home) renderRemoteSessionItemAtWidth(b *strings.Builder, item session.I
 		return
 	}
 	remoteTitle := matrixRemotePinTitle(*rs, item.RemoteName, h.groupViewMode == session.GroupViewPinnedOnly) // matrix/hardened
-	if h.groupViewMode == session.GroupViewRecent {                                                           // matrix/hardened: unpinned remote rows also need their host.
-		remoteTitle = "[" + item.RemoteName + "] " + remoteTitle
-	}
+	// matrix/hardened: Recent shows the device in its own leading column.
 	if h.embeddedLayout && listWidth >= embeddedCardMinWidth {
 		statusIcon, statusStyle := remoteRowStatusGlyph(rs.Status, rs.Substate, rs.Archived)
 		// Same freshness rule as the classic row below: a failed/cached poll
@@ -23709,7 +23711,7 @@ func (h *Home) renderRemoteSessionItemAtWidth(b *strings.Builder, item session.I
 		if rs.Tool != "" {
 			secondText += " · " + strings.ToLower(rs.Tool)
 		}
-		if !h.compactSidebar {
+		if !h.compactSidebar && h.groupViewMode != session.GroupViewRecent { // matrix/hardened: avoid repeating the device column.
 			secondText += " · " + item.RemoteName
 		}
 		if h.groupViewMode == session.GroupViewRecent { // matrix/hardened: show the visit age in card metadata too.

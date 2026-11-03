@@ -130,7 +130,9 @@ func (h *Home) sidebarAutoRowLines() int {
 		return sidebarDensityRowLines(session.DefaultSidebarDensity)
 	}
 	budget, width := h.sidebarLineBudget()
-	return sidebarAutoRowLinesFor(h.flatItems, width, budget)
+	// matrix/hardened: density must measure the same content width as Recent
+	// renders after reserving its device column.
+	return sidebarAutoRowLinesFor(h.flatItems, h.matrixRecentContentWidth(width), budget)
 }
 
 // sidebarRowLines is how many lines this Home gives one expanded session.
@@ -152,7 +154,9 @@ func (h *Home) sidebarItemRenderHeightAtWidthLines(item session.Item, width, row
 	if !h.embeddedLayout {
 		return 1
 	}
-	return sidebarItemRenderHeightAtWidthDensity(item, width, rowLines)
+	// matrix/hardened: a Recent source column can move a card below the narrow
+	// fallback threshold; click targets and viewport heights must follow it.
+	return sidebarItemRenderHeightAtWidthDensity(item, h.matrixRecentContentWidth(width), rowLines)
 }
 
 func (h *Home) sidebarItemsHeight(items []session.Item, start, end, width int) int {
@@ -167,7 +171,8 @@ func (h *Home) sidebarItemsHeightWithLines(items []session.Item, start, end, wid
 		end = min(len(items), end)
 		return max(0, end-start)
 	}
-	return sidebarItemsHeightDensity(items, start, end, width, rowLines)
+	// matrix/hardened: match the renderer's width after its Recent device column.
+	return sidebarItemsHeightDensity(items, start, end, h.matrixRecentContentWidth(width), rowLines)
 }
 
 // pageStepItems converts a line budget into a number of rows for the vi-style
@@ -189,7 +194,9 @@ func (h *Home) pageStepItems(lines, dir int) int {
 		if dir > 0 {
 			heightIndex = i - dir
 		}
-		height := sidebarItemRenderHeightAtWidthDensity(h.flatItems[heightIndex], sidebarWidth, rowLines)
+		// matrix/hardened: use the same Recent content width as mouse/viewport
+		// measurements instead of bypassing the Home wrapper.
+		height := h.sidebarItemRenderHeightAtWidthLines(h.flatItems[heightIndex], sidebarWidth, rowLines)
 		if height > lines && steps > 0 {
 			break
 		}

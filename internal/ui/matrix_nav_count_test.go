@@ -192,7 +192,7 @@ func TestMatrixLineNumbers_RenderedAndToggle(t *testing.T) {
 
 	list := ansi.Strip(home.renderSessionList(80, 20))
 	first := strings.Split(list, "\n")[0]
-	if !strings.HasPrefix(first, "1 ") {
+	if !strings.HasPrefix(first, "  1 ") { // matrix/hardened: stable three-digit gutter across views.
 		t.Fatalf("first row %q: want line number 1 in front", first)
 	}
 	for i, line := range strings.Split(list, "\n") {
@@ -203,7 +203,7 @@ func TestMatrixLineNumbers_RenderedAndToggle(t *testing.T) {
 
 	h := matrixTypeCmd(t, home, "set nonu")
 	list = ansi.Strip(h.renderSessionList(80, 20))
-	if strings.HasPrefix(strings.Split(list, "\n")[0], "1 ") {
+	if strings.HasPrefix(strings.Split(list, "\n")[0], "  1 ") {
 		t.Fatalf(":set nonu: numbers still drawn: %q", strings.Split(list, "\n")[0])
 	}
 	h = matrixPressKeys(t, h, '3', 'j') // a count reset must not bring numbers back

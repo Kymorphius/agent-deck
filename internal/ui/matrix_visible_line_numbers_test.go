@@ -33,7 +33,7 @@ func TestMatrixVisibleLineNumbers_TopVisibleRowIsOne(t *testing.T) {
 	}
 
 	lines := strings.Split(ansi.Strip(home.renderSessionList(60, 20)), "\n")
-	if len(lines) < 2 || !strings.Contains(lines[0], "above") || !strings.HasPrefix(lines[1], "1 ") || !strings.Contains(lines[1], "a1") {
+	if len(lines) < 2 || !strings.Contains(lines[0], "above") || !strings.HasPrefix(lines[1], "  1 ") || !strings.Contains(lines[1], "a1") { // matrix/hardened: stable number gutter.
 		t.Fatalf("first visible row should be numbered 1 under the \"above\" marker:\n%s", strings.Join(lines, "\n"))
 	}
 }
