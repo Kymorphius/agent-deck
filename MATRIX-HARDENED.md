@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.134`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.135`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -66,7 +66,7 @@
 - `internal/session/claude_hooks.go`：`isAgentDeckHookCommand` 的判断规则：先去掉开头的 `VAR=值`，再要求第二个词是 `hook-handler`、程序名的文件名部分是 `agent-deck`。`RemoveClaudeHooks` 会扫描全部事件，并做 UTC 时间戳备份（约 387–414 行）。
 - `cmd/agent-deck/main.go`（约 4845、5070 行）：`agent-deck uninstall` 会移除这些钩子。`uninstall.sh` 第 253 行附近的 jq 过滤用的是同一套规则（正则），写回时用 `cat >` 保持软链接和权限。
 
-**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.134`。
+**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.135`。
 
 **测试**：以 `_hardened_test.go` 结尾的文件、`update_check_disable_test.go`、`update_timer_wiring_test.go` 等是新增或调整过的测试；`testdata/goldens/*` 里的快照已经按加固后的输出更新。
 
@@ -1094,3 +1094,9 @@ snapshots, compatibility, and validation boundaries.
 - **matrix/hardened:** `matrix.134` 在进程归属检查中区分实际 tmux 服务身份与启动参数中的历史文本。只有核实为目标 socket 的服务进程后才排除其保留参数；不能按字符串含有 `tmux` 或按所有非 Claude 进程一概放行。真实原生进程、正在启动的其它命令和同 ID 终端仍会阻止重复恢复，查询失败或身份不明仍明确拒绝。
 - **matrix/hardened:** 不停止或重启 tmux 服务，不清除归属记录，也不改变普通 Start／Restart。原 ID、主历史、配置目录、并发上限及重复打开复用合同保持不变。
 - **验证**：私有 tmux 服务以带原 ID 的首次启动命令创建，结束原 pane 后保留旁路 pane 和服务；缺失会话应恢复原 ID、再次打开复用进程、旁路 PID 不变。额外验证真实外部同 ID 启动命令继续拒绝、服务身份／进程查询失败拒绝，以及既有 Claude、fork、Codex 和 queued 恢复回归。
+
+## 108. 从会话返回 Recent 后光标跟随重排
+
+- **问题**：进入／退出会话会更新访问时间，但 attach 返回消息之前的远程刷新、Claude 标题同步等普通重建路径只保留旧行号；返回消息再按身份恢复时，捕获到的已经是旧位置上的其它会话。
+- **matrix/hardened:** `matrix.135` 将 Recent 的普通 `rebuildFlatItems()` 统一为先捕获身份、再重建恢复，并同步视口。身份包含本机会话 ID、远程设备＋ID、窗口所属会话＋窗口索引；窗口消失时沿用原有父会话回退。显式切换进入 Recent 继续走原始重建，从最新一行开始；普通分组视图保持原行为。
+- **测试**：`matrix_recent_return_cursor_test.go` 复现访问后重排及远程刷新先于返回消息的次序，验证本机／多远端同 ID、窗口与视口定位；既有 Recent 入口重置、后台刷新、数字列与设备间距回归继续覆盖原语义。修复只改变列表选择，不启动、恢复或重启会话。

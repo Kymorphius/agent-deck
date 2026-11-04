@@ -3456,6 +3456,13 @@ func (h *Home) rebuildFlatItemsPreservingSelectionAt(identity selectedItemIdenti
 
 // rebuildFlatItems rebuilds the flattened view from group tree
 func (h *Home) rebuildFlatItems() {
+	if h.groupViewMode == session.GroupViewRecent {
+		// matrix/hardened: visits can reorder Recent on any rebuild (including
+		// a fleet poll during attach). Follow the selected identity before a
+		// later detach callback can accidentally capture the old row's neighbor.
+		h.rebuildFlatItemsPreservingSelection(h.captureSelectedItemIdentity())
+		return
+	}
 	h.rebuildFlatItemsAt(time.Now())
 }
 

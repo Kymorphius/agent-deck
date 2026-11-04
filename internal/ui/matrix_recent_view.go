@@ -30,7 +30,9 @@ func (h *Home) matrixRebuildAfterViewChange(identity selectedItemIdentity) {
 	}
 	h.cursor, h.viewOffset = 0, 0
 	h.pendingCursorRestore = nil
-	h.rebuildFlatItems()
+	// matrix/hardened: explicit view entry resets to newest; ordinary rebuilds
+	// preserve identity, so bypass that policy for this deliberate navigation.
+	h.rebuildFlatItemsAt(time.Now())
 }
 
 // matrix/hardened: recent means an operator visit, not background output or a
