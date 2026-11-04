@@ -45,7 +45,7 @@ import (
 )
 
 // matrix/hardened: identifies our hardened build.
-var Version = "1.16.26+matrix.133" // matrix/hardened: recover completed Claude forks by their own native identity; overridden via -ldflags.
+var Version = "1.16.26+matrix.134" // matrix/hardened: distinguish retained tmux startup arguments from live Claude owners; overridden via -ldflags.
 
 // Table column widths for list command output
 const (

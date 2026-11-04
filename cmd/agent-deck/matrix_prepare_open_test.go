@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -435,6 +436,156 @@ func TestMatrixPrepareOpenClaudeCapPreservesRecoveryIntent(t *testing.T) {
 
 // matrix/hardened: a second live owner is a refusal, never an excuse to run
 // Restart's duplicate sweep and kill another terminal with the same native ID.
+// matrix/hardened: on Darwin the tmux server keeps the argv of its first
+// new-session, including a long-dead Claude's --resume payload. That server
+// must stay alive for its peer terminal without blocking this conversation.
+func TestMatrixPrepareOpenClaudeIgnoresTmuxServerHistoricalResume(t *testing.T) {
+	f, sid, _ := matrixPrepareClaudeFixture(t)
+	f.target.Status = session.StatusStopped
+	if err := f.storage.Save([]*session.Instance{f.target}); err != nil {
+		t.Fatal(err)
+	}
+	run := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("tmux", append([]string{"-u", "-L", f.socket}, args...)...)
+		cmd.Env = f.env
+		raw, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("tmux %v: %s %v", args, raw, err)
+		}
+		return strings.TrimSpace(string(raw))
+	}
+	seed := f.target.GetTmuxSession().Name
+	// The first server command must contain the native selector. Starting an
+	// unrelated server first would make this test miss the production failure.
+	run("new-session", "-d", "-s", seed, "exec python3 -u '"+f.harness+"' --resume "+sid)
+	f.waitSpawn()
+	serverPID := run("display-message", "-p", "#{pid}")
+	oldPID := run("display-message", "-p", "-t", "="+seed+":0.0", "#{pane_pid}")
+	peer := "agentdeck_prepare-open-history-peer"
+	run("new-session", "-d", "-s", peer, "sleep 600")
+	peerPID := run("display-message", "-p", "-t", "="+peer+":0.0", "#{pane_pid}")
+	// Only this test-owned primary disappears; the peer keeps its server alive.
+	run("kill-session", "-t", "="+seed)
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		cmd := exec.Command("ps", "-p", oldPID, "-o", "command=")
+		cmd.Env = f.env
+		raw, err := cmd.Output()
+		if err != nil || !strings.Contains(string(raw), sid) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("fixture's old native process still lives: %s", raw)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	serverCommand := exec.Command("ps", "-p", serverPID, "-o", "command=")
+	serverCommand.Env = f.env
+	serverArgv, err := serverCommand.CombinedOutput()
+	if err != nil {
+		t.Fatalf("cannot inspect retained tmux server: %s %v", serverArgv, err)
+	}
+	if !strings.Contains(string(serverArgv), "--resume "+sid) {
+		if runtime.GOOS != "darwin" {
+			t.Skipf("%s tmux rewrites server argv; no historical native selector to exercise: %s", runtime.GOOS, serverArgv)
+		}
+		t.Fatalf("Darwin fixture did not retain its first new-session argv: %s", serverArgv)
+	}
+	if got := run("display-message", "-p", "#{pid}"); got != serverPID {
+		t.Fatalf("fixture replaced its tmux server: %s -> %s", serverPID, got)
+	}
+	out, raw, err := matrixRunPrepare(f)
+	if err != nil || out.Disposition != "resumed" {
+		t.Fatalf("tmux history blocked missing-primary recovery: %+v %s %v; server=%s", out, raw, err, serverArgv)
+	}
+	lines := matrixPrepareWaitSpawnCount(t, f, 2)
+	if !strings.Contains(lines[1], "--resume "+sid) || strings.Contains(lines[1], "--session-id") || strings.Contains(lines[1], "--fork-session") {
+		t.Fatalf("recovery did not preserve original native identity: %v", lines)
+	}
+	child := f.stored(f.target.ID)
+	childPID, err := child.GetTmuxSession().PanePID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, raw, err = matrixRunPrepare(f)
+	if err != nil || out.Disposition != "existing" || len(f.spawnLines()) != 2 {
+		t.Fatalf("second open replaced recovered process: %+v %s %v spawns=%v", out, raw, err, f.spawnLines())
+	}
+	client := f.attach()
+	client.waitReady()
+	client.detach()
+	if got := run("display-message", "-p", "-t", "="+peer+":0.0", "#{pane_pid}"); got != peerPID {
+		t.Fatalf("recovery killed or replaced peer pane: %s -> %s", peerPID, got)
+	}
+	if got := run("display-message", "-p", "#{pid}"); got != serverPID {
+		t.Fatalf("recovery replaced tmux server: %s -> %s", serverPID, got)
+	}
+	if afterPID, err := f.stored(f.target.ID).GetTmuxSession().PanePID(); err != nil || afterPID != childPID {
+		t.Fatalf("reopen/attach replaced original child pane: %d -> %d (%v)", childPID, afterPID, err)
+	}
+	if f.stored(f.target.ID).ClaudeSessionID != sid {
+		t.Fatal("recovery changed retained native conversation")
+	}
+}
+
+// matrix/hardened: excluding a verified tmux server must not exclude an
+// actual live native launch whose selector is visible only in process argv.
+func TestMatrixPrepareOpenClaudeLiveProcessOwnerWithoutTmuxMarkerIsPreserved(t *testing.T) {
+	f, sid, _ := matrixPrepareClaudeFixture(t)
+	peer := "agentdeck_prepare-open-process-owner-peer"
+	startPeer := exec.Command("tmux", "-L", f.socket, "new-session", "-d", "-s", peer, "sleep 600")
+	startPeer.Env = f.env
+	if raw, err := startPeer.CombinedOutput(); err != nil {
+		t.Fatalf("cannot start process-owner peer: %s %v", raw, err)
+	}
+	readPeerPID := func() string {
+		t.Helper()
+		cmd := exec.Command("tmux", "-L", f.socket, "display-message", "-p", "-t", "="+peer+":0.0", "#{pane_pid}")
+		cmd.Env = f.env
+		raw, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("process-owner peer disappeared: %s %v", raw, err)
+		}
+		return strings.TrimSpace(string(raw))
+	}
+	peerPID := readPeerPID()
+	owner := exec.Command("python3", "-u", "-c", "import signal; signal.pause()", "--resume", sid)
+	owner.Env = f.env
+	if err := owner.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = owner.Process.Kill() // Only the provider fixture created by this test.
+		_ = owner.Wait()
+	})
+	readOwner := func() string {
+		t.Helper()
+		cmd := exec.Command("ps", "-p", fmt.Sprint(owner.Process.Pid), "-o", "command=")
+		cmd.Env = f.env
+		raw, err := cmd.CombinedOutput()
+		if err != nil || !strings.Contains(string(raw), "--resume "+sid) {
+			t.Fatalf("native owner fixture disappeared: %s %v", raw, err)
+		}
+		return string(raw)
+	}
+	readOwner()
+	_, raw, err := matrixRunPrepare(f)
+	if err == nil || len(f.spawnLines()) != 0 {
+		t.Fatalf("live native process allowed a duplicate resume: %s %v spawns=%v", raw, err, f.spawnLines())
+	}
+	// macOS's python launcher may exec its app bundle between these reads;
+	// the same PID retaining the selector establishes liveness without pinning
+	// the launcher's transient executable spelling.
+	readOwner()
+	if afterPID := readPeerPID(); afterPID != peerPID {
+		t.Fatalf("live owner refusal replaced unrelated peer: %s -> %s", peerPID, afterPID)
+	}
+	if f.stored(f.target.ID).ClaudeSessionID != sid {
+		t.Fatal("live process refusal changed original native identity")
+	}
+}
+
 func TestMatrixPrepareOpenClaudeLiveNativeOwnerIsPreserved(t *testing.T) {
 	f, sid, _ := matrixPrepareClaudeFixture(t)
 	foreign := "agentdeck_prepare-open-claude-owner"

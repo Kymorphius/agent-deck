@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.133`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.134`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -66,7 +66,7 @@
 - `internal/session/claude_hooks.go`：`isAgentDeckHookCommand` 的判断规则：先去掉开头的 `VAR=值`，再要求第二个词是 `hook-handler`、程序名的文件名部分是 `agent-deck`。`RemoveClaudeHooks` 会扫描全部事件，并做 UTC 时间戳备份（约 387–414 行）。
 - `cmd/agent-deck/main.go`（约 4845、5070 行）：`agent-deck uninstall` 会移除这些钩子。`uninstall.sh` 第 253 行附近的 jq 过滤用的是同一套规则（正则），写回时用 `cat >` 保持软链接和权限。
 
-**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.133`。
+**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.134`。
 
 **测试**：以 `_hardened_test.go` 结尾的文件、`update_check_disable_test.go`、`update_timer_wiring_test.go` 等是新增或调整过的测试；`testdata/goldens/*` 里的快照已经按加固后的输出更新。
 
@@ -1087,3 +1087,10 @@ snapshots, compatibility, and validation boundaries.
 - **matrix/hardened:** `matrix.133` 对本程序生成的已完成 fork 启动脚本做窄范围识别，核对工作目录、导出作用域、完整 child ID、不同的完整 parent ID 以及允许的启动参数。只有 child ID 与已登记、已验证身份一致且 child 主历史有效时才允许恢复；旧脚本不执行，恢复命令只使用当前 child ID，不带 parent ID、`--session-id` 或 `--fork-session`。
 - **matrix/hardened:** 继续拒绝任意自定义 shell、额外命令、选择器篡改和缺失历史；未完成的首次 fork 仍由原生命周期处理。冻结计划包含历史命令身份，保留原有配置、主历史、进程归属、并发上限、scratch 隔离和存活终端复用检查，不改变 fork 创建及普通 Start／Restart 合同。
 - **验证**：隔离测试使用真实 fork builder 生成历史脚本，覆盖完成后按自身 ID 恢复、重命名、重复与并发打开、真实 PTY 连接及父终端保留；篡改 child／parent、目录、导出、选择器和附加 shell 的脚本拒绝启动。目标设备需安装新二进制，已有 AI 会话无需重启。
+
+## 107. 不将 tmux 服务保留的启动参数误判为 Claude 进程
+
+- **问题**：tmux 服务进程可能长久保留首次 `new-session` 的完整命令行。即使原 Claude 和 pane 已退出，服务参数里仍含该会话的 `--resume`。严格恢复仅凭命令行包含原 ID 与选择器判定原生进程存活，误阻止了这类已停止会话。
+- **matrix/hardened:** `matrix.134` 在进程归属检查中区分实际 tmux 服务身份与启动参数中的历史文本。只有核实为目标 socket 的服务进程后才排除其保留参数；不能按字符串含有 `tmux` 或按所有非 Claude 进程一概放行。真实原生进程、正在启动的其它命令和同 ID 终端仍会阻止重复恢复，查询失败或身份不明仍明确拒绝。
+- **matrix/hardened:** 不停止或重启 tmux 服务，不清除归属记录，也不改变普通 Start／Restart。原 ID、主历史、配置目录、并发上限及重复打开复用合同保持不变。
+- **验证**：私有 tmux 服务以带原 ID 的首次启动命令创建，结束原 pane 后保留旁路 pane 和服务；缺失会话应恢复原 ID、再次打开复用进程、旁路 PID 不变。额外验证真实外部同 ID 启动命令继续拒绝、服务身份／进程查询失败拒绝，以及既有 Claude、fork、Codex 和 queued 恢复回归。

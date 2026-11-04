@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -374,14 +375,30 @@ func guardExactClaudeNativeOwner(inst *Instance, p *exactClaudeResumePlan) error
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "ps", "-axo", "command=").Output()
+	out, err := exec.CommandContext(ctx, "ps", "-axo", "pid=,command=").Output()
 	if err != nil {
 		return fmt.Errorf("cannot establish original Claude process absence: %w", err)
 	}
-	for _, line := range strings.Split(string(out), "\n") {
-		if strings.Contains(line, p.sid) && (strings.Contains(line, "--resume") || strings.Contains(line, "--session-id") || strings.Contains(line, " -r ")) {
-			return fmt.Errorf("original Claude conversation still has a native process; nothing was started or signalled")
-		}
+	// matrix/hardened: a tmux server can retain its first new-session argv
+	// after that pane exits. Only the socket-confirmed server is exempt;
+	// real launchers and same-ID Claude processes must continue to block.
+	if err := exactClaudeCheckNativeArgvOwners(out, p.sid, func(pid int) (bool, error) {
+		return exactClaudeConfirmTmuxServer(pid, func() (int, error) {
+			data, err := tmux.OutputBounded(inst.tmuxSession.SocketName, "display-message", "-p", "#{pid}")
+			if err != nil {
+				return 0, err
+			}
+			serverPID, err := strconv.Atoi(strings.TrimSpace(string(data)))
+			if err != nil || serverPID <= 1 {
+				return 0, fmt.Errorf("invalid tmux server process identity")
+			}
+			return serverPID, nil
+		}, func(pid int) (string, error) {
+			data, err := exec.CommandContext(ctx, "ps", "-p", strconv.Itoa(pid), "-o", "comm=").Output()
+			return strings.TrimSpace(string(data)), err
+		})
+	}); err != nil {
+		return err
 	}
 	parents, err := adoptProcessParents()
 	if err != nil {
@@ -413,6 +430,69 @@ func guardExactClaudeNativeOwner(inst *Instance, p *exactClaudeResumePlan) error
 		}
 	}
 	return nil
+}
+
+// matrix/hardened: argv text alone is not process ownership. In particular,
+// tmux's daemon argv describes the first pane, not a currently running Claude.
+// Every matching non-server process remains a conservative duplicate refusal.
+func exactClaudeCheckNativeArgvOwners(table []byte, sid string, isServer func(int) (bool, error)) error {
+	for _, line := range strings.Split(string(table), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		// Unrelated ps rows (including kernel/empty-command rows) provide no
+		// conversation evidence and need no PID or server-role exception.
+		if !strings.Contains(line, sid) || !(strings.Contains(line, "--resume") || strings.Contains(line, "--session-id") || strings.Contains(line, " -r ")) {
+			continue
+		}
+		separator := strings.IndexAny(line, " \t")
+		if separator < 1 {
+			return fmt.Errorf("cannot establish original Claude process absence: unreadable process table")
+		}
+		pid, err := strconv.Atoi(line[:separator])
+		if err != nil || pid <= 0 {
+			return fmt.Errorf("cannot establish original Claude process absence: invalid process ID")
+		}
+		server, err := isServer(pid)
+		if err != nil {
+			return fmt.Errorf("cannot establish original Claude process absence: %w", err)
+		}
+		if !server {
+			return fmt.Errorf("original Claude conversation still has a native process; nothing was started or signalled")
+		}
+	}
+	return nil
+}
+
+// matrix/hardened: never exempt a tmux-looking launcher by its name. The
+// candidate must be the live server behind this exact socket, independently
+// identified as tmux, and still the same server after the process-name read.
+func exactClaudeConfirmTmuxServer(pid int, serverPID func() (int, error), processName func(int) (string, error)) (bool, error) {
+	before, err := serverPID()
+	if err != nil {
+		return false, err
+	}
+	if before != pid {
+		return false, nil
+	}
+	comm, err := processName(pid)
+	if err != nil {
+		return false, err
+	}
+	switch filepath.Base(strings.TrimSpace(comm)) {
+	case "tmux", "tmux: server":
+	default:
+		return false, fmt.Errorf("tmux server executable identity is unreadable or changed")
+	}
+	after, err := serverPID()
+	if err != nil {
+		return false, err
+	}
+	if after != before {
+		return false, fmt.Errorf("tmux server process identity changed while checking native ownership")
+	}
+	return true, nil
 }
 
 // matrix/hardened: only native absent-server diagnostics prove an empty
