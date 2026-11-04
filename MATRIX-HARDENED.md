@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.138`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.139`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -66,7 +66,7 @@
 - `internal/session/claude_hooks.go`：`isAgentDeckHookCommand` 的判断规则：先去掉开头的 `VAR=值`，再要求第二个词是 `hook-handler`、程序名的文件名部分是 `agent-deck`。`RemoveClaudeHooks` 会扫描全部事件，并做 UTC 时间戳备份（约 387–414 行）。
 - `cmd/agent-deck/main.go`（约 4845、5070 行）：`agent-deck uninstall` 会移除这些钩子。`uninstall.sh` 第 253 行附近的 jq 过滤用的是同一套规则（正则），写回时用 `cat >` 保持软链接和权限。
 
-**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.138`。
+**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.139`。
 
 **测试**：以 `_hardened_test.go` 结尾的文件、`update_check_disable_test.go`、`update_timer_wiring_test.go` 等是新增或调整过的测试；`testdata/goldens/*` 里的快照已经按加固后的输出更新。
 
@@ -1129,3 +1129,13 @@ snapshots, compatibility, and validation boundaries.
 - **实测**（本机 184 个会话、真实 monitor，同一时段各跑 30 秒空闲 remote-agent）：`.136` 的 tmux 调用 530 次（246 次 `capture-pane`、97 次 `show-environment`、96 次 `has-session` 等），`.138` 为 61 次，每轮只剩 `list-sessions`、`list-windows`、`list-panes`、`list-clients` 各一次，没有截屏和 `has-session`；CPU 约 7.1% → 3.7%。剩余开销约一半是每轮重读会话库（JSON 解析、逐个会话定位配置文件）。`list --json --stats` 轮询由进程内回答（status_pass 约 50–70 ms，tmux 调用 1–4 次）。和 CLI 输出逐行对比，184 行中只有 2 行不同：monitor 判为 error，CLI 判为 stopped。远程看到的与本机 TUI 一致。
 - **测试**：`matrix_remote_agent_monitor_test.go`（monitor 结论用于对应行、其余行走本地检查、轮询回答与推送一致并带统计行；修改水位挡住旧结论；不可达、过期、profile 不符、带错误时回退且 30 秒内不重试、只记一次；轮询参数识别）；`recall_session_links_test.go` 的 `TestUpdateHookStatus_FreshLoadKeepsCurrentLinkUnwritten`（重新加载后确认同一链接不改 `last_seen`，被降级的链接仍会恢复；修复前失败）；`list_status_test.go` 补充 stopped 行写入缺席记忆。
 - **部署**：同第 109 节，各机装新版后在旧 remote-agent 没有子进程时结束它们，连接方自动重连。monitor 需要已在运行（本机 TUI 或 Web 会按需启动它）；没有 monitor 的机器保持第 109 节的行为。
+
+## 112. remote-agent 复用会话库解析结果
+
+- **问题**：第 111 节之后，空闲 remote-agent 仍约 4%。TUI 每 2 秒写一次心跳，数据库一变探测就跑；每轮都把 184 个会话从头解析一遍（tool_data 的 JSON、逐个会话定位配置文件、编译状态匹配规则），这部分占了剩余 CPU 的大头。每轮还要为已消失的会话预热 tmux 缓存（3 次 tmux 调用）、重读钩子记录。连接方每次轮询的 `group list --json` 也各起一个 CLI 子进程。
+- **matrix/hardened:** `matrix.139` 起 remote-agent 像 headless Web 的目录复用（第 43 节）那样，每一代注册表只解析一次：SQLite `data_version`、连接 epoch、修改水位和用户配置文件都没变时直接复用；只有别的表变了（心跳、元数据）时，读回 instances/groups 原始行比较，一致也复用。任何一项不同或读不出来都重新解析，原始行先于解析读取，所以中间的写入只会让下一轮重新解析，不会钉住旧数据。
+- **matrix/hardened:** 复用的会话对象像 TUI 一样保留已套用的 monitor 结论；当前快照里该行暂时没有可用结论（探测进行中、已消失且不再重探）时沿用上一份。monitor 不可用、回退本地检查时，丢弃这一代重新解析一次，保证本地检查从会话库里的状态开始，和原来每轮重新加载的结果一致。已消失（列表已证明不存在）或从未启动的行不再预热 tmux 缓存，钩子记录每代只读一次；只有“存在但没有 monitor 结论”的行才走完整的 CLI 预热。完整列表里出现的会话会清掉此前的缺席记忆（`NotePresentFromListing`），所以复用的行在注册表之外被重新拉起时下一轮就能看到，不必等退避过期。
+- **matrix/hardened:** 连接方的 `group list --json` 轮询在能用 monitor 时由进程内回答，内容就是推送里的分组结果；不可用时照旧启动 CLI。
+- **实测**（本机 184 个会话、真实 monitor，空闲 remote-agent 各 60 秒）：`.138` CPU 2.48 s（4.1%）、tmux 调用 113 次；`.139` 0.87 s（1.45%）、57 次，每轮只剩 `list-sessions` 和 `list-clients` 各一次。两版的 `list --json` 应答逐行一致。进程内的 `group list --json` 应答与原来子进程算的有 1–2 个会话计数不同（error 与 stopped 的判断差异），与推送里本来就带的分组结果一致。
+- **测试**：`matrix_remote_agent_monitor_test.go` 新增：未变时复用、无关表提交只比较不重解析、会话行修改和配置文件变化重新解析；monitor 消失后旧结论不再列出、恢复后重新套用（回退时多一次解析）；分组轮询与推送一致、无 monitor 时交给 CLI、参数识别。
+- **部署**：同第 109 节。

@@ -11,7 +11,9 @@ import "github.com/asheshgoplani/agent-deck/internal/tmux"
 // noted on the tmux session first, so the status pass reaches the same verdict
 // without one has-session fork per dead row. Fresh loads (`list --json`, the
 // remote-agent probe) otherwise forked ~150 times per pass on a host with many
-// error rows, every few seconds per connected remote.
+// error rows, every few seconds per connected remote. A row present in the
+// listing clears any earlier absence verdict, so a lister that keeps rows
+// across passes sees a revived pane at once.
 func CLIStatusCandidates(instances []*Instance) ([]*Instance, map[*Instance]bool) {
 	refresh := make([]*Instance, 0, len(instances))
 	cached := make(map[*Instance]bool)
@@ -40,6 +42,8 @@ func CLIStatusCandidates(instances []*Instance) ([]*Instance, map[*Instance]bool
 				if names := listing(sess.SocketName); names != nil {
 					if _, exists := names[sess.Name]; !exists {
 						sess.NoteAbsentFromListing()
+					} else {
+						sess.NotePresentFromListing()
 					}
 				}
 			}
@@ -60,6 +64,7 @@ func CLIStatusCandidates(instances []*Instance) ([]*Instance, map[*Instance]bool
 			cached[inst] = true
 			continue
 		}
+		sess.NotePresentFromListing()
 		refresh = append(refresh, inst)
 	}
 	return refresh, cached

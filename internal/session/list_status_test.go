@@ -81,4 +81,14 @@ func TestCLIStatusCandidatesNotesListingAbsence(t *testing.T) {
 	if got := hasSession() - before; got != 0 {
 		t.Fatalf("absent rows forked has-session %d times", got)
 	}
+	// A row kept across listings: a later listing that contains its pane
+	// voids the earlier absence verdict at once.
+	live.tmuxSession.NoteAbsentFromListing()
+	if !live.tmuxSession.KnownAbsent() {
+		t.Fatal("fixture: absence not noted")
+	}
+	CLIStatusCandidates([]*Instance{live})
+	if live.tmuxSession.KnownAbsent() {
+		t.Fatal("a listing containing the pane kept the absence verdict")
+	}
 }

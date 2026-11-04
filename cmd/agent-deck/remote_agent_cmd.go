@@ -270,11 +270,16 @@ func handleRemoteAgent(profile string, args []string) {
 	}
 	defer lister.close()
 	runner := func(ctx context.Context, reqArgs []string) (string, string, int) {
-		// matrix/hardened: the channel's own list poll is answered from the
-		// monitor's verdicts when it can be; otherwise the CLI runs as before.
+		// matrix/hardened: the channel's own list and group polls are answered
+		// from the monitor's verdicts when it can be; otherwise the CLI runs.
 		if withStats, ok := remoteAgentListPoll(reqArgs); ok {
 			if out, errOut, ok := lister.answerList(withStats); ok {
 				return out, errOut, 0
+			}
+		}
+		if remoteAgentGroupPoll(reqArgs) {
+			if out, ok := lister.answerGroups(); ok {
+				return out, "", 0
 			}
 		}
 		full := append([]string{"-p", profile}, reqArgs...)

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/asheshgoplani/agent-deck/internal/session"
+	"github.com/asheshgoplani/agent-deck/internal/statedb"
 	"github.com/asheshgoplani/agent-deck/internal/tmux"
 )
 
@@ -45,6 +46,13 @@ type remoteAgentLister struct {
 	retryAt  time.Time
 	degraded bool
 	logf     func(format string, args ...any)
+	// observer and cache reuse one hydration per registry generation (see
+	// matrix_remote_agent_registry.go); a nil observer hydrates every time.
+	observer     *statedb.RegistryObserver
+	cache        *remoteAgentRegistry
+	loadRegistry func() ([]*session.Instance, []*session.GroupData, error)
+	// registryLoads and registryHits count hydrations and reuses (tests).
+	registryLoads, registryHits int
 }
 
 func newRemoteAgentLister(profile string, runtime session.RuntimeObservationSource) (*remoteAgentLister, error) {
@@ -52,32 +60,42 @@ func newRemoteAgentLister(profile string, runtime session.RuntimeObservationSour
 	if err != nil {
 		return nil, err
 	}
-	return &remoteAgentLister{
-		storage: storage,
-		runtime: runtime,
-		now:     time.Now,
-		logf:    func(format string, args ...any) { fmt.Fprintf(os.Stderr, format, args...) },
-	}, nil
+	l := &remoteAgentLister{
+		storage:      storage,
+		runtime:      runtime,
+		now:          time.Now,
+		logf:         func(format string, args ...any) { fmt.Fprintf(os.Stderr, format, args...) },
+		loadRegistry: storage.LoadWithGroups,
+	}
+	if db := storage.GetDB(); db != nil {
+		if observer, err := db.NewRegistryObserver(); err == nil {
+			l.observer = observer
+		}
+	}
+	return l, nil
 }
 
-func (l *remoteAgentLister) close() { _ = l.storage.Close() }
+func (l *remoteAgentLister) close() {
+	if l.observer != nil {
+		_ = l.observer.Close()
+	}
+	_ = l.storage.Close()
+}
 
 // probe builds the change feed's `list --json` and `group list --json`
 // bodies. Without usable monitor verdicts it runs the CLI's status pass.
 func (l *remoteAgentLister) probe() (string, string, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	snapshot := l.observed()
-	instances, groups, err := l.storage.LoadWithGroups()
+	reg, cached, err := l.prepare(l.observed())
 	if err != nil {
 		return "", "", err
 	}
-	cached := l.resolve(instances, snapshot)
-	list, err := buildListJSON(l.storage.Profile(), instances, cached)
+	list, err := buildListJSON(l.storage.Profile(), reg.instances, cached)
 	if err != nil {
 		return "", "", err
 	}
-	groupJSON, err := buildGroupListJSON(session.NewGroupTreeWithGroups(instances, groups))
+	groupJSON, err := buildGroupListJSON(session.NewGroupTreeWithGroups(reg.instances, reg.groups))
 	if err != nil {
 		return "", "", err
 	}
@@ -95,16 +113,15 @@ func (l *remoteAgentLister) answerList(withStats bool) (stdout, stderr string, o
 	if snapshot == nil {
 		return "", "", false
 	}
-	instances, _, err := l.storage.LoadWithGroups()
+	reg, cached, err := l.prepare(snapshot)
 	if err != nil {
 		return "", "", false
 	}
 	// The rows `list --json` prints: archived cross-harness sources hidden.
-	instances = defaultListInstances(instances)
+	instances := defaultListInstances(reg.instances)
 	if len(instances) == 0 {
 		return "[]\n", "", true
 	}
-	cached := l.resolve(instances, snapshot)
 	list, err := buildListJSON(l.storage.Profile(), instances, cached)
 	if err != nil {
 		return "", "", false
@@ -116,6 +133,51 @@ func (l *remoteAgentLister) answerList(withStats bool) (stdout, stderr string, o
 		}
 	}
 	return string(list), stderr, true
+}
+
+// answerGroups answers the channel's `group list --json` poll with the body
+// the change feed pushes, under the same monitor condition as answerList.
+func (l *remoteAgentLister) answerGroups() (string, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	snapshot := l.observed()
+	if snapshot == nil {
+		return "", false
+	}
+	reg, _, err := l.prepare(snapshot)
+	if err != nil {
+		return "", false
+	}
+	groupJSON, err := buildGroupListJSON(session.NewGroupTreeWithGroups(reg.instances, reg.groups))
+	if err != nil {
+		return "", false
+	}
+	return string(groupJSON), true
+}
+
+// prepare returns the current hydration with every row's status settled and
+// the cached map for buildListJSON. Caller holds l.mu.
+func (l *remoteAgentLister) prepare(snapshot *session.RuntimeProfileSnapshot) (*remoteAgentRegistry, map[*session.Instance]bool, error) {
+	var fence time.Time
+	if snapshot != nil {
+		var err error
+		if fence, err = l.storage.GetUpdatedAt(); err != nil {
+			snapshot = nil
+		}
+	}
+	reg, err := l.registry()
+	if err != nil {
+		return nil, nil, err
+	}
+	if snapshot == nil && len(reg.observed) > 0 {
+		// Applied verdicts also mirror into public fields such as Status; only
+		// a fresh hydration gives the local pass the stored state it expects.
+		l.cache = nil
+		if reg, err = l.registry(); err != nil {
+			return nil, nil, err
+		}
+	}
+	return reg, l.resolve(reg, snapshot, fence), nil
 }
 
 // observed returns the monitor's latest complete publication, or nil when it
@@ -147,26 +209,43 @@ func (l *remoteAgentLister) observed() *session.RuntimeProfileSnapshot {
 }
 
 // resolve settles every row's status for buildListJSON and returns its
-// cached map. Rows with a current monitor verdict become consumers; the rest
-// (all of them without a snapshot, or when the registry's edit watermark
-// cannot be read) take the CLI's status pass. Caller holds l.mu.
-func (l *remoteAgentLister) resolve(instances []*session.Instance, snapshot *session.RuntimeProfileSnapshot) map[*session.Instance]bool {
-	pending := instances
+// cached map. Rows with a monitor verdict are consumers; the rest take the
+// CLI's status pass, as every row does without a snapshot (prepare then hands
+// over a hydration holding no verdicts). A kept row the current publication
+// cannot update (a probe in flight, a gone pane the monitor no longer
+// re-probes) keeps its last verdict, as in the TUI. Caller holds l.mu.
+func (l *remoteAgentLister) resolve(reg *remoteAgentRegistry, snapshot *session.RuntimeProfileSnapshot, fence time.Time) map[*session.Instance]bool {
+	pending := reg.instances
 	if snapshot != nil {
-		if fence, err := l.storage.GetUpdatedAt(); err == nil {
-			pending = applyRemoteAgentObservations(snapshot, l.storage.Profile(), instances, fence)
-		}
+		pending = applyRemoteAgentObservations(snapshot, l.storage.Profile(), reg.instances, fence, reg.observed)
 	}
 	refresh, cached := session.CLIStatusCandidates(pending)
-	session.RefreshInstancesForCLIStatus(refresh)
+	live := make([]*session.Instance, 0, len(refresh))
+	for _, inst := range refresh {
+		// The listing just proved these panes absent (or there never was
+		// one): their verdict needs only their hook evidence, not the tmux
+		// title caches the CLI warms for live panes.
+		if sess := inst.GetTmuxSession(); sess == nil || sess.KnownAbsent() {
+			if !reg.hooksLoaded[inst] {
+				if session.HookStatusTool(inst.Tool) {
+					session.ReloadHookStatus(inst)
+				}
+				reg.hooksLoaded[inst] = true
+			}
+			continue
+		}
+		live = append(live, inst)
+	}
+	session.RefreshInstancesForCLIStatus(live)
 	return cached
 }
 
-// applyRemoteAgentObservations applies each row's verdict and returns the
-// instances left without one: absent from the publication, observed before
-// the registry's last edit, or refused by ApplyRuntimeSnapshot (pending,
-// stale or a different launch). Those are untouched and still probe locally.
-func applyRemoteAgentObservations(snapshot *session.RuntimeProfileSnapshot, profile string, instances []*session.Instance, fence time.Time) []*session.Instance {
+// applyRemoteAgentObservations applies each row's current verdict, records it
+// in observed, and returns the rows that hold none: absent from the
+// publication, observed before the registry's last edit, or refused by
+// ApplyRuntimeSnapshot (pending, stale or a different launch) without an
+// earlier verdict. Those still probe locally.
+func applyRemoteAgentObservations(snapshot *session.RuntimeProfileSnapshot, profile string, instances []*session.Instance, fence time.Time, observed map[*session.Instance]bool) []*session.Instance {
 	rows := make(map[string]session.RuntimeSessionSnapshot, len(snapshot.Sessions))
 	for _, row := range snapshot.Sessions {
 		rows[row.ID] = row
@@ -176,8 +255,11 @@ func applyRemoteAgentObservations(snapshot *session.RuntimeProfileSnapshot, prof
 		if inst == nil {
 			continue
 		}
-		row, ok := rows[inst.ID]
-		if !ok || row.ObservedAt.Before(fence) || !inst.ApplyRuntimeSnapshot(profile, row) {
+		if row, ok := rows[inst.ID]; ok && !row.ObservedAt.Before(fence) && inst.ApplyRuntimeSnapshot(profile, row) {
+			observed[inst] = true
+			continue
+		}
+		if !observed[inst] {
 			pending = append(pending, inst)
 		}
 	}
@@ -218,4 +300,10 @@ func remoteAgentListPoll(args []string) (withStats, ok bool) {
 		return true, true
 	}
 	return false, false
+}
+
+// remoteAgentGroupPoll recognizes the exact `group list --json` request the
+// controller sends with each poll.
+func remoteAgentGroupPoll(args []string) bool {
+	return len(args) == 3 && args[0] == "group" && args[1] == "list" && args[2] == "--json"
 }

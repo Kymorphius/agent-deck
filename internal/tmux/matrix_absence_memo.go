@@ -54,6 +54,16 @@ func (s *Session) NoteAbsentFromListing() {
 	}
 }
 
+// NotePresentFromListing is the positive counterpart: a complete listing of
+// the session's own socket contains it, so any earlier absence verdict is
+// void. matrix/hardened: long-lived listers reuse rows across listings, and a
+// pane revived outside the registry must not wait out the absence backoff.
+func (s *Session) NotePresentFromListing() {
+	if s != nil {
+		s.matrixNotePresent()
+	}
+}
+
 func (s *Session) matrixNotePresent() {
 	s.absentMu.Lock()
 	s.absent = matrixAbsentMemo{}

@@ -45,7 +45,7 @@ import (
 )
 
 // matrix/hardened: identifies our hardened build.
-var Version = "1.16.26+matrix.138" // matrix/hardened: remote-agent listings reuse the host monitor and fresh loads keep current session links unwritten; overridden via -ldflags.
+var Version = "1.16.26+matrix.139" // matrix/hardened: remote-agent reuses one registry hydration per generation and answers group polls in-process; overridden via -ldflags.
 
 // Table column widths for list command output
 const (

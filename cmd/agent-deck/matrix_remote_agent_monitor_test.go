@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -240,6 +241,157 @@ func TestRemoteAgentListPoll(t *testing.T) {
 		withStats, ok := remoteAgentListPoll(tc.args)
 		if withStats != tc.withStats || ok != tc.isIt {
 			t.Errorf("%v: (%v, %v), want (%v, %v)", tc.args, withStats, ok, tc.withStats, tc.isIt)
+		}
+	}
+}
+
+func remoteAgentOpenFixtureDB(t *testing.T) *session.Storage {
+	t.Helper()
+	storage, err := session.NewStorageWithProfile(remoteAgentMonitorTestProfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = storage.Close() })
+	return storage
+}
+
+// One hydration serves every probe until the registry rows, its edit
+// watermark or the user config change; commits to other tables (the TUI
+// heartbeat, metadata) only cost a raw-row comparison.
+func TestRemoteAgentLister_ReusesHydrationUntilRegistryChanges(t *testing.T) {
+	remoteAgentMonitorFixture(t)
+	lister, err := newRemoteAgentLister(remoteAgentMonitorTestProfile, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lister.close()
+	if lister.observer == nil {
+		t.Fatal("no registry observer")
+	}
+	probe := func() string {
+		t.Helper()
+		list, _, err := lister.probe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return list
+	}
+	first := probe()
+	if second := probe(); second != first || lister.registryLoads != 1 || lister.registryHits != 1 {
+		t.Fatalf("unchanged registry: loads=%d hits=%d same=%v", lister.registryLoads, lister.registryHits, second == first)
+	}
+	peer := remoteAgentOpenFixtureDB(t)
+	if err := peer.GetDB().SetMeta("remote_agent_test_noise", time.Now().String()); err != nil {
+		t.Fatal(err)
+	}
+	if got := probe(); got != first || lister.registryLoads != 1 || lister.registryHits != 2 {
+		t.Fatalf("unrelated commit rehydrated: loads=%d hits=%d", lister.registryLoads, lister.registryHits)
+	}
+	if applied, err := peer.GetDB().UpdateTitleIfUnlocked("mon-observed", "renamed-elsewhere"); err != nil || !applied {
+		t.Fatalf("rename: %v %v", applied, err)
+	}
+	if got := probe(); !strings.Contains(got, "renamed-elsewhere") || lister.registryLoads != 2 {
+		t.Fatalf("registry edit not picked up: loads=%d\n%s", lister.registryLoads, got)
+	}
+	configPath, err := session.GetUserConfigPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, []byte("# remote-agent registry reuse test\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	probe()
+	if lister.registryLoads != 3 {
+		t.Fatalf("config change did not rehydrate: loads=%d", lister.registryLoads)
+	}
+}
+
+// Kept instances hold monitor verdicts between probes; when the monitor goes
+// away they are dropped, so the local pass really samples every row again.
+func TestRemoteAgentLister_FallbackDropsKeptVerdicts(t *testing.T) {
+	ids := remoteAgentMonitorFixture(t)
+	up := true
+	now := time.Now()
+	fake := &fakeRemoteAgentRuntime{snapshot: func() (*session.RuntimeProfileSnapshot, error) {
+		if !up {
+			return nil, errors.New("monitor stopped")
+		}
+		return remoteAgentMonitorSnapshot(now, session.RuntimeSessionSnapshot{
+			ID: "mon-observed", Identity: ids["mon-observed"], Status: session.StatusRunning,
+		}), nil
+	}}
+	lister, err := newRemoteAgentLister(remoteAgentMonitorTestProfile, fake)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lister.close()
+	lister.logf = func(string, ...any) {}
+	lister.now = func() time.Time { return now }
+	status := func() string {
+		t.Helper()
+		list, _, err := lister.probe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return remoteAgentListed(t, list)["mon-observed"].Status
+	}
+	if got := status(); got != "running" {
+		t.Fatalf("with monitor: %q", got)
+	}
+	up = false
+	now = now.Add(remoteAgentMonitorRetry + time.Second)
+	if got := status(); got != "idle" {
+		t.Fatalf("monitor gone, kept verdict still listed: %q", got)
+	}
+	up = true
+	now = now.Add(remoteAgentMonitorRetry + time.Second)
+	if got := status(); got != "running" {
+		t.Fatalf("monitor back: %q", got)
+	}
+	// One hydration, plus the clean one taken when the monitor went away.
+	if lister.registryLoads != 2 {
+		t.Fatalf("registry hydrated %d times, want 2", lister.registryLoads)
+	}
+}
+
+// The group poll returns the body the change feed pushes, and only with the
+// monitor (otherwise the CLI runs).
+func TestRemoteAgentLister_AnswersGroupPoll(t *testing.T) {
+	ids := remoteAgentMonitorFixture(t)
+	up := true
+	fake := &fakeRemoteAgentRuntime{snapshot: func() (*session.RuntimeProfileSnapshot, error) {
+		if !up {
+			return nil, errors.New("monitor stopped")
+		}
+		return remoteAgentMonitorSnapshot(time.Now(), session.RuntimeSessionSnapshot{
+			ID: "mon-observed", Identity: ids["mon-observed"], Status: session.StatusRunning,
+		}), nil
+	}}
+	lister, err := newRemoteAgentLister(remoteAgentMonitorTestProfile, fake)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lister.close()
+	lister.logf = func(string, ...any) {}
+	_, pushed, err := lister.probe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok := lister.answerGroups()
+	if !ok || got != pushed {
+		t.Fatalf("group poll ok=%v differs from the pushed body:\n%s\n---\n%s", ok, got, pushed)
+	}
+	up = false
+	lister.retryAt = time.Time{}
+	if _, ok := lister.answerGroups(); ok {
+		t.Fatal("group poll answered in-process without the monitor")
+	}
+	for args, want := range map[string]bool{"group list --json": true, "group list": false, "group list --json --all": false, "list --json": false} {
+		if got := remoteAgentGroupPoll(strings.Fields(args)); got != want {
+			t.Errorf("%q: %v, want %v", args, got, want)
 		}
 	}
 }
