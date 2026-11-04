@@ -99,6 +99,175 @@ func matrixPrepareClaudeFixture(t *testing.T) (*matrixQueuedAttachFixture, strin
 	return f, sid, path
 }
 
+// matrix/hardened: use the real fork builder, then model a completed first
+// launch whose durable Command still contains the one-shot fork script. Each
+// primary transcript carries its own native ID; no parent history is selected.
+func matrixPrepareCompletedClaudeForkFixture(t *testing.T, liveParent bool) (*matrixQueuedAttachFixture, *session.Instance, string, string) {
+	t.Helper()
+	f, parentID, parentPath := matrixPrepareClaudeFixture(t)
+	parent := f.target
+	if liveParent {
+		if out, raw, err := matrixRunPrepare(f); err != nil || out.Disposition != "resumed" {
+			t.Fatalf("parent setup: %+v %s %v", out, raw, err)
+		}
+		f.waitSpawn()
+		parent = f.stored(parent.ID)
+	}
+	parent.ClaudeDetectedAt = time.Now()
+	forked, command, err := parent.CreateForkedInstanceWithOptions("original fork title", parent.GroupPath, &session.ClaudeOptions{SkipPermissions: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	childID := forked.ClaudeSessionID
+	if childID == "" || childID == parentID || !strings.Contains(command, "--fork-session") || !strings.Contains(command, "--resume "+parentID) {
+		t.Fatalf("fixture is not a native fork: child=%s parent=%s command=%s", childID, parentID, command)
+	}
+	data, err := os.ReadFile(parentPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	childPath := filepath.Join(filepath.Dir(parentPath), childID+".jsonl")
+	if err := os.WriteFile(childPath, []byte(strings.ReplaceAll(string(data), parentID, childID)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	// Renaming after the initial fork must not replay its old --name or the
+	// parent's identity injection when this child is opened again.
+	forked.Title = "renamed completed fork"
+	forked.IsForkAwaitingStart = false
+	forked.Status = session.StatusStopped
+	if err := f.storage.Save([]*session.Instance{forked}); err != nil {
+		t.Fatal(err)
+	}
+	f.target = forked
+	return f, parent, childID, childPath
+}
+
+// matrix/hardened: later remote opens resume the existing child conversation,
+// retain its legacy launch evidence, and leave the live parent untouched.
+func TestMatrixPrepareOpenCompletedClaudeForkResumesChildAndPreservesParent(t *testing.T) {
+	f, parent, childID, _ := matrixPrepareCompletedClaudeForkFixture(t, true)
+	parentPID, err := parent.GetTmuxSession().PanePID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := f.stored(f.target.ID)
+	out, raw, err := matrixRunPrepare(f)
+	if err != nil || out.Disposition != "resumed" {
+		t.Fatalf("completed fork recovery: %+v %s %v", out, raw, err)
+	}
+	lines := matrixPrepareWaitSpawnCount(t, f, 2)
+	childLaunch := lines[1]
+	if !strings.Contains(childLaunch, "--resume "+childID) || strings.Contains(childLaunch, parent.ClaudeSessionID) || strings.Contains(childLaunch, "--session-id") || strings.Contains(childLaunch, "--fork-session") || strings.Contains(childLaunch, "original fork title") || strings.Contains(childLaunch, filepath.Join("identity", parent.ID, "identity.md")) {
+		t.Fatalf("replayed parent/first-fork launch instead of child resume: %v", lines)
+	}
+	child := f.stored(f.target.ID)
+	childPID, err := child.GetTmuxSession().PanePID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if child.ClaudeSessionID != childID || child.Command != before.Command {
+		t.Fatalf("completed fork recovery changed original binding/evidence: %s %s", child.ClaudeSessionID, child.Command)
+	}
+	out, raw, err = matrixRunPrepare(f)
+	if err != nil || out.Disposition != "existing" || len(f.spawnLines()) != 2 {
+		t.Fatalf("completed fork was launched twice: %+v %s %v spawns=%v", out, raw, err, f.spawnLines())
+	}
+	if afterPID, err := f.stored(f.target.ID).GetTmuxSession().PanePID(); err != nil || afterPID != childPID {
+		t.Fatalf("existing open changed child pane: %d -> %d (%v)", childPID, afterPID, err)
+	}
+	client := f.attach()
+	client.waitReady()
+	client.detach()
+	if afterPID, err := parent.GetTmuxSession().PanePID(); err != nil || afterPID != parentPID {
+		t.Fatalf("child open changed live parent pane: %d -> %d (%v)", parentPID, afterPID, err)
+	}
+	if after := f.stored(f.target.ID); after.ClaudeSessionID != childID || after.Command != before.Command || len(f.spawnLines()) != 2 {
+		t.Fatalf("attach changed completed fork binding or launch count: %s %s %v", after.ClaudeSessionID, after.Command, f.spawnLines())
+	}
+}
+
+// matrix/hardened: concurrent visits to a completed fork must share one child
+// resume, even though the stored command still describes its first fork.
+func TestMatrixPrepareOpenCompletedClaudeForkConcurrentRecoverySpawnsOnce(t *testing.T) {
+	f, parent, childID, _ := matrixPrepareCompletedClaudeForkFixture(t, false)
+	var wg sync.WaitGroup
+	results := make(chan string, 2)
+	for n := 0; n < 2; n++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			out, raw, err := matrixRunPrepare(f)
+			results <- fmt.Sprintf("%s|%v|%s", out.Disposition, err, raw)
+		}()
+	}
+	wg.Wait()
+	close(results)
+	var dispositions string
+	for result := range results {
+		if !strings.Contains(result, "|<nil>|") {
+			t.Fatal(result)
+		}
+		dispositions += result + "\n"
+	}
+	lines := f.waitSpawn()
+	if !strings.Contains(dispositions, "resumed|") || !strings.Contains(dispositions, "existing|") || len(lines) != 1 || !strings.Contains(lines[0], "--resume "+childID) || strings.Contains(lines[0], parent.ClaudeSessionID) || strings.Contains(lines[0], "--fork-session") {
+		t.Fatalf("duplicate or foreign completed fork recovery: %s %v", dispositions, lines)
+	}
+}
+
+// matrix/hardened: a fork-shaped custom command or uncompleted fork cannot
+// authorize a new conversation, parent resume, or execution of its old script.
+func TestMatrixPrepareOpenCompletedClaudeForkInvalidEvidenceNeverReplays(t *testing.T) {
+	for _, kind := range []string{"wrong-child", "missing-history", "extra-shell", "duplicate-selector"} {
+		t.Run(kind, func(t *testing.T) {
+			f, _, childID, path := matrixPrepareCompletedClaudeForkFixture(t, false)
+			marker := filepath.Join(f.home, "old-fork-script-was-executed")
+			switch kind {
+			case "wrong-child":
+				f.target.Command = strings.Replace(f.target.Command, childID, uuid.NewString(), 1)
+			case "missing-history":
+				if err := os.Remove(path); err != nil {
+					t.Fatal(err)
+				}
+			case "extra-shell":
+				f.target.Command += "; printf unsafe > '" + marker + "'"
+			case "duplicate-selector":
+				f.target.Command += " --session-id " + childID
+			}
+			if err := f.storage.Save([]*session.Instance{f.target}); err != nil {
+				t.Fatal(err)
+			}
+			before := f.stored(f.target.ID)
+			_, raw, err := matrixRunPrepare(f)
+			if err == nil || len(f.spawnLines()) != 0 {
+				t.Fatalf("unsafe completed fork launch: %s %v spawns=%v", raw, err, f.spawnLines())
+			}
+			if _, err := os.Stat(marker); !os.IsNotExist(err) {
+				t.Fatalf("old fork script was executed: %v", err)
+			}
+			after := f.stored(f.target.ID)
+			if after.ClaudeSessionID != childID || after.Command != before.Command || after.Status != before.Status || after.Exists() {
+				t.Fatalf("refusal altered completed fork identity/lifecycle: %s/%s %s", after.ClaudeSessionID, after.Status, after.Command)
+			}
+		})
+	}
+}
+
+// matrix/hardened: when a live parent already wrote a launch line, the ordinary
+// fixture's first-line wait cannot establish that the child actually started.
+func matrixPrepareWaitSpawnCount(t *testing.T, f *matrixQueuedAttachFixture, want int) []string {
+	t.Helper()
+	deadline := time.Now().Add(8 * time.Second)
+	for time.Now().Before(deadline) {
+		if lines := f.spawnLines(); len(lines) >= want {
+			return lines
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("missing completed fork launch: want %d lines, got %v", want, f.spawnLines())
+	return nil
+}
+
 func matrixRunPrepare(f *matrixQueuedAttachFixture) (core.SessionPrepareOpenOut, string, error) {
 	cmd := exec.Command(f.bin, "session", "prepare-open", "--json", f.target.ID)
 	cmd.Env, cmd.Dir = f.env, f.home

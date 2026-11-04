@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.132`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.133`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -66,7 +66,7 @@
 - `internal/session/claude_hooks.go`：`isAgentDeckHookCommand` 的判断规则：先去掉开头的 `VAR=值`，再要求第二个词是 `hook-handler`、程序名的文件名部分是 `agent-deck`。`RemoveClaudeHooks` 会扫描全部事件，并做 UTC 时间戳备份（约 387–414 行）。
 - `cmd/agent-deck/main.go`（约 4845、5070 行）：`agent-deck uninstall` 会移除这些钩子。`uninstall.sh` 第 253 行附近的 jq 过滤用的是同一套规则（正则），写回时用 `cat >` 保持软链接和权限。
 
-**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.132`。
+**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.133`。
 
 **测试**：以 `_hardened_test.go` 结尾的文件、`update_check_disable_test.go`、`update_timer_wiring_test.go` 等是新增或调整过的测试；`testdata/goldens/*` 里的快照已经按加固后的输出更新。
 
@@ -1080,3 +1080,10 @@ snapshots, compatibility, and validation boundaries.
 - **matrix/hardened:** 自动密度、行高、点击定位和分页都扣除同一设备列宽度；卡片因此落入单行回退时不会错选下一行。设备列装饰后的窗口长行再次按外宽截断，避免无数字栏时发生换行。字母跳转提示继续使用原有 gutter。
 - **测试**：新增 `matrix_recent_columns_test.go` 覆盖普通／Recent 数字列、105／1001 条库存、滚动、来源列、选中项、跳转提示、中文长设备名与窄栏标题；`matrix_recent_geometry_test.go` 覆盖卡片阈值、鼠标、分页、自动密度和长窗口行。同步数字栏断言及分组树显示快照，保留 Recent 排序／游标和 Pinned 对齐回归。
 - **matrix/hardened:** `matrix.132` 将设备列补白移到名称前面，并移除 Recent 会话行重复的两格 hotkey gutter，让短设备名紧邻选择／状态和标题。侧栏的选择和窗口标记各缩成一格，与经典行的距离一致；compact 卡片原本没有 gutter，保留其标记；跳转提示模式保留原 gutter。数字位置、窗口展开功能和卡片行高不变；新增长别名不再扩大其它设备到会话名的距离。
+
+## 106. 远程恢复已完成首次启动的 Claude fork
+
+- **问题**：原生 Claude fork 将首次启动的完整脚本保存在 `Command`；首次启动后只清除临时 fork 标记。普通重启早已识别此历史形态，但严格 remote 恢复只接受普通 `claude` 命令，导致保有完整自身历史的 fork 在终端退出后仍无法打开。
+- **matrix/hardened:** `matrix.133` 对本程序生成的已完成 fork 启动脚本做窄范围识别，核对工作目录、导出作用域、完整 child ID、不同的完整 parent ID 以及允许的启动参数。只有 child ID 与已登记、已验证身份一致且 child 主历史有效时才允许恢复；旧脚本不执行，恢复命令只使用当前 child ID，不带 parent ID、`--session-id` 或 `--fork-session`。
+- **matrix/hardened:** 继续拒绝任意自定义 shell、额外命令、选择器篡改和缺失历史；未完成的首次 fork 仍由原生命周期处理。冻结计划包含历史命令身份，保留原有配置、主历史、进程归属、并发上限、scratch 隔离和存活终端复用检查，不改变 fork 创建及普通 Start／Restart 合同。
+- **验证**：隔离测试使用真实 fork builder 生成历史脚本，覆盖完成后按自身 ID 恢复、重命名、重复与并发打开、真实 PTY 连接及父终端保留；篡改 child／parent、目录、导出、选择器和附加 shell 的脚本拒绝启动。目标设备需安装新二进制，已有 AI 会话无需重启。

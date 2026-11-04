@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"al.essio.dev/pkg/shellescape"
+	"github.com/asheshgoplani/agent-deck/internal/shellwords"
 	"github.com/asheshgoplani/agent-deck/internal/tmux"
 )
 
@@ -45,7 +46,7 @@ func newExactClaudeResumePlan(inst *Instance) (*exactClaudeResumePlan, error) {
 	if !IsBareClaudeSessionUUID(inst.ClaudeSessionID) || inst.recordedClaudeSessionID() != inst.ClaudeSessionID {
 		return nil, fmt.Errorf("exact original Claude session ID is missing or unverified")
 	}
-	if strings.TrimSpace(inst.Command) != "" && strings.TrimSpace(inst.Command) != "claude" {
+	if strings.TrimSpace(inst.Command) != "" && strings.TrimSpace(inst.Command) != "claude" && !exactClaudeCompletedForkCommand(inst) {
 		return nil, fmt.Errorf("exact recovery requires the ordinary Claude command")
 	}
 	command := strings.TrimSpace(GetClaudeCommandForInstance(inst))
@@ -90,9 +91,93 @@ func newExactClaudeResumePlan(inst *Instance) (*exactClaudeResumePlan, error) {
 	p := &exactClaudeResumePlan{sid: inst.ClaudeSessionID, home: home, cwd: cwd, executable: word, artifact: artifact, artifactHash: hash}
 	// Resolve defaults, model, permission flags and env-source setup now; any
 	// change between admission and final assembly invalidates the frozen plan.
-	sum := sha256.Sum256([]byte(p.assemble(inst)))
+	// matrix/hardened: a completed fork's historical one-shot script is never
+	// executed, but changing it still invalidates the frozen launch binding.
+	sum := sha256.Sum256([]byte(p.assemble(inst) + "\x00" + inst.Command))
 	p.commandHash = hex.EncodeToString(sum[:])
 	return p, nil
+}
+
+// matrix/hardened: Claude forks persist the builder's one-shot script in
+// Command even after the transient fork sentinel is consumed. Accept only its
+// exact launch-scope prefix and literal argument grammar. Resume never runs
+// this script or any of its historical flags: it resumes the verified child.
+func exactClaudeCompletedForkCommand(inst *Instance) bool {
+	prefix := fmt.Sprintf("cd '%s' && %sexec claude ", inst.ProjectPath, inst.buildBashExportPrefix(false))
+	if !strings.HasPrefix(inst.Command, prefix) {
+		return false
+	}
+	args, ok := exactClaudeForkLiteralArgs(strings.TrimPrefix(inst.Command, prefix))
+	if !ok || len(args) < 5 || args[0] != "--session-id" || args[1] != inst.ClaudeSessionID || args[2] != "--resume" || !IsBareClaudeSessionUUID(args[3]) || strings.EqualFold(args[3], inst.ClaudeSessionID) || args[4] != "--fork-session" {
+		return false
+	}
+	seen := map[string]bool{}
+	for n := 5; n < len(args); n++ {
+		flag, value, equal := strings.Cut(args[n], "=")
+		if seen[flag] && flag != "--add-dir" {
+			return false
+		}
+		seen[flag] = true
+		switch flag {
+		case "--model", "--effort", "--permission-mode", "--add-dir", "--name", "--teammate-mode", "--channels", "--append-system-prompt-file":
+			if !equal {
+				n++
+				if n >= len(args) {
+					return false
+				}
+				value = args[n]
+			}
+			if value == "" || strings.HasPrefix(value, "-") || (flag == "--append-system-prompt-file" && !filepath.IsAbs(value)) {
+				return false
+			}
+		case "--dangerously-skip-permissions", "--allow-dangerously-skip-permissions", "--chrome", "--no-chrome", "--verbose":
+			if equal {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// matrix/hardened: shellwords only splits; reject expansion and operators
+// before splitting so a suffix cannot masquerade as another literal flag.
+// Single-quoted metacharacters in old titles/paths remain harmless literals.
+func exactClaudeForkLiteralArgs(command string) ([]string, bool) {
+	var quote byte
+	escaped := false
+	for n := 0; n < len(command); n++ {
+		c := command[n]
+		if quote == '\'' {
+			if c == '\'' {
+				quote = 0
+			}
+			continue
+		}
+		if escaped {
+			escaped = false
+			continue
+		}
+		if c == '\\' {
+			escaped = true
+			continue
+		}
+		if c == '$' || c == '`' || (quote == 0 && strings.ContainsRune(";|&<>(){}*?[]~\n\r", rune(c))) {
+			return nil, false
+		}
+		if quote != 0 {
+			if c == quote {
+				quote = 0
+			}
+		} else if c == '\'' || c == '"' {
+			quote = c
+		}
+	}
+	if quote != 0 || escaped {
+		return nil, false
+	}
+	return shellwords.Split(command)
 }
 
 // matrix/hardened: ExtraArgs may preserve known inert launch settings, but

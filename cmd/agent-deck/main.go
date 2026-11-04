@@ -45,7 +45,7 @@ import (
 )
 
 // matrix/hardened: identifies our hardened build.
-var Version = "1.16.26+matrix.132" // matrix/hardened: keep Recent device labels close to their session titles; overridden via -ldflags.
+var Version = "1.16.26+matrix.133" // matrix/hardened: recover completed Claude forks by their own native identity; overridden via -ldflags.
 
 // Table column widths for list command output
 const (
