@@ -339,6 +339,11 @@ func (s *Server) probe(p *profileState, record *observedInstance, pass *session.
 		var err error
 		if !inst.IsArchived() && inst.GetStatusThreadSafe() != session.StatusStopped {
 			err = pass.UpdateStatus(inst)
+		} else {
+			// matrix/hardened: a closed conversation can still have verified
+			// historical user messages, or a final submit before its pane exited.
+			// Reuse the bounded signature cache without probing or waking a pane.
+			inst.RefreshInteractionEvidence()
 		}
 		row = inst.RuntimeSnapshot(p.name, p.epoch, 0, at)
 		if row.Status == session.StatusRunning {

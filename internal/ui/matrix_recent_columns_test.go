@@ -17,10 +17,11 @@ func matrixRecentColumnsHome(t *testing.T, remoteName string) *Home {
 	t.Helper()
 	h := matrixPinnedHome(t)
 	local := matrixPinnedInstance(t, h, "a1")
-	local.Title, local.Status, local.LastAccessedAt = "Local", session.StatusIdle, time.Now()
+	local.Title, local.Status = "Local", session.StatusIdle
+	matrixRecentInteraction(t, local, time.Now())
 	remote := session.RemoteSessionInfo{
 		ID: "columns-remote", Title: "Remote", Tool: "codex", Status: "idle",
-		LastAccessedAt: time.Now().Add(-time.Minute).Format(time.RFC3339Nano),
+		LastInteractionAt: time.Now().Add(-time.Minute).Format(time.RFC3339Nano),
 	}
 	h.remoteSessions = map[string][]session.RemoteSessionInfo{remoteName: {remote}}
 	h.flatItems = []session.Item{
@@ -73,7 +74,7 @@ func TestMatrixRecentColumnsNumbersStayAtNormalColumn(t *testing.T) {
 				inst := session.NewInstanceWithGroupAndTool(fmt.Sprintf("row-%04d", index), "/fixture", "work", "codex")
 				inst.Status = session.StatusIdle
 				if index < 2 {
-					inst.LastAccessedAt = time.Now().Add(-time.Duration(index) * time.Minute)
+					matrixRecentInteraction(t, inst, time.Now().Add(-time.Duration(index)*time.Minute))
 				}
 				h.instances[index] = inst
 			}

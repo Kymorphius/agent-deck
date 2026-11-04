@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sync"
+	"time"
 )
 
 // matrix/hardened: Web snapshots reconstruct Instances, so an Instance-local
@@ -26,6 +27,9 @@ type matrixTurnInterruptFileResult struct {
 	// matrix/hardened: latest thread_settings_applied asked for the priority
 	// ("fast") service tier.
 	codexFast bool
+	// matrix/hardened: exact native user-record evidence, never access/output.
+	interactionAt time.Time
+	interactionID string
 }
 
 type matrixTurnInterruptFileSignature struct {
@@ -96,12 +100,15 @@ func (c *matrixTurnInterruptFileCache) load(tool, path string) matrixTurnInterru
 	}
 	entry.valid = false
 	result := c.parse(tool, path)
-	if result.cacheable {
-		// Never pair a result from an old read with a newer file signature.
-		// A concurrent append, rewrite or replacement must be read next time.
-		if after, err := os.Stat(path); err == nil && signature.equal(matrixTurnInterruptSignature(after)) {
-			entry.signature, entry.result, entry.valid = signature, result, true
-		}
+	// matrix/hardened: metadata and tail are separate reads. A replacement or
+	// append during either read cannot prove a new interaction's exact owner.
+	// Keep legacy interrupt display behavior, but never publish that clock.
+	after, err := os.Stat(path)
+	stable := err == nil && signature.equal(matrixTurnInterruptSignature(after))
+	if !stable {
+		result.interactionAt, result.interactionID = time.Time{}, ""
+	} else if result.cacheable {
+		entry.signature, entry.result, entry.valid = signature, result, true
 	}
 	return result
 }
@@ -195,14 +202,19 @@ func matrixParseTurnInterruptFile(tool, path string) matrixTurnInterruptFileResu
 	var result matrixTurnInterruptFileResult
 	switch tool {
 	case "claude":
-		result.verdict, result.found, result.cacheable = matrixScanLatestTurnInterrupt(path)
+		result.verdict, result.found, result.cacheable, result.interactionAt, result.interactionID = matrixScanLatestClaudeTurnFacts(path)
 	case "codex":
 		result.meta = readCodexRolloutThreadMeta(path)
 		if result.meta.ThreadSource == "subagent" || result.meta.ParentThreadID != "" {
 			result.cacheable = result.meta.valid
 			return result
 		}
-		result.verdict, result.found, result.cacheable = matrixScanLatestCodexTurnInterrupt(path)
+		result.verdict, result.found, result.cacheable, result.interactionAt = matrixScanLatestCodexTurnFacts(path)
+		if !result.meta.valid || result.meta.ID == "" || result.meta.ThreadSource != "user" {
+			// matrix/hardened: legacy interrupt detection remains fail-open,
+			// but a new interaction requires positive native/main-thread proof.
+			result.interactionAt = time.Time{}
+		}
 		// matrix/hardened: incremental and unbounded; see matrix_codex_tier_tracker.go.
 		fast, fastOK := matrixCodexTiers.fast(path)
 		result.codexFast = fast

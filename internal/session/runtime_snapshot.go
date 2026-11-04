@@ -57,6 +57,7 @@ type RuntimeSessionSnapshot struct {
 	HookKnown               bool                    `json:"hook_known"`
 	HookFresh               bool                    `json:"hook_fresh"`
 	ActivityAt              time.Time               `json:"activity_at"`
+	LastInteractionAt       time.Time               `json:"last_interaction_at,omitempty"` // matrix/hardened
 	ObservedActivityAt      time.Time               `json:"observed_activity_at"`
 	ObservedActivityKnown   bool                    `json:"observed_activity_known"`
 	LastChangeAt            time.Time               `json:"last_change_at"`
@@ -393,7 +394,7 @@ func (i *Instance) RuntimeSnapshot(profile, epoch string, revision uint64, sampl
 	i.mu.RLock()
 	r := RuntimeSessionSnapshot{ID: i.ID, Profile: normalizedRuntimeProfile(profile), Epoch: epoch, Revision: revision, Identity: i.runtimeIdentityLocked(), ObservedAt: sampledAt,
 		Status: i.Status, Substate: sub, Detail: detail, Evidence: StatusEvidence{HookStatus: i.hookStatus, HookEvent: i.hookEvent, HookAt: i.hookLastUpdate, SSEStatus: i.sseStatus, SSEAt: i.sseLastUpdate},
-		HookKnown: i.hookStatus != "", ActivityAt: i.lastActivityAt, ObservedActivityAt: observed, ObservedActivityKnown: observedKnown, LastChangeAt: change,
+		HookKnown: i.hookStatus != "", ActivityAt: i.lastActivityAt, LastInteractionAt: i.lastInteractionAt, ObservedActivityAt: observed, ObservedActivityKnown: observedKnown, LastChangeAt: change,
 		WaitingSince: waiting, WaitingSinceKnown: waitingKnown, Acknowledged: ack, TmuxAlive: alive, TmuxAliveKnown: known, PaneTitle: title, PaneTitleKnown: titleKnown,
 		AuthHeld: held, AuthRemedy: remedy, AuthHold: hold, ClaudeSessionID: i.ClaudeSessionID, ClaudeDetectedAt: i.ClaudeDetectedAt,
 		CodexSessionID: i.CodexSessionID, CodexDetectedAt: i.CodexDetectedAt, GeminiSessionID: i.GeminiSessionID, GeminiDetectedAt: i.GeminiDetectedAt,
@@ -447,6 +448,10 @@ func (i *Instance) ApplyRuntimeSnapshot(profile string, row RuntimeSessionSnapsh
 	// Status is mirrored for existing memory-only consumers reading the public
 	// field; no persisted/native/sampling state is overwritten.
 	i.Status = row.Status
+	// matrix/hardened: a lagging snapshot cannot undo an explicitly sent prompt.
+	if validInteractionAt(row.LastInteractionAt) && row.LastInteractionAt.After(i.lastInteractionAt) {
+		i.lastInteractionAt = row.LastInteractionAt
+	}
 	// matrix/hardened: timestamps are confirmations of the existing exact
 	// binding. Action preflights need this freshness without rebinding IDs or
 	// forcing a SQLite write on every source poll.
@@ -577,6 +582,12 @@ func (i *Instance) ReconcileRuntimeRegistry(candidate *Instance) bool {
 	i.LastAccessedAt = candidate.LastAccessedAt
 	if candidate.lastActivityAt.After(i.lastActivityAt) {
 		i.lastActivityAt = candidate.lastActivityAt
+	}
+	if candidate.lastInteractionAt.After(i.lastInteractionAt) { // matrix/hardened
+		i.lastInteractionAt = candidate.lastInteractionAt
+	}
+	if candidate.lastInteractionPersisted.After(i.lastInteractionPersisted) {
+		i.lastInteractionPersisted = candidate.lastInteractionPersisted
 	}
 	if candidate.autoNameDescription != "" {
 		i.autoNameDescription = candidate.autoNameDescription

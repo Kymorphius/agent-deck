@@ -19,13 +19,14 @@ func matrixStandaloneIndentRows(t *testing.T, h *Home, selected bool, width int)
 	windows := matrixPinnedInstance(t, h, "a2")
 	plainTitle := "LOCAL"
 	plain.Title, windows.Title = plainTitle, plainTitle
-	plain.LastAccessedAt, windows.LastAccessedAt = time.Now(), time.Now()
+	matrixRecentInteraction(t, plain, time.Now())
+	matrixRecentInteraction(t, windows, time.Now())
 	tmux.SeedWindowCacheForTest(t, map[string][]tmux.WindowInfo{
 		windows.GetTmuxSession().Name: {{ID: "@0", Index: 0}, {ID: "@1", Index: 1}},
 	})
 	remote := &session.RemoteSessionInfo{
 		ID: "remote", Title: "REMOTE", Status: "idle", Tool: "codex",
-		LastAccessedAt: time.Now().Format(time.RFC3339Nano),
+		LastInteractionAt: time.Now().Format(time.RFC3339Nano),
 	}
 	if h.groupViewMode == session.GroupViewPinnedOnly {
 		plain.Pin, windows.Pin, remote.Pin = session.PinTop, session.PinTop, matrixRemotePinPointer(session.PinTop)

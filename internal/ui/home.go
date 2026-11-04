@@ -3129,8 +3129,9 @@ func (h *Home) publishWebSessionStates(instances []*session.Instance) {
 			continue
 		}
 		states[inst.ID] = web.MenuSessionState{
-			Status: inst.GetStatusThreadSafe(),
-			Tool:   inst.GetToolThreadSafe(),
+			Status:            inst.GetStatusThreadSafe(),
+			Tool:              inst.GetToolThreadSafe(),
+			LastInteractionAt: inst.LastInteractionAt(), // matrix/hardened: live Web Recent follows actual submissions.
 		}
 	}
 	menuData.UpdateSessionStates(states, time.Now())
@@ -3457,7 +3458,7 @@ func (h *Home) rebuildFlatItemsPreservingSelectionAt(identity selectedItemIdenti
 // rebuildFlatItems rebuilds the flattened view from group tree
 func (h *Home) rebuildFlatItems() {
 	if h.groupViewMode == session.GroupViewRecent {
-		// matrix/hardened: visits can reorder Recent on any rebuild (including
+		// matrix/hardened: interactions can reorder Recent on any rebuild (including
 		// a fleet poll during attach). Follow the selected identity before a
 		// later detach callback can accidentally capture the old row's neighbor.
 		h.rebuildFlatItemsPreservingSelection(h.captureSelectedItemIdentity())
@@ -3475,7 +3476,7 @@ func (h *Home) rebuildFlatItemsAt(now time.Time) {
 	// original group/parent expansion state is preserved when leaving this view.
 	// Build only the selected presentation; full tree rows are unused by pins.
 	pinnedOnly := h.groupViewMode == session.GroupViewPinnedOnly
-	recent := h.groupViewMode == session.GroupViewRecent // matrix/hardened: user visits, independent of group folds.
+	recent := h.groupViewMode == session.GroupViewRecent // matrix/hardened: actual interaction, independent of views and group folds.
 	standalone := pinnedOnly || recent
 	var allItems []session.Item
 	if pinnedOnly {
@@ -3577,7 +3578,7 @@ func (h *Home) rebuildFlatItemsAt(now time.Time) {
 		}
 		partitioned := make([]session.RemoteSessionInfo, 0, capacity)
 		for _, remote := range sessions {
-			if recent && matrixRemoteAccessTime(remote).IsZero() { // matrix/hardened: unknown visits cannot be ranked.
+			if recent && matrixRemoteAccessTime(remote).IsZero() { // matrix/hardened: unknown interactions cannot be ranked.
 				continue
 			}
 			if pinnedOnly && !matrixRemoteSessionIsPinned(remote) { // matrix/hardened: omitted pin metadata is unknown.
@@ -3623,7 +3624,7 @@ func (h *Home) rebuildFlatItemsAt(now time.Time) {
 				if inst == nil || inst.IsArchived() != viewArchived {
 					continue
 				}
-				if (pinnedOnly && !matrixSessionIsPinned(inst)) || (recent && inst.LastAccessedAt.IsZero()) { // matrix/hardened
+				if (pinnedOnly && !matrixSessionIsPinned(inst)) || (recent && inst.LastInteractionAt().IsZero()) { // matrix/hardened
 					continue
 				}
 				if h.statusFilter != "" && !viewArchived && !h.matchesSessionFilter(h.statusFilter, inst) { // matrix/hardened
@@ -3841,7 +3842,7 @@ func (h *Home) rebuildFlatItemsAt(now time.Time) {
 
 	// Inject creating session placeholders (worktree creation in progress)
 	for _, creating := range h.creatingSessions {
-		if standalone { // matrix/hardened: a pending session has no recorded pin or visit.
+		if standalone { // matrix/hardened: a pending session has no recorded pin or interaction.
 			continue
 		}
 		item := session.Item{
@@ -9600,6 +9601,11 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case matrixRecentPromptResultMsg: // matrix/hardened: accepted operator prompts count as interactions.
 		if msg.err == nil && msg.instance != nil && msg.target != nil && h.getInstanceByID(msg.instance.ID) == msg.instance && msg.instance.GetTmuxSession() == msg.target {
 			msg.instance.MarkAccessed()
+			// matrix/hardened: this result confirms submission to the current
+			// target; opening or typing a draft must never advance this clock.
+			if err := msg.instance.RecordInteractionAt(time.Now()); err != nil {
+				uiLog.Warn("interaction_clock_persist_failed", slog.String("session_id", msg.instance.ID), slog.String("error", err.Error()))
+			}
 			if h.groupViewMode == session.GroupViewRecent {
 				h.rebuildFlatItemsPreservingSelection(h.captureSelectedItemIdentity())
 			}
@@ -23039,7 +23045,7 @@ func (h *Home) renderSessionItem(
 	// Selected rows reuse the selection-bar style instead of dim, so the
 	// badge stays legible inside the highlight.
 	timestampBadge := ""
-	if h.showSessionTimestamps || h.groupViewMode == session.GroupViewRecent { // matrix/hardened: recent rows always show their visit age.
+	if h.showSessionTimestamps || h.groupViewMode == session.GroupViewRecent { // matrix/hardened: recent rows always show their interaction age.
 		tsStyle := DimStyle
 		if selected {
 			tsStyle = SessionStatusSelStyle
@@ -23051,7 +23057,7 @@ func (h *Home) renderSessionItem(
 		confirmedTs, confirmedObserved := inst.LastObservedActivity()
 		ts := sessionActivityTime(inst.CreatedAt, inst.LastStartedAt, inst.LastActivityAt(), inst.LastAccessedAt, confirmedTs, confirmedObserved, hookStatus)
 		if h.groupViewMode == session.GroupViewRecent { // matrix/hardened: show the timestamp that orders this list.
-			ts = inst.LastAccessedAt
+			ts = inst.LastInteractionAt()
 		}
 		timestampBadge = tsStyle.Render(" " + formatRelativeTime(ts))
 	}
@@ -23726,7 +23732,7 @@ func (h *Home) renderRemoteSessionItemAtWidth(b *strings.Builder, item session.I
 		if !h.compactSidebar && h.groupViewMode != session.GroupViewRecent { // matrix/hardened: avoid repeating the device column.
 			secondText += " · " + item.RemoteName
 		}
-		if h.groupViewMode == session.GroupViewRecent { // matrix/hardened: show the visit age in card metadata too.
+		if h.groupViewMode == session.GroupViewRecent { // matrix/hardened: show the interaction age in card metadata too.
 			secondText = formatRelativeTime(matrixRemoteAccessTime(*rs)) + " · " + secondText
 		}
 		secondText += staleNote
@@ -23842,7 +23848,7 @@ func (h *Home) renderRemoteSessionItemAtWidth(b *strings.Builder, item session.I
 	// Viewers badge, as on local rows; nothing when the remote did not say.
 	remoteViewers, remoteViewersKnown := rs.ViewerList()
 	remoteViewersBadge := renderViewersBadge(remoteViewers, remoteViewersKnown, selected)
-	if h.groupViewMode == session.GroupViewRecent { // matrix/hardened: remote visits use the same visible clock.
+	if h.groupViewMode == session.GroupViewRecent { // matrix/hardened: remote interactions use the same visible clock.
 		remoteViewersBadge += sStyle.Render(" " + formatRelativeTime(matrixRemoteAccessTime(*rs)))
 	}
 
@@ -26836,7 +26842,7 @@ func (h *Home) renderFilterBarHint() []string {
 	}
 	if h.groupViewMode != session.GroupViewRecent { // matrix/hardened: keep recent discoverable before lower-priority hints.
 		if key := h.actionKey(hotkeyToggleRecentView); key != "" {
-			segs = append(segs, mark(key, false)+dim.Render(" 最近"))
+			segs = append(segs, mark(key, false)+dim.Render(" 最近交互"))
 		}
 	}
 	segs = append(segs, []string{

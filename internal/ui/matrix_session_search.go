@@ -77,7 +77,7 @@ func (h *Home) openViewSearch() {
 		}
 		activity := inst.DisplayLastActivityTime()
 		if mode == session.GroupViewRecent {
-			activity = inst.LastAccessedAt
+			activity = inst.LastInteractionAt()
 			if activity.IsZero() {
 				return false
 			}

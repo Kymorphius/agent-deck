@@ -49,6 +49,7 @@ func TestMatrixRecentReturnLocalSelectionSurvivesFleetPollBeforeDetach(t *testin
 	}
 	home.isAttaching.Store(true)
 	home.markSessionVisited(inst)
+	matrixRecentInteraction(t, inst, time.Now()) // Actual submitted input, beyond viewing.
 	// A poll unrelated to this local session can land before tea.Exec's return
 	// callback. It must not leave the cursor on the old ordinal after sorting.
 	home.Update(remoteSessionsFetchedMsg{sessions: home.remoteSessions, pushed: true})
@@ -69,10 +70,10 @@ func TestMatrixRecentReturnRemoteSelectionFollowsHostAndID(t *testing.T) {
 			// IDs are not fleet-global: this local row and both remotes have
 			// the same ID, but each is a different selectable conversation.
 			id := matrixPinnedInstance(t, home, "b1").ID
-			old := time.Now().Add(-time.Hour).Format(time.RFC3339Nano)
+			old := time.Now().Add(-3 * time.Hour).Format(time.RFC3339Nano)
 			home.remoteSessions = map[string][]session.RemoteSessionInfo{
-				"dev": {{ID: id, Title: "dev conversation", Status: "running", LastAccessedAt: old}},
-				"pro": {{ID: id, Title: "pro conversation", Status: "running", LastAccessedAt: old}},
+				"dev": {{ID: id, Title: "dev conversation", Status: "running", LastInteractionAt: old}},
+				"pro": {{ID: id, Title: "pro conversation", Status: "running", LastInteractionAt: old}},
 			}
 			home.rebuildFlatItems()
 			want := selectedItemIdentity{remoteName: host, remoteSessionID: id, windowIndex: -1}
@@ -81,7 +82,7 @@ func TestMatrixRecentReturnRemoteSelectionFollowsHostAndID(t *testing.T) {
 			}
 			home.viewOffset = home.cursor
 			fresh := append([]session.RemoteSessionInfo(nil), home.remoteSessions[host]...)
-			fresh[0].LastAccessedAt = time.Now().Format(time.RFC3339Nano)
+			fresh[0].LastInteractionAt = time.Now().Format(time.RFC3339Nano)
 			other := "dev"
 			if host == other {
 				other = "pro"
@@ -116,7 +117,7 @@ func TestMatrixRecentReturnWindowSelectionSurvivesOrdinaryRebuild(t *testing.T) 
 		t.Fatal("fixture did not select a window under an older conversation")
 	}
 	home.viewOffset = home.cursor
-	inst.MarkAccessed()
+	matrixRecentInteraction(t, inst, time.Now())
 	// The ordinary rebuild also serves title reconciliation and embedded
 	// focus/return paths, without the attach-return-specific wrapper.
 	home.rebuildFlatItems()
@@ -134,4 +135,26 @@ func TestMatrixRecentReturnWindowSelectionSurvivesOrdinaryRebuild(t *testing.T) 
 	home.rebuildFlatItems()
 	want = selectedItemIdentity{sessionID: inst.ID, windowIndex: -1}
 	matrixAssertRecentReturnIdentity(t, home, want, "collapsed window fallback")
+}
+
+// matrix/hardened: focus and detach still update viewing/lifecycle time, but
+// must neither promote an older row nor create a new confirmed interaction.
+func TestMatrixRecentReturnWithoutInteractionDoesNotReorder(t *testing.T) {
+	home := matrixRecentReturnHome(t)
+	inst := matrixPinnedInstance(t, home, "b1")
+	home.cursor = sessionIndexByTitle(home, inst.Title)
+	home.viewOffset = home.cursor
+	want, oldRow, interactionAt := home.captureSelectedItemIdentity(), home.cursor, inst.LastInteractionAt()
+	home.markSessionVisited(inst)
+	inst.MarkAccessed()
+	home.Update(remoteSessionsFetchedMsg{sessions: home.remoteSessions, pushed: true})
+	home.Update(statusUpdateMsg{attachedSessionID: inst.ID})
+	home.Update(attachReturnSyncedMsg{})
+	matrixAssertRecentReturnIdentity(t, home, want, "view-only return")
+	if home.cursor != oldRow || !inst.LastInteractionAt().Equal(interactionAt) {
+		t.Fatalf("view-only return promoted a conversation: row %d -> %d, interaction %s -> %s", oldRow, home.cursor, interactionAt, inst.LastInteractionAt())
+	}
+	if top := home.flatItems[0].Session; top == nil || top.Title != "a1" {
+		t.Fatal("view-only return changed the latest interaction")
+	}
 }

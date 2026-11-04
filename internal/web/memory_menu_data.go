@@ -13,6 +13,8 @@ import (
 type MenuSessionState struct {
 	Status session.Status
 	Tool   string
+	// matrix/hardened: a runtime prompt observation updates Recent without a reload.
+	LastInteractionAt time.Time
 }
 
 // MemoryMenuData stores one menu snapshot for web mode.
@@ -266,6 +268,10 @@ func (m *MemoryMenuData) UpdateSessionStates(states map[string]MenuSessionState,
 		item.Session.Status = state.Status
 		if state.Tool != "" {
 			item.Session.Tool = state.Tool
+		}
+		// matrix/hardened: delayed state publications cannot regress the clock.
+		if state.LastInteractionAt.After(item.Session.LastInteractionAt) {
+			item.Session.LastInteractionAt = state.LastInteractionAt
 		}
 	}
 

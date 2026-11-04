@@ -22,7 +22,7 @@ func matrixRemoteSearchHome(t *testing.T) *Home {
 	pin := session.PinTop
 	h.remoteSessions = map[string][]session.RemoteSessionInfo{}
 	for _, host := range []string{"east", "west"} {
-		h.remoteSessions[host] = []session.RemoteSessionInfo{{ID: "shared", Title: "共同古琴", Group: "team/course", Tool: "claude", Path: "/work/course", Status: "idle", LastActivityAt: now, LastAccessedAt: now, Pin: &pin}}
+		h.remoteSessions[host] = []session.RemoteSessionInfo{{ID: "shared", Title: "共同古琴", Group: "team/course", Tool: "claude", Path: "/work/course", Status: "idle", LastActivityAt: now, LastAccessedAt: now, LastInteractionAt: now, Pin: &pin}}
 		for _, path := range []string{"remotes/" + host, "remotes/" + host + "/team", "remotes/" + host + "/team/course"} {
 			h.remoteGroupsCollapsed[path] = true
 		}
@@ -161,7 +161,7 @@ func TestMatrixRemoteSessionSearch_ViewScopeMatchesRemoteRules(t *testing.T) {
 				h.remoteSessions["east"][0].LastActivityAt = time.Now().AddDate(0, 0, -60).Format(time.RFC3339Nano)
 			case "recent":
 				h.groupViewMode = session.GroupViewRecent
-				h.remoteSessions["east"][0].LastAccessedAt = ""
+				h.remoteSessions["east"][0].LastInteractionAt = ""
 			case "pinned":
 				h.groupViewMode = session.GroupViewPinnedOnly
 				h.remoteSessions["east"][0].Pin = nil

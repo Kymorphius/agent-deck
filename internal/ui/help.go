@@ -474,7 +474,7 @@ func (h *HelpOverlay) View() string {
 				{"/idle", "Filter idle"},
 				{groupViewKey, "Cycle view: normal / active / populated / pinned / recent"}, // matrix/hardened
 				{pinnedViewKey, "Toggle pinned-only view"},                                  // matrix/hardened
-				{recentViewKey, "Toggle 最近 / Recent view (latest first)"},                   // matrix/hardened
+				{recentViewKey, "Toggle 最近交互 / Recent interactions (latest first)"},         // matrix/hardened
 				{timeFilterKey, "Cycle time filter: today / 3 / 7 / 30 days / all"},
 			},
 		},

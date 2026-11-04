@@ -49,6 +49,12 @@ func matrixSearchScopeHome(t *testing.T) (*Home, map[string]*session.Instance) {
 		byID[id].CreatedAt, byID[id].LastAccessedAt = now.AddDate(0, 0, -60), now.AddDate(0, 0, -60)
 	}
 	byID["target"].LastAccessedAt, byID["never"].LastAccessedAt = time.Time{}, time.Time{}
+	// matrix/hardened: seed actual submission evidence separately from view time.
+	for _, inst := range items {
+		if inst.ID != "target" && inst.ID != "never" {
+			matrixRecentInteraction(t, inst, inst.LastAccessedAt)
+		}
+	}
 	h := newMatrixLocalSearchMatchingHome(t, 120, items)
 	h.setHotkeys(resolveHotkeys(nil))
 	h.statusFilter, h.timeFilter, h.groupViewMode, h.groupScope = "", session.TimeFilterAll, session.GroupViewNormal, ""
@@ -322,6 +328,8 @@ func TestMatrixSearchScopeHome_ViewRefreshKeepsScopeAndQuery(t *testing.T) {
 	now := time.Now()
 	newInside := &session.Instance{ID: "new-inside", Title: "scope nested new", GroupPath: "Team/Alpha", Status: session.StatusRunning, CreatedAt: now, LastAccessedAt: now}
 	newOutside := &session.Instance{ID: "new-outside", Title: "scope nested new", GroupPath: "Other", Status: session.StatusRunning, CreatedAt: now, LastAccessedAt: now}
+	matrixRecentInteraction(t, newInside, now)
+	matrixRecentInteraction(t, newOutside, now)
 	h.search.SetItems(append(append([]*session.Instance{}, h.instances...), newInside, newOutside))
 	if h.search.input.Value() != "scope nested" || !h.search.IsVisible() {
 		t.Fatal("background refresh lost current-view query or modal state")
@@ -335,7 +343,16 @@ func TestMatrixSearchScopeHome_ViewExpiredTargetDoesNotClearFilters(t *testing.T
 	h.rebuildFlatItems()
 	matrixSearchScopeOpen(t, h, altKeyMsg('?'), "scope nested")
 	matrixSearchScopeIDs(t, h, "nested")
-	items["nested"].LastAccessedAt = time.Now().AddDate(0, 0, -60)
+	// matrix/hardened: interaction clocks are monotonic. Model a registry
+	// reload with old confirmed evidence, rather than regressing a live clock.
+	old := items["nested"]
+	expired := &session.Instance{ID: old.ID, Title: old.Title, Tool: old.Tool, ProjectPath: old.ProjectPath, GroupPath: old.GroupPath, Status: old.Status}
+	matrixRecentInteraction(t, expired, time.Now().AddDate(0, 0, -60))
+	for i, inst := range h.instances {
+		if inst.ID == expired.ID {
+			h.instances[i] = expired
+		}
+	}
 	before, cursor := matrixSearchScopeState(h), h.cursor
 	_, cmd := h.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd != nil || h.err == nil || matrixSearchScopeState(h) != before || h.cursor != cursor {

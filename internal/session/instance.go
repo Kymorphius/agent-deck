@@ -657,6 +657,9 @@ type Instance struct {
 	lastActivityAt        time.Time
 	lastActivityPersisted time.Time
 	lastActivityPersistMu sync.Mutex
+	// matrix/hardened: submitted input is distinct from visits and agent output.
+	lastInteractionAt        time.Time
+	lastInteractionPersisted time.Time
 
 	// restartTmuxRecordErr holds why the last restart could not record the
 	// tmux session name it minted, or nil once one did. Callers that have no

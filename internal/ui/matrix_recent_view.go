@@ -8,7 +8,7 @@ import (
 	"github.com/asheshgoplani/agent-deck/internal/tmux"
 )
 
-// matrix/hardened: only confirmed operator prompting advances the visit clock.
+// matrix/hardened: only confirmed operator prompting advances the interaction clock.
 type matrixRecentPromptResultMsg struct {
 	instance *session.Instance
 	target   *tmux.Session
@@ -35,8 +35,8 @@ func (h *Home) matrixRebuildAfterViewChange(identity selectedItemIdentity) {
 	h.rebuildFlatItemsAt(time.Now())
 }
 
-// matrix/hardened: recent means an operator visit, not background output or a
-// status transition. Read the complete tree so folds cannot hide a recent chat.
+// matrix/hardened: Recent means submitted interaction, not viewing, background
+// output or status transitions. Read the complete tree so folds cannot hide a chat.
 func matrixRecentItemsFromTree(tree *session.GroupTree) []session.Item {
 	if tree == nil {
 		return nil
@@ -47,7 +47,7 @@ func matrixRecentItemsFromTree(tree *session.GroupTree) []session.Item {
 			continue
 		}
 		for _, inst := range group.Sessions {
-			if inst != nil && !inst.LastAccessedAt.IsZero() {
+			if inst != nil && !inst.LastInteractionAt().IsZero() {
 				items = append(items, session.Item{Type: session.ItemTypeSession, Session: inst, Path: group.Path})
 			}
 		}
@@ -55,15 +55,16 @@ func matrixRecentItemsFromTree(tree *session.GroupTree) []session.Item {
 	return items
 }
 
-// matrix/hardened: older remotes without a reported visit time cannot be ranked.
+// matrix/hardened: older remotes without a submitted-interaction time are unknown;
+// their viewing/attach timestamp must not masquerade as actual input.
 func matrixRemoteAccessTime(info session.RemoteSessionInfo) time.Time {
-	at, _ := time.Parse(time.RFC3339Nano, info.LastAccessedAt)
+	at, _ := time.Parse(time.RFC3339Nano, info.LastInteractionAt)
 	return at
 }
 
 func (h *Home) matrixListActivityTime(inst *session.Instance) time.Time {
 	if h.groupViewMode == session.GroupViewRecent { // matrix/hardened: use one clock for sorting and recency windows.
-		return inst.LastAccessedAt
+		return inst.LastInteractionAt()
 	}
 	return inst.DisplayLastActivityTime()
 }
@@ -80,7 +81,7 @@ func matrixSortRecentItems(items []session.Item) []session.Item {
 	for _, item := range items {
 		switch {
 		case item.Type == session.ItemTypeSession && item.Session != nil:
-			blocks = append(blocks, block{item.Session.LastAccessedAt, "local/" + item.Session.ID, []session.Item{item}})
+			blocks = append(blocks, block{item.Session.LastInteractionAt(), "local/" + item.Session.ID, []session.Item{item}})
 		case item.Type == session.ItemTypeRemoteSession && item.RemoteSession != nil:
 			blocks = append(blocks, block{matrixRemoteAccessTime(*item.RemoteSession), "remote/" + item.RemoteName + "/" + item.RemoteSession.ID, []session.Item{item}})
 		case item.Type == session.ItemTypeWindow && len(blocks) > 0:
@@ -118,7 +119,7 @@ func (h *Home) matrixRecentEmptyState() EmptyStateConfig {
 		hints = append(hints, "0 clear status filter")
 	}
 	return EmptyStateConfig{
-		Icon: "◷", Title: "最近 / Recent", Subtitle: "No recently visited sessions matching these filters. Open a session to see it here.",
+		Icon: "◷", Title: "最近交互 / Recent interactions", Subtitle: "No confirmed interactions matching these filters. Send a message in a session to see it here.",
 		ShowSubtitleMinimal: true, ShowAllHintsMinimal: true, Hints: hints,
 	}
 }

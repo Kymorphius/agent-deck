@@ -61,6 +61,7 @@ type InstanceData struct {
 	Status                Status    `json:"status"`
 	CreatedAt             time.Time `json:"created_at"`
 	LastAccessedAt        time.Time `json:"last_accessed_at,omitempty"`
+	LastInteractionAt     time.Time `json:"last_interaction_at,omitempty"` // matrix/hardened: submitted input, never a view.
 	// LastStartedAt mirrors Instance.LastStartedAt (issue #30 / #1704 fix).
 	// Persisted via the tool_data extras zone (see last_started_persist.go),
 	// not a typed SQL column. Zero means unknown (old record or never
@@ -488,6 +489,16 @@ func (s *Storage) rememberInstanceSnapshot(inst *Instance, original, stored *sta
 		dbPath:   s.dbPath,
 		original: statedb.CloneInstanceRow(original),
 		stored:   statedb.CloneInstanceRow(stored),
+	}
+	// matrix/hardened: the merge may have retained a newer interaction from
+	// another process. Adopt that observation without treating it as an edit.
+	if stored != nil {
+		if at := ReadLastInteractionAtFromToolData(stored.ToolData); at.After(inst.lastInteractionAt) {
+			inst.lastInteractionAt = at
+		}
+		if at := ReadLastInteractionAtFromToolData(stored.ToolData); at.After(inst.lastInteractionPersisted) {
+			inst.lastInteractionPersisted = at
+		}
 	}
 	inst.mu.Unlock()
 }
@@ -1139,6 +1150,7 @@ func instanceToRow(inst *Instance) (*statedb.InstanceRow, error) {
 	// timestamp badge and preview survive a TUI restart instead of
 	// collapsing back to CreatedAt/LastAccessedAt.
 	toolData = WriteLastActivityAtToToolData(toolData, inst.LastActivityAt())
+	toolData = WriteLastInteractionAtToToolData(toolData, inst.LastInteractionAt()) // matrix/hardened
 	// PR #1942 review (P1c): the DeepSeek headless task rides the same extras
 	// zone. For a one-shot the task IS the invocation, so a row that forgets it
 	// can only ever be "restarted" into dsh's usage error.
@@ -1339,6 +1351,7 @@ func (s *Storage) LoadLite() ([]*InstanceData, []*GroupData, error) {
 			GenericSessionCommand:     genericScopeCommand(r.ToolData),
 			GenericSessionLocation:    genericScopeLocation(r.ToolData),
 			LastActivityAt:            ReadLastActivityAtFromToolData(r.ToolData),
+			LastInteractionAt:         ReadLastInteractionAtFromToolData(r.ToolData), // matrix/hardened
 			HookLag:                   ReadHookLagFromToolData(r.ToolData),
 			DeepSeekTask:              ReadDeepSeekTaskFromToolData(r.ToolData),
 			SupersededBy:              ReadCrossHarnessSupersededByFromToolData(r.ToolData),
@@ -1486,6 +1499,7 @@ func (s *Storage) LoadWithGroupsSnapshot() ([]*Instance, []*GroupData, *statedb.
 			GenericSessionCommand:     genericScopeCommand(r.ToolData),
 			GenericSessionLocation:    genericScopeLocation(r.ToolData),
 			LastActivityAt:            ReadLastActivityAtFromToolData(r.ToolData),
+			LastInteractionAt:         ReadLastInteractionAtFromToolData(r.ToolData), // matrix/hardened
 			HookLag:                   ReadHookLagFromToolData(r.ToolData),
 			DeepSeekTask:              ReadDeepSeekTaskFromToolData(r.ToolData),
 			SupersededBy:              ReadCrossHarnessSupersededByFromToolData(r.ToolData),
@@ -1804,20 +1818,22 @@ func (s *Storage) convertToInstances(data *StorageData) ([]*Instance, []*GroupDa
 			// #1846: the loaded value came from the DB, so it is by
 			// definition already persisted — seed both fields so the write
 			// throttle has an accurate baseline.
-			lastActivityAt:        instData.LastActivityAt,
-			lastActivityPersisted: instData.LastActivityAt,
-			hookLag:               instData.HookLag,
-			hookLagPersisted:      instData.HookLag,
-			hookLagDB:             s.db,
-			Sandbox:               instData.Sandbox,
-			SandboxContainer:      instData.SandboxContainer,
-			SSHHost:               instData.SSHHost,
-			SSHRemotePath:         instData.SSHRemotePath,
-			MultiRepoEnabled:      instData.MultiRepoEnabled,
-			AdditionalPaths:       instData.AdditionalPaths,
-			MultiRepoTempDir:      instData.MultiRepoTempDir,
-			tmuxSession:           tmuxSess,
-			nativeBackendData:     append(json.RawMessage(nil), instData.NativeBackend...),
+			lastActivityAt:           instData.LastActivityAt,
+			lastActivityPersisted:    instData.LastActivityAt,
+			lastInteractionAt:        instData.LastInteractionAt, // matrix/hardened
+			lastInteractionPersisted: instData.LastInteractionAt,
+			hookLag:                  instData.HookLag,
+			hookLagPersisted:         instData.HookLag,
+			hookLagDB:                s.db,
+			Sandbox:                  instData.Sandbox,
+			SandboxContainer:         instData.SandboxContainer,
+			SSHHost:                  instData.SSHHost,
+			SSHRemotePath:            instData.SSHRemotePath,
+			MultiRepoEnabled:         instData.MultiRepoEnabled,
+			AdditionalPaths:          instData.AdditionalPaths,
+			MultiRepoTempDir:         instData.MultiRepoTempDir,
+			tmuxSession:              tmuxSess,
+			nativeBackendData:        append(json.RawMessage(nil), instData.NativeBackend...),
 		}
 		if len(inst.nativeBackendData) != 0 {
 			if err := inst.MarkTerminalBackendPending(); err != nil {

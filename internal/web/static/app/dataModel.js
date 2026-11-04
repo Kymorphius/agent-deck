@@ -75,6 +75,8 @@ export function projectSession(item) {
     worktree: !!(s.worktreeBranch && s.worktreeRepoRoot),
     worktreeBranch: s.worktreeBranch || '',
     lastAccessedAt: s.lastAccessedAt || '',
+    // matrix/hardened: visits and terminal drafts do not populate this clock.
+    lastInteractionAt: s.lastInteractionAt || '',
     createdAt: s.createdAt || '',
     // Recall annotations from `agent-deck session annotate` (MenuSession.hints
     // / .tags). Open-keyed; the sidebar reads headline|purpose, status and
@@ -517,19 +519,19 @@ export const sidebarRowsSignal = computed(() => {
   return rows
 })
 
-// matrix/hardened: epoch ms of the last operator visit (TUI attach, web
-// terminal input), or 0 when never visited. Go's zero time reads as unset.
-export function visitTime(s) {
-  const t = new Date(s && s.lastAccessedAt || '').getTime()
+// matrix/hardened: epoch ms of a confirmed user submission. A visit, draft or
+// assistant output is not an interaction; old servers remain unknown.
+export function interactionTime(s) {
+  const t = new Date(s && s.lastInteractionAt || '').getTime()
   return Number.isFinite(t) && t > 0 ? t : 0
 }
 
 // matrix/hardened: same rule as the TUI (matrix_recent_view.go): only sessions
-// with a recorded visit, newest first, ties by id so the order is stable.
+// with a confirmed submission, newest first, ties by id so order is stable.
 export function recentSessionRows(sessions, filter, statuses) {
   return (sessions || [])
-    .filter((s) => visitTime(s) > 0 && sessionMatches(s, filter, statuses))
-    .sort((a, b) => (visitTime(b) - visitTime(a)) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+    .filter((s) => interactionTime(s) > 0 && sessionMatches(s, filter, statuses))
+    .sort((a, b) => (interactionTime(b) - interactionTime(a)) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
     .map((s) => ({ type: 'session', key: 's:' + s.id, id: s.id, session: s, depth: 1, groupDepth: 0 }))
 }
 

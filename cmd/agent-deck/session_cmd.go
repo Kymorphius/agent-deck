@@ -3647,6 +3647,12 @@ func handleSessionSend(profile string, args []string) {
 		recordSendEvent(profile, inst.ID, sendDetail)
 		os.Exit(1)
 	}
+	// matrix/hardened: arriving bytes or a queued inbox are not a submitted
+	// interaction. Only the transport's positive acceptance verdict advances
+	// Recent; drafts and queue-only requests returned before this path.
+	if err := recordSubmittedInteraction(inst, sendRes, sendErr, time.Now()); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: message submitted, but its interaction time could not be saved: %v\n", err)
+	}
 	recordSent()
 
 	// Self-heal Stage 1: stamp the "we talked to it" clock. A delivered send is
@@ -4310,6 +4316,15 @@ func deliveryConfirmation(delivery string) string {
 	default:
 		return send.ConfirmationFailed
 	}
+}
+
+// matrix/hardened: keep actual accepted input separate from attach/MRU access.
+// An unconfirmed delivery is later promoted only by native transcript evidence.
+func recordSubmittedInteraction(inst *session.Instance, result sendDeliveryResult, sendErr error, at time.Time) error {
+	if inst == nil || sendErr != nil || result.delivery != deliverySubmitted {
+		return nil
+	}
+	return inst.RecordInteractionAt(at)
 }
 
 // sendDeliveryResult is the prompt-state-aware outcome of executeSend.

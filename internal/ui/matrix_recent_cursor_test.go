@@ -14,13 +14,13 @@ import (
 func matrixRecentCursorHome(t *testing.T) *Home {
 	t.Helper()
 	home := matrixPinnedHome(t)
-	now := time.Now()
+	now := time.Now().Add(-time.Hour)
 	for i, inst := range home.instances {
-		inst.LastAccessedAt = now.Add(-time.Duration(i+1) * time.Minute)
+		matrixRecentInteraction(t, inst, now.Add(-time.Duration(i+1)*time.Minute))
 		inst.Status, inst.Pin = session.StatusRunning, session.PinTop
 	}
 	home.remoteSessions = map[string][]session.RemoteSessionInfo{"dev": {
-		{ID: "remote-old", Title: "old remote", Group: "work", Status: "running", Pin: matrixRemotePinPointer(session.PinTop), LastAccessedAt: now.Add(-time.Hour).Format(time.RFC3339Nano)},
+		{ID: "remote-old", Title: "old remote", Group: "work", Status: "running", Pin: matrixRemotePinPointer(session.PinTop), LastInteractionAt: now.Add(-time.Hour).Format(time.RFC3339Nano)},
 	}}
 	home.rebuildFlatItems()
 	return home
@@ -189,9 +189,9 @@ func TestMatrixRecentViewBackgroundRebuildRetainsSelectionAfterResort(t *testing
 				home.cursor = remoteSessionIndexByID(home, "remote-old")
 			}
 			selected, oldIndex := home.captureSelectedItemIdentity(), home.cursor
-			matrixPinnedInstance(t, home, "b2").LastAccessedAt = time.Now()
+			matrixRecentInteraction(t, matrixPinnedInstance(t, home, "b2"), time.Now())
 			if selection == "remote" {
-				home.remoteSessions["dev"][0].LastAccessedAt = time.Now().Add(-90 * time.Second).Format(time.RFC3339Nano)
+				home.remoteSessions["dev"][0].LastInteractionAt = time.Now().Add(-90 * time.Second).Format(time.RFC3339Nano)
 			}
 			home.rebuildFlatItemsPreservingSelection(selected)
 			if got := home.captureSelectedItemIdentity(); got != selected {
@@ -214,7 +214,7 @@ func TestMatrixRecentViewLateReloadRetainsCurrentRemoteIdentity(t *testing.T) {
 	home.runtimeSource = &matrixRuntimeUISource{}
 	home.cursor = sessionIndexByTitle(home, "b1")
 	stale := home.preserveState()
-	home.remoteSessions["dev"][0].LastAccessedAt = time.Now().Add(time.Minute).Format(time.RFC3339Nano)
+	home.remoteSessions["dev"][0].LastInteractionAt = time.Now().Add(-time.Minute).Format(time.RFC3339Nano)
 	home.Update(tea.KeyMsg{Type: tea.KeyCtrlE})
 	selected := home.captureSelectedItemIdentity()
 	if home.cursor != 0 || selected.remoteSessionID != "remote-old" {
@@ -227,7 +227,7 @@ func TestMatrixRecentViewLateReloadRetainsCurrentRemoteIdentity(t *testing.T) {
 
 	// A later background reload can move this remote's row without changing
 	// which conversation the operator is reading.
-	matrixPinnedInstance(t, home, "b2").LastAccessedAt = time.Now().Add(time.Hour)
+	matrixRecentInteraction(t, matrixPinnedInstance(t, home, "b2"), time.Now())
 	home.Update(loadSessionsMsg{instances: home.instances, restoreState: &stale})
 	if got := home.captureSelectedItemIdentity(); got != selected || home.cursor == 0 {
 		t.Fatalf("background reload followed an ordinal instead of the remote: selected=%+v cursor=%d", got, home.cursor)

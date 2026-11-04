@@ -211,13 +211,58 @@ func matrixWalkLinesBackwardComplete(path string, decide func(line []byte) (matr
 
 // matrixInterruptRecord is the subset of a Claude transcript line the scan reads.
 type matrixInterruptRecord struct {
-	Type              string `json:"type"`
-	IsSidechain       bool   `json:"isSidechain"`
+	Type        string `json:"type"`
+	IsSidechain bool   `json:"isSidechain"`
+	// matrix/hardened: synthetic context records never establish user input.
+	IsMeta            bool   `json:"isMeta"`
+	IsCompactSummary  bool   `json:"isCompactSummary"`
+	SessionID         string `json:"sessionId"`
+	Timestamp         string `json:"timestamp"`
 	IsAPIErrorMessage bool   `json:"isApiErrorMessage"`
 	Error             string `json:"error"`
 	Message           struct {
+		Role    string          `json:"role"`
 		Content json.RawMessage `json:"content"`
 	} `json:"message"`
+}
+
+// matrix/hardened: transcript timestamps, rather than file mtime or visits,
+// identify real input. A future/undated record cannot rank this conversation.
+func matrixInteractionTimestamp(raw string) time.Time {
+	at, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil || at.UnixNano() <= 0 || at.After(time.Now().Add(time.Minute)) {
+		return time.Time{}
+	}
+	return at
+}
+
+func matrixClaudeUserInteraction(rec matrixInterruptRecord) bool {
+	if rec.Type != "user" || rec.IsSidechain || rec.IsMeta || rec.IsCompactSummary || rec.SessionID == "" || rec.Message.Role != "user" {
+		return false
+	}
+	var text string
+	if json.Unmarshal(rec.Message.Content, &text) == nil {
+		return strings.TrimSpace(text) != ""
+	}
+	var blocks []struct {
+		Type   string          `json:"type"`
+		Text   string          `json:"text"`
+		Source json.RawMessage `json:"source"`
+	}
+	if json.Unmarshal(rec.Message.Content, &blocks) != nil {
+		return false
+	}
+	for _, block := range blocks {
+		if block.Type == "text" && strings.TrimSpace(block.Text) != "" {
+			return true
+		}
+		// An image/document-only submitted message is interaction too; its
+		// payload is never decoded or retained by the recent-list observer.
+		if (block.Type == "image" || block.Type == "document") && len(block.Source) > 0 && string(block.Source) != "null" {
+			return true
+		}
+	}
+	return false
 }
 
 // matrixInterruptMessage extracts the first text block, trimmed for display.
@@ -261,8 +306,19 @@ func matrixLatestTurnInterrupt(path string) (matrixTurnInterrupt, bool) {
 // matrix/hardened: partial JSON can precede a later flush at the same path;
 // retain the current verdict, but never memoize that incomplete observation.
 func matrixScanLatestTurnInterrupt(path string) (matrixTurnInterrupt, bool, bool) {
+	verdict, found, complete, _, _ := matrixScanLatestClaudeTurnFacts(path)
+	return verdict, found, complete
+}
+
+// matrix/hardened: resolve the original interruption verdict independently,
+// then keep walking to the latest genuine user record in the same bounded scan.
+func matrixScanLatestClaudeTurnFacts(path string) (matrixTurnInterrupt, bool, bool, time.Time, string) {
 	parsed := true
-	verdict, found, complete := matrixWalkLinesBackwardComplete(path, func(line []byte) (matrixTurnInterrupt, bool, bool) {
+	resolved, found := false, false
+	var verdict matrixTurnInterrupt
+	var interactionAt time.Time
+	var interactionID string
+	_, _, complete := matrixWalkLinesBackwardComplete(path, func(line []byte) (matrixTurnInterrupt, bool, bool) {
 		var rec matrixInterruptRecord
 		if json.Unmarshal(line, &rec) != nil {
 			parsed = false
@@ -271,21 +327,27 @@ func matrixScanLatestTurnInterrupt(path string) (matrixTurnInterrupt, bool, bool
 		if rec.IsSidechain {
 			return matrixTurnInterrupt{}, false, false
 		}
-		switch rec.Type {
-		case "user":
-			return matrixTurnInterrupt{}, false, true
-		case "assistant":
-			if !rec.IsAPIErrorMessage {
+		if !resolved {
+			switch rec.Type {
+			case "user":
+				resolved = true
+			case "assistant":
+				resolved = true
+				if rec.IsAPIErrorMessage {
+					verdict = matrixTurnInterrupt{Kind: strings.TrimSpace(rec.Error), Message: matrixInterruptMessage(rec.Message.Content)}
+					found = true
+				}
+			}
+		}
+		if matrixClaudeUserInteraction(rec) {
+			if at := matrixInteractionTimestamp(rec.Timestamp); !at.IsZero() {
+				interactionAt, interactionID = at, rec.SessionID
 				return matrixTurnInterrupt{}, false, true
 			}
-			return matrixTurnInterrupt{
-				Kind:    strings.TrimSpace(rec.Error),
-				Message: matrixInterruptMessage(rec.Message.Content),
-			}, true, true
 		}
 		return matrixTurnInterrupt{}, false, false // system, attachment, snapshot, ...
 	})
-	return verdict, found, complete && parsed
+	return verdict, found, complete && parsed, interactionAt, interactionID
 }
 
 // matrixCodexEvent is the subset of a Codex rollout line the scan reads.
@@ -315,8 +377,18 @@ func matrixLatestCodexTurnInterrupt(path string) (matrixTurnInterrupt, bool) {
 // matrix/hardened: keep incomplete-tail and I/O observations out of the
 // process-wide cache while preserving the existing latest-turn event rules.
 func matrixScanLatestCodexTurnInterrupt(path string) (matrixTurnInterrupt, bool, bool) {
+	verdict, found, complete, _ := matrixScanLatestCodexTurnFacts(path)
+	return verdict, found, complete
+}
+
+// matrix/hardened: task events may end a turn but only user_message proves a
+// submitted user turn. Keep both facts in one backwards pass/cache entry.
+func matrixScanLatestCodexTurnFacts(path string) (matrixTurnInterrupt, bool, bool, time.Time) {
 	parsed := true
-	verdict, found, complete := matrixWalkLinesBackwardComplete(path, func(line []byte) (matrixTurnInterrupt, bool, bool) {
+	resolved, found := false, false
+	var verdict matrixTurnInterrupt
+	var interactionAt time.Time
+	_, _, complete := matrixWalkLinesBackwardComplete(path, func(line []byte) (matrixTurnInterrupt, bool, bool) {
 		var ev matrixCodexEvent
 		if json.Unmarshal(line, &ev) != nil {
 			parsed = false
@@ -325,26 +397,42 @@ func matrixScanLatestCodexTurnInterrupt(path string) (matrixTurnInterrupt, bool,
 		if ev.Type != "event_msg" {
 			return matrixTurnInterrupt{}, false, false
 		}
-		switch ev.Payload.Type {
-		case "turn_aborted":
-			reason := strings.TrimSpace(ev.Payload.Reason)
-			if reason == "" {
-				reason = "unknown"
+		if !resolved {
+			switch ev.Payload.Type {
+			case "turn_aborted":
+				resolved, found = true, true
+				reason := strings.TrimSpace(ev.Payload.Reason)
+				if reason == "" {
+					reason = "unknown"
+				}
+				verdict = matrixTurnInterrupt{Kind: "turn_aborted", Message: reason}
+			// matrix/hardened: custom/current Codex records overload in task_complete.error.
+			case "task_complete", "turn_complete":
+				resolved = true
+				if e := ev.Payload.Error; e != nil && e.Code == "server_overloaded" && matrixIsModelCapacityMessage(e.Message) {
+					at, _ := time.Parse(time.RFC3339Nano, ev.Timestamp)
+					verdict = matrixTurnInterrupt{Kind: "server_overloaded", Message: e.Message, TurnID: ev.Payload.TurnID, At: at}
+					found = true
+				}
+			case "task_started", "turn_started", "user_message":
+				resolved = true
 			}
-			return matrixTurnInterrupt{Kind: "turn_aborted", Message: reason}, true, true
-		// matrix/hardened: custom/current Codex records overload in task_complete.error.
-		case "task_complete", "turn_complete":
-			if e := ev.Payload.Error; e != nil && e.Code == "server_overloaded" && matrixIsModelCapacityMessage(e.Message) {
-				at, _ := time.Parse(time.RFC3339Nano, ev.Timestamp)
-				return matrixTurnInterrupt{Kind: "server_overloaded", Message: e.Message, TurnID: ev.Payload.TurnID, At: at}, true, true
+		}
+		if ev.Payload.Type == "user_message" {
+			if at := matrixInteractionTimestamp(ev.Timestamp); !at.IsZero() {
+				interactionAt = at
+				return matrixTurnInterrupt{}, false, true
 			}
-			return matrixTurnInterrupt{}, false, true
-		case "task_started", "turn_started", "user_message":
-			return matrixTurnInterrupt{}, false, true
 		}
 		return matrixTurnInterrupt{}, false, false
 	})
-	return verdict, found, complete && parsed
+	return verdict, found, complete && parsed, interactionAt
+}
+
+// RefreshInteractionEvidence is the producer-side historic backfill for rows
+// that do not run a live status pass. It never samples output from View or retries.
+func (i *Instance) RefreshInteractionEvidence() {
+	i.matrixRefreshTurnInterruptWithCache(matrixInterruptFiles)
 }
 
 // matrixRefreshTurnInterrupt rescans the transcript, throttled, and caches the
@@ -381,6 +469,7 @@ func (i *Instance) matrixRefreshTurnInterruptWithCache(cache *matrixTurnInterrup
 	tool, id, _ := strings.Cut(key, ":")
 	var verdict matrixTurnInterrupt
 	var found, codexFast bool
+	var interactionAt time.Time
 	// matrix/hardened: failed discovery and a newly subagent-sourced file must
 	// publish a cleared verdict through the same key/gen guard as a good read.
 	switch tool {
@@ -391,6 +480,9 @@ func (i *Instance) matrixRefreshTurnInterruptWithCache(cache *matrixTurnInterrup
 		}
 		result := cache.load(tool, path)
 		verdict, found = result.verdict, result.found
+		if result.interactionID == id {
+			interactionAt = result.interactionAt
+		}
 	case "codex":
 		path := CodexRolloutPathForInstance(i)
 		if path == "" || !strings.HasSuffix(filepath.Base(path), "-"+id+".jsonl") {
@@ -401,12 +493,20 @@ func (i *Instance) matrixRefreshTurnInterruptWithCache(cache *matrixTurnInterrup
 			break
 		}
 		verdict, found, codexFast = result.verdict, result.found, result.codexFast
+		if result.meta.valid && result.meta.ID == id {
+			interactionAt = result.interactionAt
+		}
 	}
 
 	i.mu.Lock()
-	defer i.mu.Unlock()
-	if i.matrixTurnInterruptKeyLocked() == key && m.key == key && m.gen == gen {
+	current := i.matrixTurnInterruptKeyLocked() == key && m.key == key && m.gen == gen
+	if current {
 		m.found, m.verdict, m.codexFast = found, verdict, codexFast
+	}
+	i.mu.Unlock()
+	if current && !interactionAt.IsZero() {
+		// RecordInteractionAt owns its own lock and owning-profile write.
+		_ = i.RecordInteractionAt(interactionAt)
 	}
 }
 

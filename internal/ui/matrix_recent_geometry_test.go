@@ -21,7 +21,7 @@ func matrixRecentGeometryHome(t *testing.T, width int, density string) *Home {
 	home.flatItems = nil
 	for _, title := range []string{"a1", "a2", "a3"} {
 		inst := matrixPinnedInstance(t, home, title)
-		inst.LastAccessedAt = time.Now()
+		matrixRecentInteraction(t, inst, time.Now())
 		home.flatItems = append(home.flatItems, session.Item{Type: session.ItemTypeSession, Session: inst})
 	}
 	home.cursor, home.viewOffset = 0, 0

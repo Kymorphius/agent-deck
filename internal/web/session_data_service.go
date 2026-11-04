@@ -114,7 +114,9 @@ type MenuSession struct {
 	TmuxSocketName string    `json:"tmuxSocketName,omitempty"`
 	CreatedAt      time.Time `json:"createdAt"`
 	LastAccessedAt time.Time `json:"lastAccessedAt,omitempty"`
-	ArchivedAt     time.Time `json:"archivedAt,omitempty"`
+	// matrix/hardened: actual submissions order the Recent interactions view.
+	LastInteractionAt time.Time `json:"lastInteractionAt,omitempty"`
+	ArchivedAt        time.Time `json:"archivedAt,omitempty"`
 
 	// Fields below mirror *session.Instance state visible in the TUI
 	// EditSessionDialog. Promoted from MISSING in tests/web/PARITY_MATRIX.md
@@ -491,6 +493,7 @@ func toMenuSession(inst *session.Instance) *MenuSession {
 		TmuxSocketName:     inst.TmuxSocketName,
 		CreatedAt:          inst.CreatedAt,
 		LastAccessedAt:     inst.LastAccessedAt,
+		LastInteractionAt:  inst.LastInteractionAt(), // matrix/hardened
 		ArchivedAt:         inst.ArchivedAt,
 		IsConductor:        inst.IsConductor,
 		ClaudeSessionID:    inst.ClaudeSessionID,

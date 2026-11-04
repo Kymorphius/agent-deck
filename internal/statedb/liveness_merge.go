@@ -89,6 +89,14 @@ func isToolDataClear(value json.RawMessage) bool {
 // committed stamp wins only when both sides carry a stamp and the committed
 // paired session id is the one this caller believes it is stamping.
 func mergeLivenessToolData(key string, desired, actual map[string]json.RawMessage) (json.RawMessage, bool) {
+	if key == interactionClockKey {
+		// matrix/hardened: simultaneous input observations cannot conflict or
+		// rewind a newer confirmed interaction from another process.
+		if interactionClockStamp(desired[key]) > interactionClockStamp(actual[key]) {
+			return desired[key], true
+		}
+		return actual[key], true
+	}
 	idKey, ok := pairedSessionIDKey(key)
 	if !ok || !stickyToolDataKeys()[key] {
 		return nil, false

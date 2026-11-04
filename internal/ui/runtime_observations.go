@@ -67,8 +67,12 @@ func (h *Home) applyRuntimeObservation(snapshot session.RuntimeProfileSnapshot, 
 			continue
 		}
 		oldStatus := inst.GetStatusThreadSafe()
+		oldInteraction := inst.LastInteractionAt() // matrix/hardened: a submitted turn can leave status unchanged.
 		if !inst.ApplyRuntimeSnapshot(h.profile, row) {
 			continue
+		}
+		if !inst.LastInteractionAt().Equal(oldInteraction) {
+			changed = true // matrix/hardened: publish interaction-only updates to the menu/Web Recent list.
 		}
 		newStatus := inst.GetStatusThreadSafe()
 		if oldStatus != newStatus {

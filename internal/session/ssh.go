@@ -2991,6 +2991,9 @@ type RemoteSessionInfo struct {
 	// matrix/hardened: user visits are distinct from background output. Omitted
 	// by older remotes or sessions that have never been visited.
 	LastAccessedAt string `json:"last_accessed_at,omitempty"`
+	// matrix/hardened: confirmed prompt submissions, separate from viewing.
+	// Older remotes omit this; an absent value stays unknown for Recent.
+	LastInteractionAt string `json:"last_interaction_at,omitempty"`
 
 	// Viewers are the terminals attached to the session on the remote (its
 	// `list --json` viewers field): the "who else is viewing" indicator for

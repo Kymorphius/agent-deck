@@ -142,7 +142,8 @@ func TestMatrixViewCycleRecentStartsAtNewestMatch(t *testing.T) {
 	home := matrixPinnedHome(t)
 	now := time.Now()
 	for i, inst := range home.instances {
-		inst.Status, inst.LastAccessedAt = session.StatusRunning, now.Add(-time.Duration(i)*time.Minute)
+		inst.Status = session.StatusRunning
+		matrixRecentInteraction(t, inst, now.Add(-time.Duration(i)*time.Minute))
 	}
 	home.groupViewMode = session.GroupViewRecent
 	home.rebuildFlatItems()

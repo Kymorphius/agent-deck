@@ -158,7 +158,7 @@ function SessionItem({ s, sel, rowKey, onSelect, showCols, depth, groupDepth, re
           ${showCols.attach && skillCount > 0 && html`<span class="att-count skill">${skillCount} skill${skillCount > 1 ? 's' : ''}</span>`}
           ${showCols.sandbox && s.sandbox && html`<span class="att-count warn">docker</span>`}
           ${showCols.sandbox && s.worktree && html`<span class="att-count">worktree</span>`}
-          ${recent && html`<span class="att-count" title="Last visited (orders this list)">◷ ${formatRelativeTime(s.lastAccessedAt)}</span>`}
+          ${recent && html`<span class="att-count" title="Last interaction (orders this list)">◷ ${formatRelativeTime(s.lastInteractionAt)}</span>`}
           ${recent && s.group && html`<span class="trunc" title=${s.group}>${s.group}</span>`}
           ${!recent && showCols.lastSeen && html`<span class="att-count" title="Last active">⏱ ${s.status === 'running' ? 'active now' : formatRelativeTime(s.lastAccessedAt)}</span>`}
         </div>
@@ -196,7 +196,7 @@ export function Sidebar() {
   const filter = sidebarFilterSignal.value
   const expandedMap = groupExpandedSignal.value
   const [showMenu, setShowMenu] = useState(false)
-  // matrix/hardened: flat list by last operator visit, like the TUI's Ctrl+E.
+  // matrix/hardened: confirmed submissions, not visits, like the TUI's Ctrl+E.
   const recent = sidebarViewSignal.value === 'recent'
 
   const totalVisible = useMemo(
@@ -220,12 +220,12 @@ export function Sidebar() {
   return html`
     <div class="sidebar">
       <div class="side-head">
-        <span class="label">${recent ? '最近 RECENT' : 'SESSIONS'}</span>
+        <span class="label">${recent ? '最近交互 RECENT' : 'SESSIONS'}</span>
         <span class="count">${totalVisible}</span>
         <div class="spacer"/>
         <button class=${`icon-btn ${recent ? 'active' : ''}`}
-                title=${recent ? 'Back to groups' : '最近 / Recent: latest visited first'}
-                aria-label="Toggle recent view" aria-pressed=${recent}
+                title=${recent ? 'Back to groups' : '最近交互 / Recent interactions: latest submitted first'}
+                aria-label="Toggle recent interactions view" aria-pressed=${recent}
                 data-testid="recent-view-btn"
                 onClick=${() => (sidebarViewSignal.value = recent ? 'groups' : 'recent')}>
           <${Icon} d=${ICONS.clock}/>
@@ -301,7 +301,7 @@ export function Sidebar() {
         )}
         ${recent && sessions.length > 0 && rows.length === 0 && html`
           <div data-testid="recent-empty" style="padding: 16px; font-family: var(--mono); font-size: 11px; color: var(--muted); text-align: center;">
-            No recently visited sessions${filter || statusFilters.length ? ' matching these filters' : ''}. Open a session to see it here.
+            No recent interactions${filter || statusFilters.length ? ' matching these filters' : ''}. Submit a message in a session to see it here.
           </div>
         `}
         ${sessions.length === 0 && html`

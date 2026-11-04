@@ -66,6 +66,12 @@ func MergeToolDataExtras(oldToolData, newToolData json.RawMessage) json.RawMessa
 	sticky := stickyToolDataKeys()
 	merged := false
 	for k, v := range oldMap {
+		// matrix/hardened: interaction evidence is monotonic, including when a
+		// stale writer explicitly carries an older or empty value.
+		if k == interactionClockKey && interactionClockStamp(v) > interactionClockStamp(newMap[k]) {
+			newMap[k], merged = v, true
+			continue
+		}
 		if known[k] && !sticky[k] {
 			continue // typed schema is authoritative (except sticky identity keys)
 		}

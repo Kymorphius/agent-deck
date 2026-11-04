@@ -1,6 +1,6 @@
 package ui
 
-// matrix/hardened: recent is one timeline of actual visits across the fleet,
+// matrix/hardened: recent is one timeline of confirmed interactions across the fleet,
 // independent of group folds, background work, pins, and manual row order.
 
 import (
@@ -13,6 +13,13 @@ import (
 	"github.com/asheshgoplani/agent-deck/internal/session"
 	tea "github.com/charmbracelet/bubbletea"
 )
+
+func matrixRecentInteraction(t *testing.T, inst *session.Instance, at time.Time) {
+	t.Helper()
+	if err := inst.RecordInteractionAt(at); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func matrixRecentRows(t *testing.T, h *Home) []string {
 	t.Helper()
@@ -51,20 +58,21 @@ func matrixRecentBackgroundActivity(t *testing.T, inst *session.Instance, at tim
 	}
 }
 
-func TestMatrixRecentViewCombinesCollapsedFleetByVisitTime(t *testing.T) {
+func TestMatrixRecentViewCombinesCollapsedFleetByInteractionTime(t *testing.T) {
 	home := matrixPinnedHome(t)
 	now := time.Date(2026, 10, 17, 12, 0, 0, 500, time.UTC)
-	for _, inst := range home.instances {
-		inst.LastAccessedAt = time.Time{}
-	}
 	oldest := matrixPinnedInstance(t, home, "a1")
-	oldest.Pin, oldest.Status, oldest.LastAccessedAt = session.PinTop, session.StatusError, now.Add(-6*time.Hour)
+	oldest.Pin, oldest.Status = session.PinTop, session.StatusError
+	matrixRecentInteraction(t, oldest, now.Add(-6*time.Hour))
+	matrixPinnedInstance(t, home, "a2").LastAccessedAt = now // Viewing alone is not an interaction.
 	child := matrixPinnedInstance(t, home, "a3")
 	child.ParentSessionID, child.GroupPath = matrixPinnedInstance(t, home, "a2").ID, "alpha/deep"
-	child.LastAccessedAt, child.Status = now.Add(-2*time.Nanosecond), session.StatusIdle
-	matrixPinnedInstance(t, home, "b1").LastAccessedAt = now.Add(-3 * time.Hour)
+	child.Status = session.StatusIdle
+	matrixRecentInteraction(t, child, now.Add(-2*time.Nanosecond))
+	matrixRecentInteraction(t, matrixPinnedInstance(t, home, "b1"), now.Add(-3*time.Hour))
 	archived := matrixPinnedInstance(t, home, "b2")
-	archived.LastAccessedAt, archived.ArchivedAt = now, now
+	archived.ArchivedAt = now
+	matrixRecentInteraction(t, archived, now)
 	home.groupTree = session.NewGroupTree(home.instances)
 	groupFolds := make(map[string]bool)
 	for path, group := range home.groupTree.Groups {
@@ -72,14 +80,14 @@ func TestMatrixRecentViewCombinesCollapsedFleetByVisitTime(t *testing.T) {
 	}
 	home.remoteSessions = map[string][]session.RemoteSessionInfo{
 		"dev": {
-			{ID: "old-pin", Title: "old pin", Group: "work", Status: "error", Pin: matrixRemotePinPointer(session.PinTop), LastAccessedAt: now.Add(-4 * time.Hour).Format(time.RFC3339Nano)},
-			{ID: "child", Title: "remote child", Group: "work/deep", ParentSessionID: "unknown-parent", Status: "idle", LastAccessedAt: now.Add(-2 * time.Hour).Format(time.RFC3339Nano)},
-			{ID: "legacy", LastActivityAt: now.Format(time.RFC3339Nano)},
-			{ID: "malformed", LastAccessedAt: "not-a-timestamp", LastActivityAt: now.Format(time.RFC3339Nano)},
-			{ID: "zero", LastAccessedAt: time.Time{}.Format(time.RFC3339Nano)},
-			{ID: "archived", Archived: true, LastAccessedAt: now.Format(time.RFC3339Nano)},
+			{ID: "old-pin", Title: "old pin", Group: "work", Status: "error", Pin: matrixRemotePinPointer(session.PinTop), LastInteractionAt: now.Add(-4 * time.Hour).Format(time.RFC3339Nano)},
+			{ID: "child", Title: "remote child", Group: "work/deep", ParentSessionID: "unknown-parent", Status: "idle", LastInteractionAt: now.Add(-2 * time.Hour).Format(time.RFC3339Nano)},
+			{ID: "legacy", LastAccessedAt: now.Format(time.RFC3339Nano), LastActivityAt: now.Format(time.RFC3339Nano)},
+			{ID: "malformed", LastInteractionAt: "not-a-timestamp", LastActivityAt: now.Format(time.RFC3339Nano)},
+			{ID: "zero", LastInteractionAt: time.Time{}.Format(time.RFC3339Nano)},
+			{ID: "archived", Archived: true, LastInteractionAt: now.Format(time.RFC3339Nano)},
 		},
-		"other": {{ID: "newest", Title: "newest", Status: "running", LastAccessedAt: now.Add(-time.Nanosecond).Format(time.RFC3339Nano)}},
+		"other": {{ID: "newest", Title: "newest", Status: "running", LastInteractionAt: now.Add(-time.Nanosecond).Format(time.RFC3339Nano)}},
 	}
 	home.remoteSessionOrder = remoteOrder{"dev": {"work": {"old-pin", "child"}}}
 	home.remoteGroupsCollapsed = map[string]bool{"remotes/dev": true, "remotes/dev/work": true, "remotes/other": true}
@@ -102,7 +110,7 @@ func TestMatrixRecentViewCombinesCollapsedFleetByVisitTime(t *testing.T) {
 	}
 }
 
-func TestMatrixRecentViewFiltersUseVisitClockAndStayExact(t *testing.T) {
+func TestMatrixRecentViewFiltersUseInteractionClockAndStayExact(t *testing.T) {
 	now := time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC)
 	for _, tc := range []struct {
 		name   string
@@ -122,19 +130,22 @@ func TestMatrixRecentViewFiltersUseVisitClockAndStayExact(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			home := matrixPinnedHome(t)
 			for _, inst := range home.instances {
-				inst.Status, inst.LastAccessedAt = session.StatusRunning, now.AddDate(0, 0, -30)
+				inst.Status = session.StatusRunning
+				matrixRecentInteraction(t, inst, now.AddDate(0, 0, -30))
 				matrixRecentBackgroundActivity(t, inst, now)
 			}
-			matrixPinnedInstance(t, home, "a1").LastAccessedAt = now.Add(-2 * time.Hour)
+			matrixRecentInteraction(t, matrixPinnedInstance(t, home, "a1"), now.Add(-2*time.Hour))
 			idle := matrixPinnedInstance(t, home, "a2")
-			idle.Status, idle.LastAccessedAt = session.StatusIdle, now.Add(-time.Hour)
+			idle.Status = session.StatusIdle
+			matrixRecentInteraction(t, idle, now.Add(-time.Hour))
 			// Keep the replica consistent with the idle status used by the filter.
 			idle.ClearRuntimeSnapshot()
 			archived := matrixPinnedInstance(t, home, "b2")
-			archived.ArchivedAt, archived.LastAccessedAt = now, now.Add(-time.Hour)
+			archived.ArchivedAt = now
+			matrixRecentInteraction(t, archived, now.Add(-time.Hour))
 			home.remoteSessions = map[string][]session.RemoteSessionInfo{"dev": {
-				{ID: "fresh-visit", Group: "work", Status: "running", LastAccessedAt: now.Add(-3 * time.Hour).Format(time.RFC3339Nano), LastActivityAt: now.AddDate(0, 0, -30).Format(time.RFC3339Nano)},
-				{ID: "background-only", Group: "work", Status: "running", LastAccessedAt: now.AddDate(0, 0, -30).Format(time.RFC3339Nano), LastActivityAt: now.Format(time.RFC3339Nano)},
+				{ID: "fresh-visit", Group: "work", Status: "running", LastInteractionAt: now.Add(-3 * time.Hour).Format(time.RFC3339Nano), LastActivityAt: now.AddDate(0, 0, -30).Format(time.RFC3339Nano)},
+				{ID: "background-only", Group: "work", Status: "running", LastInteractionAt: now.AddDate(0, 0, -30).Format(time.RFC3339Nano), LastActivityAt: now.Format(time.RFC3339Nano)},
 			}}
 			home.groupViewMode, home.statusFilter, home.timeFilter, home.groupScope = session.GroupViewRecent, tc.status, tc.time, tc.scope
 			home.keepEmptyFilter = false
@@ -147,34 +158,39 @@ func TestMatrixRecentViewFiltersUseVisitClockAndStayExact(t *testing.T) {
 	}
 }
 
-func TestMatrixRecentViewActivityDoesNotMoveSessionButVisitDoes(t *testing.T) {
+func TestMatrixRecentViewActivityAndViewingDoNotMoveSessionButInteractionDoes(t *testing.T) {
 	home := matrixPinnedHome(t)
-	for _, inst := range home.instances {
-		inst.LastAccessedAt = time.Time{}
-	}
 	now := time.Now()
 	older, newer := matrixPinnedInstance(t, home, "a1"), matrixPinnedInstance(t, home, "b1")
-	older.LastAccessedAt, newer.LastAccessedAt = now.Add(-8*time.Hour), now.Add(-2*time.Hour)
+	matrixRecentInteraction(t, older, now.Add(-8*time.Hour))
+	matrixRecentInteraction(t, newer, now.Add(-2*time.Hour))
 	home.groupViewMode = session.GroupViewRecent
 	home.rebuildFlatItems()
 	matrixAssertRecentRows(t, home, "local/b1", "local/a1")
 	matrixRecentBackgroundActivity(t, older, now)
-	if !older.DisplayLastActivityTime().After(newer.LastAccessedAt) {
+	if !older.DisplayLastActivityTime().After(newer.LastInteractionAt()) {
 		t.Fatal("test did not install newer background activity")
 	}
 	home.rebuildFlatItems()
 	matrixAssertRecentRows(t, home, "local/b1", "local/a1")
 	home.markSessionVisited(older)
+	older.MarkAccessed() // Returning from a view is not a submitted message.
+	home.rebuildFlatItems()
+	matrixAssertRecentRows(t, home, "local/b1", "local/a1")
+	matrixRecentInteraction(t, older, time.Now())
 	home.rebuildFlatItems()
 	matrixAssertRecentRows(t, home, "local/a1", "local/b1")
 }
 
 func TestMatrixRecentViewSortKeepsWindowBlocksAndStableTies(t *testing.T) {
 	at := time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC)
-	older := &session.Instance{ID: "older", LastAccessedAt: at.Add(-time.Hour)}
-	newer := &session.Instance{ID: "a", LastAccessedAt: at}
-	tied := &session.Instance{ID: "z", LastAccessedAt: at}
-	remote := session.RemoteSessionInfo{ID: "same-id", LastAccessedAt: at.Format(time.RFC3339Nano)}
+	older := &session.Instance{ID: "older"}
+	newer := &session.Instance{ID: "a"}
+	tied := &session.Instance{ID: "z"}
+	remote := session.RemoteSessionInfo{ID: "same-id", LastInteractionAt: at.Format(time.RFC3339Nano)}
+	matrixRecentInteraction(t, older, at.Add(-time.Hour))
+	matrixRecentInteraction(t, newer, at)
+	matrixRecentInteraction(t, tied, at)
 	items := []session.Item{
 		{Type: session.ItemTypeSession, Session: older},
 		{Type: session.ItemTypeWindow, WindowSessionID: older.ID, WindowID: "old-0"},
@@ -210,7 +226,7 @@ func TestMatrixRecentViewHotkeyStartsNewestAndPreservesSelectionOnExit(t *testin
 	home := matrixPinnedHome(t)
 	now := time.Now()
 	for i, inst := range home.instances {
-		inst.LastAccessedAt = now.Add(-time.Duration(i) * time.Hour)
+		matrixRecentInteraction(t, inst, now.Add(-time.Duration(i)*time.Hour))
 	}
 	home.rebuildFlatItems()
 	selected := matrixPinnedInstance(t, home, "b1")
@@ -224,9 +240,7 @@ func TestMatrixRecentViewHotkeyStartsNewestAndPreservesSelectionOnExit(t *testin
 	if home.groupViewMode != session.GroupViewNormal || home.flatItems[home.cursor].Session == nil || home.flatItems[home.cursor].Session.ID != selected.ID {
 		t.Fatal("Ctrl+E did not return to normal with the same selected session")
 	}
-	for _, inst := range home.instances {
-		inst.LastAccessedAt = time.Time{}
-	}
+	home = matrixPinnedHome(t) // A fleet without any confirmed interaction.
 	home.Update(tea.KeyMsg{Type: tea.KeyCtrlE})
 	if home.groupViewMode != session.GroupViewRecent || len(home.flatItems) != 0 || home.cursor != 0 {
 		t.Fatal("a never-visited fleet did not produce an empty recent view")
@@ -259,7 +273,7 @@ func TestMatrixRecentViewPreferenceSurvivesRestart(t *testing.T) {
 	before, _ := buildTwoGroupHome(t)
 	t.Cleanup(before.cancel)
 	before.storage, before.profile, before.storageWatcher = storage, "_matrix_recent_view", nil
-	matrixPinnedInstance(t, before, "a1").LastAccessedAt = time.Now()
+	matrixRecentInteraction(t, matrixPinnedInstance(t, before, "a1"), time.Now())
 	before.Update(tea.KeyMsg{Type: tea.KeyCtrlE})
 	raw, err := storage.GetDB().GetMeta("ui_state")
 	if err != nil {
@@ -275,7 +289,7 @@ func TestMatrixRecentViewPreferenceSurvivesRestart(t *testing.T) {
 	after, _ := buildTwoGroupHome(t)
 	t.Cleanup(after.cancel)
 	after.storage, after.profile, after.storageWatcher = storage, "_matrix_recent_view", nil
-	matrixPinnedInstance(t, after, "a1").LastAccessedAt = time.Now()
+	matrixRecentInteraction(t, matrixPinnedInstance(t, after, "a1"), time.Now())
 	after.loadUIState()
 	after.rebuildFlatItems()
 	if after.groupViewMode != session.GroupViewRecent {
@@ -284,15 +298,13 @@ func TestMatrixRecentViewPreferenceSurvivesRestart(t *testing.T) {
 	matrixAssertRecentRows(t, after, "local/a1")
 }
 
-func TestMatrixRecentViewRowsShowVisitAgeWithoutOrphanConnectors(t *testing.T) {
+func TestMatrixRecentViewRowsShowInteractionAgeWithoutOrphanConnectors(t *testing.T) {
 	home := matrixPinnedHome(t)
-	for _, inst := range home.instances {
-		inst.LastAccessedAt = time.Time{}
-	}
 	accessed := time.Now().Add(-2*time.Hour - 17*time.Minute - 5*time.Second)
 	local := matrixPinnedInstance(t, home, "a1")
-	local.LastAccessedAt, local.CreatedAt = accessed, time.Now()
-	home.remoteSessions = map[string][]session.RemoteSessionInfo{"d": {{ID: "r", Title: "r", Status: "idle", LastAccessedAt: accessed.Format(time.RFC3339Nano), LastActivityAt: time.Now().Format(time.RFC3339Nano)}}}
+	local.CreatedAt = time.Now()
+	matrixRecentInteraction(t, local, accessed)
+	home.remoteSessions = map[string][]session.RemoteSessionInfo{"d": {{ID: "r", Title: "r", Status: "idle", LastInteractionAt: accessed.Format(time.RFC3339Nano), LastActivityAt: time.Now().Format(time.RFC3339Nano)}}}
 	home.groupViewMode, home.showSessionTimestamps = session.GroupViewRecent, false
 	home.rebuildFlatItems()
 	for _, embedded := range []bool{false, true} {

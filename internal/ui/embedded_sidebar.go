@@ -345,7 +345,7 @@ func (h *Home) renderEmbeddedSessionItem(
 
 	metadataParts := make([]string, 0, 6)
 	if h.groupViewMode == session.GroupViewRecent { // matrix/hardened: recent cards use the interaction clock.
-		metadataParts = append(metadataParts, formatRelativeTime(inst.LastAccessedAt))
+		metadataParts = append(metadataParts, formatRelativeTime(inst.LastInteractionAt()))
 	}
 	metadataParts = append(metadataParts, statusText)
 	if tool != "" {

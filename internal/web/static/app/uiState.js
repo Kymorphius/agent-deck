@@ -120,8 +120,8 @@ effect(() => {
 })
 
 // matrix/hardened: sidebar layout, 'groups' (the tree) or 'recent' (every
-// visited session in one list, newest operator visit first — the web mirror of
-// the TUI's 最近 / Recent view). Persisted like the other layout choices.
+// interacted session in one list, newest confirmed submission first — the web
+// mirror of the TUI's 最近交互 view). Persisted like other layout choices.
 export const sidebarViewSignal = signal(loadJSON('agentdeck.sidebarView', 'groups'))
 persist(sidebarViewSignal, 'agentdeck.sidebarView')
 

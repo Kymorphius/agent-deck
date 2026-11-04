@@ -38,7 +38,7 @@ func (m GroupViewMode) Label() string {
 	case GroupViewPinnedOnly: // matrix/hardened
 		return "Pinned only"
 	case GroupViewRecent: // matrix/hardened
-		return "最近 / Recent"
+		return "最近交互 / Recent interactions"
 	default:
 		return "Normal"
 	}

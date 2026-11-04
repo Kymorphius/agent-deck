@@ -61,7 +61,7 @@ func TestMatrixRecentHelp(t *testing.T) {
 			}
 			found := false
 			for _, line := range strings.Split(view, "\n") {
-				if strings.Contains(line, "Toggle 最近 / Recent view") {
+				if strings.Contains(line, "Toggle 最近交互 / Recent interactions") {
 					found = true
 					if tc.wantKey == "" || !strings.Contains(line, tc.wantKey) || !strings.Contains(line, "latest first") {
 						t.Fatalf("unexpected recent help row: %q", line)

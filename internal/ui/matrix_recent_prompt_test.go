@@ -15,21 +15,22 @@ func TestMatrixRecentOperatorPromptCompletion(t *testing.T) {
 		t.Run(outcome, func(t *testing.T) {
 			h, inst := armHomeWithRunningClaudeSession(t, "claude")
 			old := time.Now().Add(-time.Hour)
-			inst.LastAccessedAt = old
+			matrixRecentInteraction(t, inst, old)
 			msg := matrixRecentPromptResultMsg{instance: inst, target: inst.GetTmuxSession()}
 			if outcome == "failed" {
 				msg.err = errors.New("refused")
 			}
 			if outcome == "replaced" {
-				msg.instance = &session.Instance{ID: inst.ID, LastAccessedAt: old}
+				msg.instance = &session.Instance{ID: inst.ID}
+				matrixRecentInteraction(t, msg.instance, old)
 			}
 			h.updateInner(msg)
 			if outcome == "accepted" {
-				if !inst.LastAccessedAt.After(old) {
-					t.Fatal("confirmed inline prompt did not update the visit time")
+				if !inst.LastInteractionAt().After(old) {
+					t.Fatal("confirmed inline prompt did not update the interaction time")
 				}
-			} else if !inst.LastAccessedAt.Equal(old) {
-				t.Fatal("failed or obsolete prompt changed the visit time")
+			} else if !inst.LastInteractionAt().Equal(old) {
+				t.Fatal("failed or obsolete prompt changed the interaction time")
 			}
 		})
 	}

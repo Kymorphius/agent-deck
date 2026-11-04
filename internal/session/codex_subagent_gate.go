@@ -55,6 +55,7 @@ import (
 // codexThreadMeta is the subset of a rollout's session_meta payload the
 // gate/safety-net decisions need.
 type codexThreadMeta struct {
+	ID             string // matrix/hardened: exact native identity for user-input evidence.
 	ThreadSource   string
 	ParentThreadID string
 	valid          bool
@@ -187,6 +188,8 @@ func readCodexRolloutThreadMeta(path string) codexThreadMeta {
 	var head struct {
 		Type    string `json:"type"`
 		Payload struct {
+			ID             string          `json:"id"`
+			SessionID      string          `json:"session_id"`
 			ThreadSource   string          `json:"thread_source"`
 			ParentThreadID string          `json:"parent_thread_id"`
 			Source         json.RawMessage `json:"source"`
@@ -197,9 +200,17 @@ func readCodexRolloutThreadMeta(path string) codexThreadMeta {
 	}
 
 	meta := codexThreadMeta{
+		ID:             head.Payload.ID,
 		ThreadSource:   head.Payload.ThreadSource,
 		ParentThreadID: head.Payload.ParentThreadID,
 		valid:          true,
+	}
+	if meta.ID == "" {
+		meta.ID = head.Payload.SessionID
+	} else if head.Payload.SessionID != "" && head.Payload.SessionID != meta.ID {
+		// matrix/hardened: conflicting native selectors cannot prove input
+		// ownership, while legacy interruption metadata remains usable.
+		meta.ID = ""
 	}
 	// Older payloads carry parenthood only inside source.subagent.thread_spawn.
 	if meta.ParentThreadID == "" && len(head.Payload.Source) > 0 {

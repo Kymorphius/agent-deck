@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.135`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.137`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -66,7 +66,7 @@
 - `internal/session/claude_hooks.go`：`isAgentDeckHookCommand` 的判断规则：先去掉开头的 `VAR=值`，再要求第二个词是 `hook-handler`、程序名的文件名部分是 `agent-deck`。`RemoveClaudeHooks` 会扫描全部事件，并做 UTC 时间戳备份（约 387–414 行）。
 - `cmd/agent-deck/main.go`（约 4845、5070 行）：`agent-deck uninstall` 会移除这些钩子。`uninstall.sh` 第 253 行附近的 jq 过滤用的是同一套规则（正则），写回时用 `cat >` 保持软链接和权限。
 
-**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.135`。
+**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.137`。
 
 **测试**：以 `_hardened_test.go` 结尾的文件、`update_check_disable_test.go`、`update_timer_wiring_test.go` 等是新增或调整过的测试；`testdata/goldens/*` 里的快照已经按加固后的输出更新。
 
@@ -1111,3 +1111,11 @@ snapshots, compatibility, and validation boundaries.
 - **实测**（本机 184 个会话：122 error、42 stopped、20 存活）：`list --json --stats` 的 tmux 调用 181 → 24，status pass 约 1.6–1.9 s → 0.2 s，进程 user+sys 约 1.8 s → 0.3 s；新旧输出去掉活动时间后逐字段一致。没有请求、没有 pane watch 的空闲 remote-agent 30 秒 CPU 9.5 s → 2.6 s（约 31% → 8%）。剩余主要是每轮对存活会话的 `capture-pane`。
 - **测试**：`list_status_test.go` 的 `TestCLIStatusCandidatesNotesListingAbsence`（40 个缺席 error 行零 `has-session`，列表中存在的会话不记缺席）；`runtime_auth_hold_test.go` 的 `TestRuntimeAuthHoldHealthyClearSkipsGuardWithoutSidecar`（在已关闭的 DB 句柄上，无记录时不进守卫；有可删记录时仍要求守卫且记录保留）。两项在修复前都失败。
 - **部署**：remote-agent 服务的是别的设备，每台都装新版才各自受益。版本比较忽略 `+matrix.N` 构建号（只有 `+local.` 构建会触发），所以即使 `[updates].auto_restart = true`，旧 remote-agent 也不会自己换新版本。安装后在没有子进程（没有在途请求）时结束本机的旧 `agent-deck remote-agent` 进程即可：连接方随即以新版本重连，不必重启对方的 TUI 或 Web，2026-11-04 本机实测两条远程连接都在数秒内重连。monitor、Web 和 TUI 是常驻进程，原本就复用内存中的记忆，本项对它们影响很小。实际连接下每个 remote-agent 约 29% → 7%。
+
+## 110. 最近交互不再把查看算作提交
+
+- **问题**：`LastAccessedAt` 记录进入、退出和访问保护，不能代表真正交互。只看一眼也会使原“最近”列表重排；它又用于 MRU 和自动休眠保护，不能直接停止更新。
+- **matrix/hardened:** `matrix.137` 将现有 Recent 明确为“最近交互”，排序、成员、年龄和时间筛选统一使用独立的 `LastInteractionAt`。查看、离开、草稿、助手输出、排队但未提交的内容都不更新此钟。CLI 只接受已确认提交的结果，列表提示只接受仍属当前目标的成功提交；原生 Claude/Codex 在生产者的现有有界后扫和文件签名缓存中识别真实主对话用户消息，使用原记录时间而非文件修改时间。停止／归档会话也可从可核验历史补录，不启动终端。
+- **matrix/hardened:** 新钟以纳秒整数保存到 `tool_data.last_interaction_at`，不改表结构；目标写入、完整保存、快照合并及写入 SQL 边界都保持最大值，避免晚到保存回退。日志解析仍核对原生 ID、主线程和当前绑定代际；读取中被改写／替换的文件不建立新交互事实。只保留时间，不复制消息正文。
+- **matrix/hardened:** CLI、core session.list、remote-agent、monitor、TUI 和 Web 都传递同一 `last_interaction_at`。旧数据／旧远端缺字段视为未知，不拿访问、创建或助手活动时间补值；历史补录限于现有有界扫描可确认的用户记录，不能声称完整恢复全部历史。管理生产者和远程通道需加载新版，现有 AI 会话无需重启。
+- **验证**：真实私有 PTY 对照旧版与新版，依次检查无输入查看、助手输出、未按 Enter 的草稿保持原顺序，实际正文＋Enter 后才提升位置且光标跟随。数据库全套与并发边界、原生日志身份／缓存、关闭会话补录、CLI 提交判定、runtime 仅时间变化、TUI 排序／搜索／光标、Web 与远程字段均有定向回归，关键数据竞争另跑 race。
