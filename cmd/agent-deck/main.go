@@ -45,7 +45,7 @@ import (
 )
 
 // matrix/hardened: identifies our hardened build.
-var Version = "1.16.26+matrix.137" // matrix/hardened: Recent follows confirmed user interaction rather than viewing; overridden via -ldflags.
+var Version = "1.16.26+matrix.138" // matrix/hardened: remote-agent listings reuse the host monitor and fresh loads keep current session links unwritten; overridden via -ldflags.
 
 // Table column widths for list command output
 const (

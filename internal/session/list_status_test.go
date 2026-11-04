@@ -48,13 +48,15 @@ func TestCLIStatusCandidatesNotesListingAbsence(t *testing.T) {
 		inst.tmuxSession = tmux.ReconnectSessionLazy(fmt.Sprintf("absent-error-%d", i), inst.Title, inst.ProjectPath, "", "inactive")
 		instances = append(instances, inst)
 	}
+	stopped := &Instance{Title: "stopped", Status: StatusStopped}
+	stopped.tmuxSession = tmux.ReconnectSessionLazy("absent-stopped", stopped.Title, stopped.ProjectPath, "", "inactive")
 	live := &Instance{Title: "live", Status: StatusError}
 	live.tmuxSession = tmux.ReconnectSessionLazy(bootstrapSessionName, live.Title, live.ProjectPath, "", "inactive")
-	instances = append(instances, live)
+	instances = append(instances, live, stopped)
 
 	refresh, cached := CLIStatusCandidates(instances)
-	if len(refresh) != rows+1 || len(cached) != 0 {
-		t.Fatalf("refresh=%d cached=%d, want %d and 0", len(refresh), len(cached), rows+1)
+	if len(refresh) != rows+1 || len(cached) != 1 || !cached[stopped] {
+		t.Fatalf("refresh=%d cached=%d, want %d and only the stopped row", len(refresh), len(cached), rows+1)
 	}
 	if live.tmuxSession.KnownAbsent() {
 		t.Fatal("a session present in the listing was noted absent")
@@ -68,7 +70,7 @@ func TestCLIStatusCandidatesNotesListingAbsence(t *testing.T) {
 		return 0
 	}
 	before := hasSession()
-	for _, inst := range instances[:rows] {
+	for _, inst := range append(instances[:rows:rows], stopped) {
 		if !inst.tmuxSession.KnownAbsent() {
 			t.Fatalf("%s: listing absence was not noted", inst.Title)
 		}

@@ -50,7 +50,13 @@ func CLIStatusCandidates(instances []*Instance) ([]*Instance, map[*Instance]bool
 			cached[inst] = true
 			continue
 		}
-		if _, exists := listing(sess.SocketName)[sess.Name]; !exists {
+		names := listing(sess.SocketName)
+		if _, exists := names[sess.Name]; !exists {
+			// matrix/hardened: later passes over this row (`group list`
+			// counts call UpdateStatus) reuse the same verdict without a fork.
+			if names != nil {
+				sess.NoteAbsentFromListing()
+			}
 			cached[inst] = true
 			continue
 		}

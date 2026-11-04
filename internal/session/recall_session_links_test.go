@@ -146,3 +146,59 @@ func TestUpdateHookStatus_BothLinkWritersProduceARow(t *testing.T) {
 		t.Fatalf("links after reject = %+v; want only authoritative %s (rejected %s retracted)", links, minted, foreign)
 	}
 }
+
+// matrix/hardened: a freshly loaded row confirming the link it already holds
+// must not rewrite it (each `list --json` and remote-agent probe used to
+// commit one row per Claude session); a demoted link is still restored.
+func TestUpdateHookStatus_FreshLoadKeepsCurrentLinkUnwritten(t *testing.T) {
+	const profile = "_test_recall_links_fresh"
+	_, storage := bootstrapDaemonProfile(t, profile)
+	db := storage.GetDB()
+	projDir := filepath.Join(os.Getenv("HOME"), "realproject")
+	if err := os.MkdirAll(projDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const minted = "44444444-4444-4444-8444-444444444444"
+	seed := &Instance{
+		ID: "inst-recall-fresh", Title: "fresh", ProjectPath: projDir, GroupPath: DefaultGroupPath,
+		Tool: "claude", Status: StatusRunning, CreatedAt: time.Now(), ClaudeSessionID: minted,
+	}
+	if err := storage.SaveWithGroups([]*Instance{seed}, nil); err != nil {
+		t.Fatal(err)
+	}
+	hook := func() *HookStatus {
+		return &HookStatus{Status: "running", SessionID: minted, Event: "PreToolUse", UpdatedAt: time.Now(), Cwd: projDir}
+	}
+	seed.UpdateHookStatus(hook())
+	lastSeen := func() (int64, bool) {
+		links, err := db.ListSessionLinks(seed.ID)
+		if err != nil || len(links) != 1 {
+			t.Fatalf("links = %+v, %v; want one", links, err)
+		}
+		return links[0].LastSeen, links[0].Authoritative
+	}
+	if _, auth := lastSeen(); !auth {
+		t.Fatal("first confirmation did not write an authoritative link")
+	}
+	if _, err := db.DB().Exec(`UPDATE session_links SET last_seen = 1000 WHERE session_id = ?`, seed.ID); err != nil {
+		t.Fatal(err)
+	}
+	fresh := func() *Instance {
+		instances, _, err := storage.LoadWithGroups()
+		if err != nil || len(instances) != 1 {
+			t.Fatalf("reload: %d, %v", len(instances), err)
+		}
+		return instances[0]
+	}
+	fresh().UpdateHookStatus(hook())
+	if seen, auth := lastSeen(); seen != 1000 || !auth {
+		t.Fatalf("fresh load rewrote a current link: last_seen=%d authoritative=%v", seen, auth)
+	}
+	if _, err := db.DB().Exec(`UPDATE session_links SET authoritative = 0 WHERE session_id = ?`, seed.ID); err != nil {
+		t.Fatal(err)
+	}
+	fresh().UpdateHookStatus(hook())
+	if seen, auth := lastSeen(); seen == 1000 || !auth {
+		t.Fatalf("demoted link was not restored: last_seen=%d authoritative=%v", seen, auth)
+	}
+}

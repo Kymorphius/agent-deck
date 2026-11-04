@@ -13064,6 +13064,15 @@ func (i *Instance) confirmClaudeSessionLink(sessionID, hookSource string) {
 	if db == nil {
 		return
 	}
+	// matrix/hardened: a freshly loaded row (every `list --json` process and
+	// every remote-agent probe) has no memo yet. Rewriting the identical
+	// authoritative link on each load committed ~50 rows per pass, kept the
+	// state DB stamp moving and so kept every remote-agent probing. Only an
+	// absent, demoted or contested link needs the write.
+	if links, err := db.ListSessionLinks(i.ID); err == nil && claudeSessionLinkCurrent(links, sessionID) {
+		i.linkedClaudeSessionID = sessionID
+		return
+	}
 	if err := db.UpsertSessionLink(i.ID, "claude", sessionID, "", true, i.producerGuardArgs()...); err != nil {
 		sessionLog.Warn("claude_session_link_confirm_failed",
 			slog.String("instance_id", i.ID),
@@ -13073,6 +13082,27 @@ func (i *Instance) confirmClaudeSessionLink(sessionID, hookSource string) {
 		return
 	}
 	i.linkedClaudeSessionID = sessionID
+}
+
+// claudeSessionLinkCurrent reports whether links already hold exactly what
+// confirming sessionID would write: it is the instance's one authoritative
+// Claude link.
+func claudeSessionLinkCurrent(links []statedb.SessionLink, sessionID string) bool {
+	found := false
+	for _, l := range links {
+		if l.Harness != "claude" {
+			continue
+		}
+		if l.NativeID == sessionID {
+			if !l.Authoritative {
+				return false
+			}
+			found = true
+		} else if l.Authoritative {
+			return false
+		}
+	}
+	return found
 }
 
 // retractClaudeCandidateLink drops the recall session_links row of a

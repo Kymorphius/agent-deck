@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/asheshgoplani/agent-deck/internal/logging"
+	"github.com/asheshgoplani/agent-deck/internal/monitor"
 	"github.com/asheshgoplani/agent-deck/internal/session"
 	"github.com/asheshgoplani/agent-deck/internal/statedb"
 	"github.com/asheshgoplani/agent-deck/internal/update"
@@ -254,13 +255,28 @@ func handleRemoteAgent(profile string, args []string) {
 		fmt.Fprintln(os.Stderr, "remote-agent: a global state DB is registered; the probe would write last-activity rows")
 		os.Exit(1)
 	}
-	probe, closeProbe, err := newRemoteAgentProbe(profile)
+	// matrix/hardened: listings reuse this host's running monitor (never
+	// started from here); see matrix_remote_agent_monitor.go.
+	var runtime session.RuntimeObservationSource
+	if paths, err := monitor.Paths(); err == nil {
+		client := monitor.NewClient(paths.Socket, nil)
+		defer client.Close()
+		runtime = client
+	}
+	lister, err := newRemoteAgentLister(profile, runtime)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "remote-agent: %v\n", err)
 		os.Exit(1)
 	}
-	defer closeProbe()
+	defer lister.close()
 	runner := func(ctx context.Context, reqArgs []string) (string, string, int) {
+		// matrix/hardened: the channel's own list poll is answered from the
+		// monitor's verdicts when it can be; otherwise the CLI runs as before.
+		if withStats, ok := remoteAgentListPoll(reqArgs); ok {
+			if out, errOut, ok := lister.answerList(withStats); ok {
+				return out, errOut, 0
+			}
+		}
 		full := append([]string{"-p", profile}, reqArgs...)
 		// The peer is the ssh-authenticated user who could run any of these
 		// verbs as `ssh host agent-deck ...` anyway; the verb is checked
@@ -281,7 +297,7 @@ func handleRemoteAgent(profile string, args []string) {
 	}
 	serveRemoteAgent(context.Background(), os.Stdin, os.Stdout, remoteAgentConfig{
 		Run:         runner,
-		Probe:       probe,
+		Probe:       lister.probe,
 		WatchPath:   dbPath,
 		WatchEvery:  remoteAgentStampEvery,
 		Capture:     remoteAgentPaneCapturer(profile),
@@ -316,29 +332,15 @@ func newRemoteAgentBinaryWatch(self string) *update.Watcher {
 // startup and this process never does (handleRemoteAgent checks), so the
 // flush is a no-op here and a probe never moves the stamp the watcher
 // compares. TestRemoteAgent_InProcessProbeMatchesCLI pins this.
+//
+// matrix/hardened: this is the lister without a monitor; handleRemoteAgent
+// builds one with the host's monitor so probes reuse its verdicts.
 func newRemoteAgentProbe(profile string) (remoteAgentProbeFunc, func(), error) {
-	storage, err := session.NewStorageWithProfile(profile)
+	lister, err := newRemoteAgentLister(profile, nil)
 	if err != nil {
 		return nil, nil, err
 	}
-	probe := func() (string, string, error) {
-		instances, groups, err := storage.LoadWithGroups()
-		if err != nil {
-			return "", "", err
-		}
-		refresh, cached := session.CLIStatusCandidates(instances)
-		session.RefreshInstancesForCLIStatus(refresh)
-		l, err := buildListJSON(storage.Profile(), instances, cached)
-		if err != nil {
-			return "", "", err
-		}
-		g, err := buildGroupListJSON(session.NewGroupTreeWithGroups(instances, groups))
-		if err != nil {
-			return "", "", err
-		}
-		return string(l), string(g), nil
-	}
-	return probe, func() { _ = storage.Close() }, nil
+	return lister.probe, lister.close, nil
 }
 
 // remoteAgentPaneCapturer returns a capture func that reads the watched
