@@ -1100,3 +1100,14 @@ snapshots, compatibility, and validation boundaries.
 - **问题**：进入／退出会话会更新访问时间，但 attach 返回消息之前的远程刷新、Claude 标题同步等普通重建路径只保留旧行号；返回消息再按身份恢复时，捕获到的已经是旧位置上的其它会话。
 - **matrix/hardened:** `matrix.135` 将 Recent 的普通 `rebuildFlatItems()` 统一为先捕获身份、再重建恢复，并同步视口。身份包含本机会话 ID、远程设备＋ID、窗口所属会话＋窗口索引；窗口消失时沿用原有父会话回退。显式切换进入 Recent 继续走原始重建，从最新一行开始；普通分组视图保持原行为。
 - **测试**：`matrix_recent_return_cursor_test.go` 复现访问后重排及远程刷新先于返回消息的次序，验证本机／多远端同 ID、窗口与视口定位；既有 Recent 入口重置、后台刷新、数字列与设备间距回归继续覆盖原语义。修复只改变列表选择，不启动、恢复或重启会话。
+
+## 109. 新加载的状态刷新不再逐行探测与重读会话库
+
+- **问题**：会话多、error 行多的机器上，每个 `agent-deck remote-agent`（其它设备连进来时各起一个）常驻约 30% CPU，几台设备互连时合计接近一个核。两处开销只出现在“每次重新加载会话”的路径上：每个 `list --json` 子进程，以及 remote-agent 每轮约 2–4 秒一次的推送探测（TUI 心跳每 2 秒写库，探测因此几乎不停）。
+  1. 缺席记忆（第 86 节）和 error 的 30 秒复查都挂在内存对象上，新加载的行用不上，每个已消失的会话每轮都 fork 一次 `has-session`；
+  2. 每个健康会话刷新时都会清理认证 hold 记录。普通 CLI 没有监控围栏，写入守卫为此读一次水位并重新加载整个会话库（含 JSON 解析与模式编译），活会话有几个就加载几次，而绝大多数时候根本没有记录可删。
+- **matrix/hardened:** `matrix.136` 起 `CLIStatusCandidates` 对每个用到的 socket 只列一次 `list-sessions`。非 stopped 行若不在这份完整列表里，就通过 `NoteAbsentFromListing` 写入缺席记忆，随后的状态刷新得到与 `has-session` 相同的结论而不 fork。列表失败或超时不写记忆，仍按原来逐个探测；stopped 行的既有处理不变。`ProbeExists` 仍是权威、不读记忆的探测，进程内任何正面证据照旧立刻清除记忆。
+- **matrix/hardened:** `clearObserved` 在非显式停止时先检查两个记录路径；都没有文件就直接返回，不进写入守卫。只要有记录（不论归属），照旧走守卫，因此旧 launch 不能删除新 launch 的记录、晚到的旧探测仍得到 stale。读取失败也走原路径。显式停止的删除不变。
+- **实测**（本机 184 个会话：122 error、42 stopped、20 存活）：`list --json --stats` 的 tmux 调用 181 → 24，status pass 约 1.6–1.9 s → 0.2 s，进程 user+sys 约 1.8 s → 0.3 s；新旧输出去掉活动时间后逐字段一致。没有请求、没有 pane watch 的空闲 remote-agent 30 秒 CPU 9.5 s → 2.6 s（约 31% → 8%）。剩余主要是每轮对存活会话的 `capture-pane`。
+- **测试**：`list_status_test.go` 的 `TestCLIStatusCandidatesNotesListingAbsence`（40 个缺席 error 行零 `has-session`，列表中存在的会话不记缺席）；`runtime_auth_hold_test.go` 的 `TestRuntimeAuthHoldHealthyClearSkipsGuardWithoutSidecar`（在已关闭的 DB 句柄上，无记录时不进守卫；有可删记录时仍要求守卫且记录保留）。两项在修复前都失败。
+- **部署**：remote-agent 服务的是别的设备，每台都装新版才各自受益。`[updates].auto_restart = true` 时，旧 remote-agent 在磁盘出现新版本且空闲时自行退出，连接方下次请求自动重连新版本。monitor、Web 和 TUI 是常驻进程，原本就复用内存中的记忆，本项对它们影响很小。

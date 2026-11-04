@@ -321,3 +321,40 @@ func TestRuntimeAuthHoldLocalStopRejectsSidecarBeforeDBSave(t *testing.T) {
 		t.Fatal("local stopped gate held before DB save")
 	}
 }
+
+// matrix/hardened: a healthy plain-CLI observation with no sidecar to remove
+// must not take the guard, whose registry reload ran once per healthy session
+// on every fresh status pass. A removable record still goes through it.
+func TestRuntimeAuthHoldHealthyClearSkipsGuardWithoutSidecar(t *testing.T) {
+	owner, _, seed := runtimeAuthHoldFixture(t, "auth-clear-no-sidecar")
+	db, err := statedb.Open(owner.dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cli := runtimeAuthLoad(t, &Storage{db: db, dbPath: owner.dbPath, profile: owner.profile})
+	cli.mu.Lock()
+	scope := cli.authHoldScopeLocked()
+	cli.mu.Unlock()
+	if scope.producer || scope.fence != nil || scope.db == nil || scope.profile == "" {
+		t.Fatalf("fixture is not a plain CLI scope: %+v", scope)
+	}
+	// A closed handle makes any guard attempt fail loudly.
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := scope.clearObserved(false); err != nil {
+		t.Fatalf("clear without a sidecar took the guard: %v", err)
+	}
+
+	runtimeAuthProbe(t, owner, seed, scope.probeAt.Add(-time.Minute))
+	if !seed.noteAuthHoldLocked(AuthHoldReasonDeath, "earlier 401") {
+		t.Fatal("seed could not arm its hold")
+	}
+	path := authHoldRecordPathForProfile(owner.profile, seed.ID)
+	if err := scope.clearObserved(false); err == nil {
+		t.Fatal("removable record was cleared without the guard")
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("record removed without the guard: %v", err)
+	}
+}

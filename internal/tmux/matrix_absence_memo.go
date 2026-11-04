@@ -42,6 +42,18 @@ func (s *Session) matrixNoteAbsent() {
 	m.until = time.Now().Add(m.backoff)
 }
 
+// NoteAbsentFromListing records that a complete `list-sessions` on this
+// session's own socket did not contain it. matrix/hardened: that listing is the
+// same completed absence verdict a has-session probe would fork for, so a
+// freshly loaded row (a `list --json` process, a remote-agent probe) does not
+// pay one has-session per long-dead session. Callers must only pass a
+// successful listing; a failed or timed-out one proves nothing.
+func (s *Session) NoteAbsentFromListing() {
+	if s != nil {
+		s.matrixNoteAbsent()
+	}
+}
+
 func (s *Session) matrixNotePresent() {
 	s.absentMu.Lock()
 	s.absent = matrixAbsentMemo{}

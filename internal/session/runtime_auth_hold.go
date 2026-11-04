@@ -241,7 +241,35 @@ func (s authHoldScope) clearObserved(explicitStop bool) error {
 	if explicitStop {
 		return action()
 	}
+	// matrix/hardened: the fence only protects a removal. With no sidecar at
+	// either path there is nothing to fence, and a plain CLI's guard reloads
+	// the whole registry: once per healthy session on every fresh status pass
+	// (`list --json`, each remote-agent probe), which dominated their CPU. A
+	// record written after this read is newer than the probe and would be kept
+	// anyway; a failed read falls through to the guarded path.
+	if present, err := s.anySidecar(); err == nil && !present {
+		return nil
+	}
 	return s.guard(action)
+}
+
+// anySidecar reports whether a record exists at either path clearObserved
+// would consider, without judging ownership.
+func (s authHoldScope) anySidecar() (bool, error) {
+	paths := []string{authHoldRecordPathForProfile(s.profile, s.id)}
+	if s.profile != "" {
+		paths = append(paths, authHoldRecordPath(s.id))
+	}
+	for _, path := range paths {
+		rec, err := readAuthHoldRecordAt(path)
+		if err != nil {
+			return false, err
+		}
+		if rec != nil {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func authHoldObservationStale(err error) bool { return errors.Is(err, statedb.ErrObservationStale) }
