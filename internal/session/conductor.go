@@ -2701,7 +2701,7 @@ func systemdUserAvailable() bool {
 	// Check 2: loginctl show-user verifies systemd-logind manages this user
 	if err := exec.Command("loginctl", "show-user", "--no-pager").Run(); err != nil {
 		// Fallback: try daemon-reload (loginctl may not be available)
-		return exec.Command("systemctl", "--user", "daemon-reload").Run() == nil
+		return serviceManagerCommand("systemctl", "--user", "daemon-reload").Run() == nil
 	}
 
 	return true
@@ -2739,11 +2739,11 @@ func installBridgeDaemonLaunchd() (string, error) {
 	if err := os.MkdirAll(filepath.Join(homeDir, "Library", "LaunchAgents"), 0o755); err != nil {
 		return "", fmt.Errorf("failed to create LaunchAgents dir: %w", err)
 	}
-	_ = exec.Command("launchctl", "unload", plistPath).Run()
+	_ = serviceManagerCommand("launchctl", "unload", plistPath).Run()
 	if err := os.WriteFile(plistPath, []byte(plistContent), 0o644); err != nil {
 		return "", fmt.Errorf("failed to write plist: %w", err)
 	}
-	if err := exec.Command("launchctl", "load", plistPath).Run(); err != nil {
+	if err := serviceManagerCommand("launchctl", "load", plistPath).Run(); err != nil {
 		return plistPath, fmt.Errorf("plist written but failed to load daemon: %w", err)
 	}
 	return plistPath, nil
@@ -2772,7 +2772,7 @@ func installBridgeDaemonSystemd() (string, error) {
 		condDir, _ := ConductorDir()
 		return "", fmt.Errorf("systemd user session not available (common in containers/VMs without lingering); run manually: python3 %s/bridge.py", condDir)
 	}
-	if err := exec.Command("systemctl", "--user", "enable", "--now", systemdBridgeServiceName).Run(); err != nil {
+	if err := serviceManagerCommand("systemctl", "--user", "enable", "--now", systemdBridgeServiceName).Run(); err != nil {
 		return unitPath, fmt.Errorf("unit written but enable failed: %w", err)
 	}
 	return unitPath, nil
@@ -2796,7 +2796,7 @@ func InstallTransitionNotifierDaemon() (string, error) {
 var (
 	transitionNotifierManagerName = launchctlManagerName
 	transitionNotifierIsRunning   = IsTransitionNotifierDaemonRunning
-	runLaunchctl                  = func(args ...string) error { return exec.Command("launchctl", args...).Run() }
+	runLaunchctl                  = func(args ...string) error { return serviceManagerCommand("launchctl", args...).Run() }
 )
 
 // launchctlManagerName returns the current launchd domain's manager name —
@@ -2805,7 +2805,7 @@ var (
 // daemon, which is where a conductor session runs). Empty if launchctl is
 // unavailable or errors.
 func launchctlManagerName() string {
-	out, err := exec.Command("launchctl", "managername").Output()
+	out, err := serviceManagerCommand("launchctl", "managername").Output()
 	if err != nil {
 		return ""
 	}
@@ -2883,7 +2883,7 @@ func installTransitionNotifierSystemd() (string, error) {
 	if !systemdUserAvailable() {
 		return "", fmt.Errorf("systemd user session not available; run manually: agent-deck notify-daemon")
 	}
-	if err := exec.Command("systemctl", "--user", "enable", "--now", systemdTransitionNotifierServiceName).Run(); err != nil {
+	if err := serviceManagerCommand("systemctl", "--user", "enable", "--now", systemdTransitionNotifierServiceName).Run(); err != nil {
 		return unitPath, fmt.Errorf("unit written but enable failed: %w", err)
 	}
 	return unitPath, nil
@@ -2910,12 +2910,12 @@ func uninstallBridgeDaemonLaunchd() error {
 	if _, err := os.Stat(plistPath); os.IsNotExist(err) {
 		return nil
 	}
-	_ = exec.Command("launchctl", "unload", plistPath).Run()
+	_ = serviceManagerCommand("launchctl", "unload", plistPath).Run()
 	return os.Remove(plistPath)
 }
 
 func uninstallBridgeDaemonSystemd() error {
-	_ = exec.Command("systemctl", "--user", "disable", "--now", systemdBridgeServiceName).Run()
+	_ = serviceManagerCommand("systemctl", "--user", "disable", "--now", systemdBridgeServiceName).Run()
 	unitPath, err := SystemdBridgeServicePath()
 	if err != nil {
 		return err
@@ -2926,7 +2926,7 @@ func uninstallBridgeDaemonSystemd() error {
 	if err := os.Remove(unitPath); err != nil {
 		return err
 	}
-	_ = exec.Command("systemctl", "--user", "daemon-reload").Run()
+	_ = serviceManagerCommand("systemctl", "--user", "daemon-reload").Run()
 	return nil
 }
 
@@ -2951,12 +2951,12 @@ func uninstallTransitionNotifierLaunchd() error {
 	if _, err := os.Stat(plistPath); os.IsNotExist(err) {
 		return nil
 	}
-	_ = exec.Command("launchctl", "unload", plistPath).Run()
+	_ = serviceManagerCommand("launchctl", "unload", plistPath).Run()
 	return os.Remove(plistPath)
 }
 
 func uninstallTransitionNotifierSystemd() error {
-	_ = exec.Command("systemctl", "--user", "disable", "--now", systemdTransitionNotifierServiceName).Run()
+	_ = serviceManagerCommand("systemctl", "--user", "disable", "--now", systemdTransitionNotifierServiceName).Run()
 	unitPath, err := SystemdTransitionNotifierServicePath()
 	if err != nil {
 		return err
@@ -2967,7 +2967,7 @@ func uninstallTransitionNotifierSystemd() error {
 	if err := os.Remove(unitPath); err != nil {
 		return err
 	}
-	_ = exec.Command("systemctl", "--user", "daemon-reload").Run()
+	_ = serviceManagerCommand("systemctl", "--user", "daemon-reload").Run()
 	return nil
 }
 
@@ -2976,10 +2976,10 @@ func IsBridgeDaemonRunning() bool {
 	plat := platform.Detect()
 	switch plat {
 	case platform.PlatformMacOS:
-		out, err := exec.Command("launchctl", "list", LaunchdPlistName).Output()
+		out, err := serviceManagerCommand("launchctl", "list", LaunchdPlistName).Output()
 		return err == nil && len(out) > 0
 	case platform.PlatformLinux, platform.PlatformWSL2:
-		err := exec.Command("systemctl", "--user", "is-active", "--quiet", systemdBridgeServiceName).Run()
+		err := serviceManagerCommand("systemctl", "--user", "is-active", "--quiet", systemdBridgeServiceName).Run()
 		return err == nil
 	default:
 		return false
@@ -2991,10 +2991,10 @@ func IsTransitionNotifierDaemonRunning() bool {
 	plat := platform.Detect()
 	switch plat {
 	case platform.PlatformMacOS:
-		out, err := exec.Command("launchctl", "list", TransitionNotifierLaunchdPlistName).Output()
+		out, err := serviceManagerCommand("launchctl", "list", TransitionNotifierLaunchdPlistName).Output()
 		return err == nil && len(out) > 0
 	case platform.PlatformLinux, platform.PlatformWSL2:
-		err := exec.Command("systemctl", "--user", "is-active", "--quiet", systemdTransitionNotifierServiceName).Run()
+		err := serviceManagerCommand("systemctl", "--user", "is-active", "--quiet", systemdTransitionNotifierServiceName).Run()
 		return err == nil
 	default:
 		return false
@@ -3087,11 +3087,11 @@ func installHeartbeatDaemonLaunchd(name string, intervalMinutes int) error {
 		return err
 	}
 	_ = os.MkdirAll(filepath.Join(homeDir, "Library", "LaunchAgents"), 0o755)
-	_ = exec.Command("launchctl", "unload", hbPlistPath).Run()
+	_ = serviceManagerCommand("launchctl", "unload", hbPlistPath).Run()
 	if err := os.WriteFile(hbPlistPath, []byte(plistContent), 0o644); err != nil {
 		return fmt.Errorf("failed to write heartbeat plist: %w", err)
 	}
-	if err := exec.Command("launchctl", "load", hbPlistPath).Run(); err != nil {
+	if err := serviceManagerCommand("launchctl", "load", hbPlistPath).Run(); err != nil {
 		return fmt.Errorf("plist written but failed to load: %w", err)
 	}
 	return nil
@@ -3132,7 +3132,7 @@ func installHeartbeatDaemonSystemd(name string, intervalMinutes int) error {
 		return fmt.Errorf("systemd user session not available; run heartbeat manually via cron or: bash %s/heartbeat.sh", condDir)
 	}
 	timerName := SystemdHeartbeatTimerName(name)
-	if err := exec.Command("systemctl", "--user", "enable", "--now", timerName).Run(); err != nil {
+	if err := serviceManagerCommand("systemctl", "--user", "enable", "--now", timerName).Run(); err != nil {
 		return fmt.Errorf("failed to enable heartbeat timer: %w", err)
 	}
 	return nil
@@ -3212,7 +3212,7 @@ func uninstallHeartbeatDaemonLaunchd(name string) error {
 	} else if err != nil {
 		return err
 	}
-	if err := exec.Command("launchctl", "unload", hbPlistPath).Run(); err != nil {
+	if err := serviceManagerCommand("launchctl", "unload", hbPlistPath).Run(); err != nil {
 		return fmt.Errorf("stop launchd heartbeat: %w", err)
 	}
 	return RemoveHeartbeatPlist(name)
@@ -3224,7 +3224,7 @@ func uninstallHeartbeatDaemonSystemd(name string) error {
 		return err
 	}
 	if _, err := os.Stat(timerPath); err == nil {
-		if err := exec.Command("systemctl", "--user", "disable", "--now", SystemdHeartbeatTimerName(name)).Run(); err != nil { //nolint:gosec // G204: fixed binary and argv, no shell; name only selects a --user unit
+		if err := serviceManagerCommand("systemctl", "--user", "disable", "--now", SystemdHeartbeatTimerName(name)).Run(); err != nil { //nolint:gosec // G204: fixed binary and argv, no shell; name only selects a --user unit
 			return fmt.Errorf("stop systemd heartbeat: %w", err)
 		}
 		if err := os.Remove(timerPath); err != nil {
@@ -3240,6 +3240,6 @@ func uninstallHeartbeatDaemonSystemd(name string) error {
 	if err := os.Remove(svcPath); err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	_ = exec.Command("systemctl", "--user", "daemon-reload").Run()
+	_ = serviceManagerCommand("systemctl", "--user", "daemon-reload").Run()
 	return nil
 }

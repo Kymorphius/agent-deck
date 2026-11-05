@@ -1162,7 +1162,7 @@ snapshots, compatibility, and validation boundaries.
 - **matrix/hardened:** `matrix.142` 在同一有界后扫和文件缓存中兼容这类原生用户项，读取事件本身的时间。非空文字、图片和本地图片可建立交互事实；继续核对主线程元数据、原生 ID、事件中明确给出的线程 ID 及当前绑定。空内容、无效或未来时间、其它线程、助手和工具项不计入。原始 `response_item` 的用户角色可能包含环境或 AGENTS 注入，仍不据此计时。
 - **验证**：定向回归覆盖两种用户事件、后续输出与注入、仅附件、空内容和时间、线程归属及缓存。实际部署需更新原生日志所在设备的 monitor；只更新列表端不能补出旧采集程序未识别的交互时间。不扩大扫描预算，不修改“仅查看不重排”的规则。
 
-## 115. 测试子进程不再漏下 tmux 服务器
+## 117. 测试子进程不再漏下 tmux 服务器
 
 - **问题**：不少测试会把测试程序自己重新启动成子进程，用来模拟崩溃、抢锁、`os.Exit` 等。子进程照样执行包的 TestMain：`IsolateTmuxSocket` 再建一个 `/tmp/ad-tmux-*`，session 包还会起一个 `agent-deck-test-bootstrap` 服务器。这些子进程经常被测试故意杀掉，或者在 CLI 路径上直接 `os.Exit`，自己的清理不会执行，服务器就留了下来，每个都占着一个 pty。例如 `TestSendJournalOrderHelperProcess` 每跑一次完整测试就漏一个。2026-11-04 一天在本机清出 18 个这样的服务器和 654 个目录；2026-07-18 的 pty 耗尽也是同一类泄漏。
 - **matrix/hardened:** `IsolateTmuxSocket` 改用 `isolatedTmuxBase` 决定目录。如果当前已经在隔离的测试进程里（带隔离标记，且继承的 `TMUX_TMPDIR` 位于某个 `ad-tmux-*` 目录树中），就把新目录建在父目录里面，名字用短前缀 `t`。父进程的清理是会执行的，它会一并回收这些嵌套目录。嵌套基础路径不超过 36 字节，所以子、孙两级都能嵌套，最深一层仍给 `/tmux-<uid>/<socket>` 留出至少 47 字节，满足 darwin 104 字节的 sun_path 上限；更深的层级退回 `/tmp`。顶层目录仍是原来的 `/tmp/ad-tmux-*`，路径长度不变。
@@ -1174,3 +1174,9 @@ snapshots, compatibility, and validation boundaries.
 
 - **matrix/hardened:** `matrix.144` 将经典列表与内嵌侧栏共用的设备列改为左对齐，短名称的填充移到右侧。保留设备列宽度上限、宽字符截断和数字列位置，状态与标题继续按列对齐。
 - **验证**：沿用数字列、设备前置、窄屏、续行及卡片几何回归，将原右对齐间距断言更新为设备左边缘和状态列对齐。此项只需列表端加载新版。
+
+## 118. 测试进程不再动真实的 launchd/systemd
+
+- **问题**：`TestConductorSetupCLI_BareRerunKeepsAgent_Issue2434` 会用真实程序执行 `conductor setup`，后者安装通知守护进程。测试虽然把 HOME 换成了临时目录，launchd 却是按用户（`gui/<uid>`）而不是按 HOME 区分的。于是每跑一次完整测试，开发者的真实账户下就多出一个 `com.agentdeck.transition-notifier`：带 KeepAlive，指向临时目录里的测试程序。2026-11-04 至 05 本机手动撤销了 4 次。更危险的是，安装前那步 `launchctl unload <plist>` 会按同名标签把机器上真实的通知守护进程卸掉。
+- **matrix/hardened:** `internal/session/matrix_service_manager_guard.go` 新增 `serviceManagerCommand`，`conductor.go` 里 23 处 `launchctl`/`systemctl` 调用全部改走它。进程带着测试隔离标记 `AGENT_DECK_TEST_ISOLATED=1`（testutil 设置，CLI 子进程会继承）时，会改变服务管理器状态的子命令（load、unload、bootstrap、enable、start、daemon-reload 等，以及未知子命令）在启动时就以 `errServiceManagerBlocked` 失败，不会真正执行。只读查询（list、print、managername、is-active、status 等）照常执行。可执行文件位于临时目录的不受此限：测试放在 PATH 前面的假 launchctl/systemctl 照常工作。没有这个标记的正常进程完全不受影响。
+- **测试**：`matrix_service_manager_guard_test.go` 覆盖：隔离标记下改动类子命令被拦截、只读查询不拦截、临时目录里的替身脚本照常执行、无标记时不拦截。端到端验证：跑完 conductor 相关的 CLI 测试后，`launchctl list` 和 `~/Library/LaunchAgents` 里都没有新增 agentdeck 任务。
