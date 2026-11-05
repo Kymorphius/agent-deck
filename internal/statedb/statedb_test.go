@@ -2045,3 +2045,41 @@ func TestTakeMeta(t *testing.T) {
 		t.Fatalf("GetMeta after take = (%q, %v), want (\"\", nil)", got, err)
 	}
 }
+
+// matrix/hardened: heartbeat writes are throttled to HeartbeatMinInterval;
+// liveness readers use 30s windows, and every commit wakes DB watchers.
+func TestHeartbeatWritesAtMostOncePerInterval(t *testing.T) {
+	db := newTestDB(t)
+	if err := db.RegisterInstance(false); err != nil {
+		t.Fatal(err)
+	}
+	stamp := func() int64 {
+		t.Helper()
+		var v int64
+		if err := db.db.QueryRow("SELECT heartbeat FROM instance_heartbeats WHERE pid = ?", db.pid).Scan(&v); err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	if _, err := db.db.Exec("UPDATE instance_heartbeats SET heartbeat = 1000 WHERE pid = ?", db.pid); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Heartbeat(); err != nil {
+		t.Fatal(err)
+	}
+	if got := stamp(); got != 1000 {
+		t.Fatalf("heartbeat written within the interval after register: %d", got)
+	}
+	db.heartbeatMu.Lock()
+	db.lastHeartbeat = time.Now().Add(-HeartbeatMinInterval - time.Second)
+	db.heartbeatMu.Unlock()
+	if err := db.Heartbeat(); err != nil {
+		t.Fatal(err)
+	}
+	if got := stamp(); got < time.Now().Add(-time.Minute).Unix() {
+		t.Fatalf("heartbeat not written once the interval passed: %d", got)
+	}
+	if n, err := db.AliveInstanceCount(); err != nil || n != 1 {
+		t.Fatalf("alive count = %d, %v", n, err)
+	}
+}

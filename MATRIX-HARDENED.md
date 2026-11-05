@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.140`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.141`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -66,7 +66,7 @@
 - `internal/session/claude_hooks.go`：`isAgentDeckHookCommand` 的判断规则：先去掉开头的 `VAR=值`，再要求第二个词是 `hook-handler`、程序名的文件名部分是 `agent-deck`。`RemoveClaudeHooks` 会扫描全部事件，并做 UTC 时间戳备份（约 387–414 行）。
 - `cmd/agent-deck/main.go`（约 4845、5070 行）：`agent-deck uninstall` 会移除这些钩子。`uninstall.sh` 第 253 行附近的 jq 过滤用的是同一套规则（正则），写回时用 `cat >` 保持软链接和权限。
 
-**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.140`。
+**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.141`。
 
 **测试**：以 `_hardened_test.go` 结尾的文件、`update_check_disable_test.go`、`update_timer_wiring_test.go` 等是新增或调整过的测试；`testdata/goldens/*` 里的快照已经按加固后的输出更新。
 
@@ -1147,3 +1147,11 @@ snapshots, compatibility, and validation boundaries.
 - **实测**（本机 184 个会话，各 60 秒）：`.139` monitor 4.8%，`.140` 3.4%；采样中 `reconcile`/`Load` 消失，剩下的是对存活会话的探测和系统调用。
 - **测试**：`internal/monitor/monitor_test.go` 的 `TestRegistryReloadsOnlyWhenRegistryOrWatermarkChanges`（无提交不重载；只写 metadata 不重载且记住新版本；改标题会重载；只动修改水位也会重载）。修复前失败。
 - **部署**：monitor 同样不会因 `+matrix.N` 新版本自行重启。装好后 `agent-deck monitor stop`；TUI、Web 或 remote-agent 下次读取时由按需启动机制用磁盘上的新程序拉起，或手动 `agent-deck monitor serve` 后台启动。AI 会话不受影响。
+
+## 114. 心跳与界面状态不再每隔几秒写一次数据库
+
+- **问题**：空闲时本机状态库一分钟约 56 次提交，几乎全是 TUI 和 headless Web 各自在每轮状态刷新（约 2 秒）时重写 `instance_heartbeats`。TUI 还每 10 秒无条件把 `ui_state` 写一遍，内容多半没变。每次提交都会叫醒所有监视状态库的进程：monitor 要比对注册表，每个 remote-agent 看到时间戳变化就重新探测并构建列表（第 109–112 节），所以这些"无意义的写"决定了它们的空转频率。
+- **matrix/hardened:** `matrix.141` 起 `StateDB.Heartbeat` 最多每 `HeartbeatMinInterval`（10 秒）真正写一次，期间的调用直接返回成功；`RegisterInstance` 也计入这次写入。所有判断存活的地方（`ElectPrimary`、`CleanDeadInstances`、`AliveInstanceCount`）用的都是 30 秒窗口，仍有 3 倍余量。
+- **matrix/hardened:** TUI 每 10 秒的定时保存改用 `saveUIStateIfChanged`：编码结果和本进程上次写入的一样就不写。明确的保存（退出、切换视图等）照旧无条件写入。多开时，另一实例写入的状态不会再被本实例每 10 秒覆盖回去。
+- **测试**：`statedb_test.go` 的 `TestHeartbeatWritesAtMostOncePerInterval`；`internal/ui/matrix_quiet_ui_state_test.go` 的 `TestPeriodicUIStateSaveSkipsUnchangedState`（未变不写、他人改写后不抢回、改变后写入、明确保存仍写入）。
+- **部署**：TUI 需在列表 `Ctrl+T` 原地重载，headless Web 需重启，之后才生效；monitor、remote-agent 不用重启。

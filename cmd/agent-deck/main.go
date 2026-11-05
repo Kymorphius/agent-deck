@@ -45,7 +45,7 @@ import (
 )
 
 // matrix/hardened: identifies our hardened build.
-var Version = "1.16.26+matrix.140" // matrix/hardened: the shared monitor skips registry hydration when only other tables changed; overridden via -ldflags.
+var Version = "1.16.26+matrix.141" // matrix/hardened: heartbeat and unchanged UI-state autosaves no longer commit every few seconds; overridden via -ldflags.
 
 // Table column widths for list command output
 const (

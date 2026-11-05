@@ -818,6 +818,8 @@ type Home struct {
 	// UI state persistence across restarts
 	pendingCursorRestore *uiState // Consumed on first loadSessionsMsg to restore cursor
 	uiStateSaveTicks     int      // Counter for periodic UI state saves in tick handler
+	// lastSavedUIState is the ui_state this process last wrote (matrix/hardened).
+	lastSavedUIState []byte
 
 	// Remote sessions (Phase 2: Agent-Deck Remotes)
 	remoteSessions map[string][]session.RemoteSessionInfo // remoteName -> sessions
@@ -10324,7 +10326,7 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		h.uiStateSaveTicks++
 		if h.uiStateSaveTicks >= 5 {
 			h.uiStateSaveTicks = 0
-			h.saveUIState()
+			h.saveUIStateIfChanged()
 		}
 		// A remote snapshot held back by the save debounce lands here once
 		// its interval has passed.
@@ -15885,12 +15887,39 @@ func (h *Home) saveUIState() {
 // DB is not a failure: that is the headless/no-persistence configuration, not a
 // write that went wrong.
 func (h *Home) saveUIStateErr() error {
-	if h.storage == nil {
-		return nil
+	data, err := h.uiStateData()
+	if data == nil || err != nil {
+		return err
 	}
-	db := h.storage.GetDB()
-	if db == nil {
-		return nil
+	return h.writeUIState(data)
+}
+
+// saveUIStateIfChanged is the periodic autosave. matrix/hardened: it skips a
+// state this process already wrote. Rewriting identical bytes every ten
+// seconds was a commit that woke every state-DB watcher (the shared monitor,
+// each remote-agent) for nothing. Explicit saves stay unconditional.
+func (h *Home) saveUIStateIfChanged() {
+	data, err := h.uiStateData()
+	if data == nil || err != nil || bytes.Equal(data, h.lastSavedUIState) {
+		return
+	}
+	_ = h.writeUIState(data)
+}
+
+func (h *Home) writeUIState(data []byte) error {
+	if err := h.storage.GetDB().SetMeta("ui_state", string(data)); err != nil {
+		uiLog.Warn("save_ui_state_failed", slog.String("error", err.Error()))
+		return err
+	}
+	h.lastSavedUIState = data
+	return nil
+}
+
+// uiStateData encodes the state to persist; nil without storage (the
+// headless/no-persistence configuration).
+func (h *Home) uiStateData() ([]byte, error) {
+	if h.storage == nil || h.storage.GetDB() == nil {
+		return nil, nil
 	}
 
 	state := uiState{
@@ -15935,13 +15964,9 @@ func (h *Home) saveUIStateErr() error {
 	data, err := json.Marshal(state)
 	if err != nil {
 		uiLog.Warn("save_ui_state_marshal_failed", slog.String("error", err.Error()))
-		return err
+		return nil, err
 	}
-	if err := db.SetMeta("ui_state", string(data)); err != nil {
-		uiLog.Warn("save_ui_state_failed", slog.String("error", err.Error()))
-		return err
-	}
-	return nil
+	return data, nil
 }
 
 // loadUIState reads persisted UI state from SQLite metadata.

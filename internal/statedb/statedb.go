@@ -119,6 +119,10 @@ type StateDB struct {
 	// large DELETE+re-insert sweep (S2 data-loss safeguard, 2026-06-04
 	// incident). Empty for in-memory databases (no file to back up).
 	path string
+	// matrix/hardened: lastHeartbeat throttles Heartbeat; see
+	// HeartbeatMinInterval.
+	heartbeatMu   sync.Mutex
+	lastHeartbeat time.Time
 }
 
 // newOwnerToken builds a claim-ownership token unique to this process
@@ -1895,9 +1899,18 @@ func (s *StateDB) ArchiveIfStatus(id, status string, at time.Time) (bool, error)
 
 // --- Heartbeat ---
 
+// HeartbeatMinInterval is the least time between two heartbeat writes.
+// matrix/hardened: every reader judges liveness over 30 seconds
+// (ElectPrimary, CleanDeadInstances, AliveInstanceCount), yet the TUI and the
+// headless Web rewrote the row on every status pass, about every two
+// seconds. Those writes were nearly all of an idle profile's commits, and each
+// commit wakes every state-DB watcher: the shared monitor's registry check and
+// every remote-agent's change-feed probe. One write per 10s keeps a 3x margin.
+const HeartbeatMinInterval = 10 * time.Second
+
 // RegisterInstance records this process as an active TUI instance.
 func (s *StateDB) RegisterInstance(isPrimary bool) error {
-	now := time.Now().Unix()
+	now := time.Now()
 	primary := 0
 	if isPrimary {
 		primary = 1
@@ -1905,16 +1918,31 @@ func (s *StateDB) RegisterInstance(isPrimary bool) error {
 	_, err := s.db.Exec(`
 		INSERT OR REPLACE INTO instance_heartbeats (pid, started, heartbeat, is_primary)
 		VALUES (?, ?, ?, ?)
-	`, s.pid, now, now, primary)
+	`, s.pid, now.Unix(), now.Unix(), primary)
+	if err == nil {
+		s.heartbeatMu.Lock()
+		s.lastHeartbeat = now
+		s.heartbeatMu.Unlock()
+	}
 	return err
 }
 
-// Heartbeat updates the heartbeat timestamp for this process.
+// Heartbeat updates the heartbeat timestamp for this process, at most once
+// per HeartbeatMinInterval; calls in between return nil without writing.
 func (s *StateDB) Heartbeat() error {
+	s.heartbeatMu.Lock()
+	defer s.heartbeatMu.Unlock()
+	now := time.Now()
+	if !s.lastHeartbeat.IsZero() && now.Sub(s.lastHeartbeat) < HeartbeatMinInterval {
+		return nil
+	}
 	_, err := s.db.Exec(
 		"UPDATE instance_heartbeats SET heartbeat = ? WHERE pid = ?",
-		time.Now().Unix(), s.pid,
+		now.Unix(), s.pid,
 	)
+	if err == nil {
+		s.lastHeartbeat = now
+	}
 	return err
 }
 
