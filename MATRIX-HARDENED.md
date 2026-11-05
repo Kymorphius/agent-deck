@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.139`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.140`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -66,7 +66,7 @@
 - `internal/session/claude_hooks.go`：`isAgentDeckHookCommand` 的判断规则：先去掉开头的 `VAR=值`，再要求第二个词是 `hook-handler`、程序名的文件名部分是 `agent-deck`。`RemoveClaudeHooks` 会扫描全部事件，并做 UTC 时间戳备份（约 387–414 行）。
 - `cmd/agent-deck/main.go`（约 4845、5070 行）：`agent-deck uninstall` 会移除这些钩子。`uninstall.sh` 第 253 行附近的 jq 过滤用的是同一套规则（正则），写回时用 `cat >` 保持软链接和权限。
 
-**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.139`。
+**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.140`。
 
 **测试**：以 `_hardened_test.go` 结尾的文件、`update_check_disable_test.go`、`update_timer_wiring_test.go` 等是新增或调整过的测试；`testdata/goldens/*` 里的快照已经按加固后的输出更新。
 
@@ -1139,3 +1139,11 @@ snapshots, compatibility, and validation boundaries.
 - **实测**（本机 184 个会话、真实 monitor，空闲 remote-agent 各 60 秒）：`.138` CPU 2.48 s（4.1%）、tmux 调用 113 次；`.139` 0.87 s（1.45%）、57 次，每轮只剩 `list-sessions` 和 `list-clients` 各一次。两版的 `list --json` 应答逐行一致。进程内的 `group list --json` 应答与原来子进程算的有 1–2 个会话计数不同（error 与 stopped 的判断差异），与推送里本来就带的分组结果一致。
 - **测试**：`matrix_remote_agent_monitor_test.go` 新增：未变时复用、无关表提交只比较不重解析、会话行修改和配置文件变化重新解析；monitor 消失后旧结论不再列出、恢复后重新套用（回退时多一次解析）；分组轮询与推送一致、无 monitor 时交给 CLI、参数识别。
 - **部署**：同第 109 节。
+
+## 113. monitor 在会话记录未变时不再重新解析
+
+- **问题**：共享 monitor（第 33、86 节）每轮先看 SQLite 的 `data_version`，变了就重新加载并解析全部会话，再逐行对账。TUI 每 2 秒写一次心跳，费用、元数据、会话关联等其他表也常有提交，所以它几乎每轮都在重读；而 instances/groups 本身在本机约 40 秒才真正变一次。用带符号的同版本程序采样 30 秒：monitor 的用户态 CPU 绝大部分在 `reconcile` → `Load` → `LoadWithGroupsSnapshot`。
+- **matrix/hardened:** `matrix.140` 起 `registry.Changed` 在 `data_version` 变化后先确认修改水位（`last_modified`，本进程状态写入的围栏）没变，再用观察连接只读 instances/groups 原始行，与上次解析时的原始行（`LoadWithGroupsSnapshot` 返回的同一份快照）逐字节比较；一致就记下新版本、不重载。连接 epoch 变化、读取前后版本不一致、任何读取失败都按原来重新加载。`Load` 只在加载前后版本、epoch 和水位都稳定时才记录原始行，否则清空，下一轮必然重载。
+- **实测**（本机 184 个会话，各 60 秒）：`.139` monitor 4.8%，`.140` 3.4%；采样中 `reconcile`/`Load` 消失，剩下的是对存活会话的探测和系统调用。
+- **测试**：`internal/monitor/monitor_test.go` 的 `TestRegistryReloadsOnlyWhenRegistryOrWatermarkChanges`（无提交不重载；只写 metadata 不重载且记住新版本；改标题会重载；只动修改水位也会重载）。修复前失败。
+- **部署**：monitor 同样不会因 `+matrix.N` 新版本自行重启。装好后 `agent-deck monitor stop`；TUI、Web 或 remote-agent 下次读取时由按需启动机制用磁盘上的新程序拉起，或手动 `agent-deck monitor serve` 后台启动。AI 会话不受影响。

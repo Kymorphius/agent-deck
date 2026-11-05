@@ -29,6 +29,9 @@ type registry struct {
 	version  int64
 	epoch    uint64
 	touch    int64
+	// matrix/hardened: raw is the encoded instances/groups rows the current
+	// hydration came from; nil when that load was not provably stable.
+	raw []byte
 }
 
 func openRegistry(profile string) (ProfileRegistry, error) {
@@ -48,7 +51,42 @@ func (r *registry) Changed() (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return v != r.version || e != r.epoch, nil
+	if v == r.version && e == r.epoch {
+		return false, nil
+	}
+	if r.sameRows(v, e) {
+		r.version = v
+		return false, nil
+	}
+	return true, nil
+}
+
+// sameRows reports whether a data_version move left the registry itself
+// untouched. matrix/hardened: every TUI heartbeat, cost, metadata or session
+// link commit moves data_version, which made each pass (every two seconds
+// while a TUI is open) hydrate and reconcile the whole registry again: most
+// of this process's CPU. Like the Web catalogue (MATRIX-HARDENED §43), the
+// rows are re-read raw and compared before paying for hydration; the edit
+// watermark (the fence for this process's writes) must also be unchanged.
+// Anything unprovable answers false and the pass reloads as before.
+func (r *registry) sameRows(version int64, epoch uint64) bool {
+	if r.raw == nil || r.version == 0 || epoch != r.epoch {
+		return false
+	}
+	touch, err := r.storage.GetDB().LastModified()
+	if err != nil || touch != r.touch {
+		return false
+	}
+	snapshot, before, after, err := r.observer.Snapshot()
+	if err != nil || before != after || before != version {
+		return false
+	}
+	raw, err := json.Marshal(snapshot)
+	if err != nil || !bytes.Equal(raw, r.raw) {
+		return false
+	}
+	end, err := r.storage.GetDB().LastModified()
+	return err == nil && end == touch
 }
 func (r *registry) Load() ([]*session.Instance, error) {
 	touch, err := r.storage.GetDB().LastModified()
@@ -59,9 +97,13 @@ func (r *registry) Load() ([]*session.Instance, error) {
 	if err != nil {
 		return nil, err
 	}
-	instances, _, _, err := r.storage.LoadWithGroupsSnapshot()
+	instances, _, snapshot, err := r.storage.LoadWithGroupsSnapshot()
 	if err != nil {
 		return nil, err
+	}
+	var raw []byte
+	if snapshot != nil {
+		raw, _ = json.Marshal(snapshot)
 	}
 	after, endEpoch, err := r.observer.Probe()
 	if err != nil {
@@ -73,9 +115,9 @@ func (r *registry) Load() ([]*session.Instance, error) {
 	}
 	// A racing writer forces another conservative reload next pass.
 	if before == after && epoch == endEpoch && touch == afterTouch {
-		r.version, r.epoch = after, endEpoch
+		r.version, r.epoch, r.raw = after, endEpoch, raw
 	} else {
-		r.version, r.epoch = 0, 0
+		r.version, r.epoch, r.raw = 0, 0, nil
 	}
 	r.touch = touch
 	return instances, nil

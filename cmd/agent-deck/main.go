@@ -45,7 +45,7 @@ import (
 )
 
 // matrix/hardened: identifies our hardened build.
-var Version = "1.16.26+matrix.139" // matrix/hardened: remote-agent reuses one registry hydration per generation and answers group polls in-process; overridden via -ldflags.
+var Version = "1.16.26+matrix.140" // matrix/hardened: the shared monitor skips registry hydration when only other tables changed; overridden via -ldflags.
 
 // Table column widths for list command output
 const (

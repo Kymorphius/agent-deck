@@ -620,3 +620,74 @@ func TestDetectedToolPersistsWhenStatusDoesNotChange(t *testing.T) {
 		t.Fatal("detected tool identity was not consumable")
 	}
 }
+
+// matrix/hardened: heartbeats, metadata and other non-registry commits move
+// data_version without touching the registry; they must not cost a full
+// hydration. Registry rows and the edit watermark still force one.
+func TestRegistryReloadsOnlyWhenRegistryOrWatermarkChanges(t *testing.T) {
+	store, err := session.NewStorageWithProfile("registry-reuse")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	inst := session.NewInstanceWithTool("registry-reuse", "/registry-reuse-fixture", "shell")
+	inst.Status = session.StatusIdle
+	if err := store.SaveWithGroups([]*session.Instance{inst}, nil); err != nil {
+		t.Fatal(err)
+	}
+	r, err := openRegistry("registry-reuse")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = r.Close() })
+	changed := func() bool {
+		t.Helper()
+		got, err := r.Changed()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	load := func() {
+		t.Helper()
+		if _, err := r.Load(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !changed() {
+		t.Fatal("first pass did not ask for a load")
+	}
+	load()
+	if changed() {
+		t.Fatal("nothing committed, yet a reload was asked for")
+	}
+	db := store.GetDB()
+	if err := db.SetMeta("registry_reuse_noise", time.Now().String()); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetMeta("registry_reuse_noise", "again"); err != nil {
+		t.Fatal(err)
+	}
+	if changed() {
+		t.Fatal("commits to other tables forced a registry reload")
+	}
+	if changed() {
+		t.Fatal("settled version was not remembered")
+	}
+	if applied, err := db.UpdateTitleIfUnlocked(inst.ID, "renamed-elsewhere"); err != nil || !applied {
+		t.Fatalf("rename: %v %v", applied, err)
+	}
+	if !changed() {
+		t.Fatal("a registry edit did not ask for a reload")
+	}
+	load()
+	if changed() {
+		t.Fatal("reload after the edit was not taken as current")
+	}
+	if err := db.Touch(); err != nil {
+		t.Fatal(err)
+	}
+	if !changed() {
+		t.Fatal("an edit-watermark move did not ask for a reload")
+	}
+}
