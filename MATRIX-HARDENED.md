@@ -1161,3 +1161,11 @@ snapshots, compatibility, and validation boundaries.
 - **问题**：部分 Codex 日志用 `event_msg.item_completed` 内的 `UserMessage` 记录实际提交，没有旧格式 `user_message`。第 110 节的解析器漏掉这种会话，使它的交互时间保持未知，Recent 因而不收录。
 - **matrix/hardened:** `matrix.142` 在同一有界后扫和文件缓存中兼容这类原生用户项，读取事件本身的时间。非空文字、图片和本地图片可建立交互事实；继续核对主线程元数据、原生 ID、事件中明确给出的线程 ID 及当前绑定。空内容、无效或未来时间、其它线程、助手和工具项不计入。原始 `response_item` 的用户角色可能包含环境或 AGENTS 注入，仍不据此计时。
 - **验证**：定向回归覆盖两种用户事件、后续输出与注入、仅附件、空内容和时间、线程归属及缓存。实际部署需更新原生日志所在设备的 monitor；只更新列表端不能补出旧采集程序未识别的交互时间。不扩大扫描预算，不修改“仅查看不重排”的规则。
+
+## 115. 测试子进程不再漏下 tmux 服务器
+
+- **问题**：不少测试会把测试程序自己重新启动成子进程，用来模拟崩溃、抢锁、`os.Exit` 等。子进程照样执行包的 TestMain：`IsolateTmuxSocket` 再建一个 `/tmp/ad-tmux-*`，session 包还会起一个 `agent-deck-test-bootstrap` 服务器。这些子进程经常被测试故意杀掉，或者在 CLI 路径上直接 `os.Exit`，自己的清理不会执行，服务器就留了下来，每个都占着一个 pty。例如 `TestSendJournalOrderHelperProcess` 每跑一次完整测试就漏一个。2026-11-04 一天在本机清出 18 个这样的服务器和 654 个目录；2026-07-18 的 pty 耗尽也是同一类泄漏。
+- **matrix/hardened:** `IsolateTmuxSocket` 改用 `isolatedTmuxBase` 决定目录。如果当前已经在隔离的测试进程里（带隔离标记，且继承的 `TMUX_TMPDIR` 位于某个 `ad-tmux-*` 目录树中），就把新目录建在父目录里面，名字用短前缀 `t`。父进程的清理是会执行的，它会一并回收这些嵌套目录。嵌套基础路径不超过 36 字节，所以子、孙两级都能嵌套，最深一层仍给 `/tmux-<uid>/<socket>` 留出至少 47 字节，满足 darwin 104 字节的 sun_path 上限；更深的层级退回 `/tmp`。顶层目录仍是原来的 `/tmp/ad-tmux-*`，路径长度不变。
+- **matrix/hardened:** `KillTmuxServersUnder` 改为递归遍历整棵目录（不跟随符号链接），对找到的每个 socket 用绝对路径执行 `tmux -S … kill-server`。
+- **没有采用的做法**：曾尝试把顶层目录也建到 run-isolated 的 `/tmp/ad-it-*` 下，好让测试程序超时被杀时也能被兜底回收。但这会让每条路径多出约 23 字节，使用长 socket 名的测试（如 `TestInstanceTerminalTmuxAdapterPreservesRawBytesAndExactTarget`）因路径超长失败，所以撤回了。
+- **测试**：`internal/testutil/tmuxenv_nested_helper_test.go` 覆盖嵌套规则：隔离进程内、子进程目录内、run-isolated 根保持顶层布局、缺少隔离标记、其它目录、路径过长。还覆盖真实场景：把测试程序重新启动成子进程，子进程隔离后起 tmux 服务器，再被 SIGKILL；父进程清理后该服务器必须消失。这两项在修复前都失败。实测原来会漏的 send-journal 测试，以及 session 包几个子进程测试，跑完后 `/tmp` 下不再新增目录和服务器；`TestTestMainDoesNotLeakBootstrapServer` 通过。

@@ -2,6 +2,7 @@ package testutil
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -65,7 +66,8 @@ func IsolateTmuxSocket() func() {
 	_ = os.Unsetenv("TMUX")
 	_ = os.Unsetenv("TMUX_PANE")
 
-	dir, err := os.MkdirTemp(shortTmuxTmpBase(), "ad-tmux-")
+	base, prefix := isolatedTmuxBase(origTmuxTmpdir, hadTmuxTmpdir, origMarker, hadMarker)
+	dir, err := os.MkdirTemp(base, prefix)
 	if err != nil {
 		// If we can't isolate via MkdirTemp, we still want tests to
 		// run — but we REALLY don't want them on the default socket.
@@ -195,30 +197,18 @@ func KillTmuxServersUnder(dir string) {
 	}
 	// tmux nests sockets one level down as <TMUX_TMPDIR>/tmux-<uid>/<name>;
 	// ShortTmuxSocket-style callers place theirs directly in dir.
-	patterns := []string{
-		filepath.Join(dir, "*"),
-		filepath.Join(dir, "tmux-*", "*"),
-	}
-	seen := make(map[string]bool)
-	for _, pattern := range patterns {
-		matches, err := filepath.Glob(pattern)
-		if err != nil {
-			continue
+	// matrix/hardened: walk the whole tree, because re-exec'd helper test
+	// binaries nest their own isolated dirs (and servers) below this one
+	// (isolatedTmuxBase). Symlinks are not followed.
+	_ = filepath.WalkDir(dir, func(socket string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || d.Type()&fs.ModeSocket == 0 {
+			return nil
 		}
-		for _, socket := range matches {
-			if seen[socket] {
-				continue
-			}
-			seen[socket] = true
-			info, err := os.Stat(socket)
-			if err != nil || info.Mode()&os.ModeSocket == 0 {
-				continue
-			}
-			cmd := exec.Command("tmux", "-S", socket, "kill-server")
-			cmd.Env = envWithoutTmuxVars()
-			_ = cmd.Run()
-		}
-	}
+		cmd := exec.Command("tmux", "-S", socket, "kill-server")
+		cmd.Env = envWithoutTmuxVars()
+		_ = cmd.Run()
+		return nil
+	})
 }
 
 // envWithoutTmuxVars returns the process environment with every TMUX*
@@ -264,6 +254,38 @@ func ShortTmuxSocket() (socket string, cleanup func()) {
 		_ = os.RemoveAll(dir)
 	}
 }
+
+// isolatedTmuxBase picks where IsolateTmuxSocket creates its private dir, and
+// the name prefix to create it with.
+//
+// matrix/hardened: a test binary that a test re-execs as a helper runs its own
+// TestMain, so it isolates again and may start servers (the session package's
+// bootstrap, a fixture pane). Such helpers are often killed on purpose or end
+// in os.Exit, and their own cleanup never runs: each left one tmux server and
+// its pty behind (the 2026-07-18 pty exhaustion was the same leak). Inside an
+// isolated test process (marker set, TMUX_TMPDIR within an ad-tmux-* tree)
+// the helper therefore nests its dir in the parent's. The parent's cleanup
+// does run, and KillTmuxServersUnder walks the whole tree.
+//
+// A nested dir gets the short prefix "t": every level costs sun_path bytes
+// (104 on darwin) that tests spend on long -L socket names. Top-level dirs
+// keep /tmp/ad-tmux-*, exactly as before; a base longer than
+// maxNestedTmuxBase also falls back to that.
+func isolatedTmuxBase(inherited string, hadInherited bool, marker string, hadMarker bool) (base, prefix string) {
+	if hadInherited && hadMarker && marker == "1" && inherited != "" && !isDefaultTmuxBase(inherited) &&
+		len(inherited) <= maxNestedTmuxBase && strings.Contains(filepath.Clean(inherited)+"/", "/ad-tmux-") {
+		if info, err := os.Stat(inherited); err == nil && info.IsDir() {
+			return inherited, "t"
+		}
+	}
+	return shortTmuxTmpBase(), "ad-tmux-"
+}
+
+// maxNestedTmuxBase bounds a nesting base. "/tmp/ad-tmux-<rand>" is at most 23
+// bytes and a nested "/t<rand>" at most 12, so children and grandchildren
+// nest (leaving at least 47 bytes for "/tmux-<uid>/<socket>"); deeper levels
+// fall back to /tmp.
+const maxNestedTmuxBase = 36
 
 // shortTmuxTmpBase returns a short base directory for the per-test TMUX_TMPDIR.
 //
