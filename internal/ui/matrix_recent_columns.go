@@ -69,10 +69,10 @@ func (h *Home) matrixRecentDeviceRow(row string, item session.Item, columnWidth,
 		}
 		prefix := strings.Repeat(" ", columnWidth)
 		if i == 0 && label != "" {
-			// matrix/hardened: put padding before short device names so even a
-			// fleet with a long alias keeps each device close to its session.
+			// matrix/hardened: device names share a left edge; keep the fixed
+			// column's padding after each label so status/title columns align.
 			clipped := cellTruncate(label, columnWidth-1, "…")
-			prefix = style.Render(strings.Repeat(" ", max(0, columnWidth-1-cellWidth(clipped)))+clipped) + " "
+			prefix = style.Render(fitCellWidth(clipped, columnWidth-1)) + " "
 		}
 		line = ansi.Cut(line, gutterWidth, cellWidth(line))
 		// matrix/hardened: window rows have no internal width budget. Clip

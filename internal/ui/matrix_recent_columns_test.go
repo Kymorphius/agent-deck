@@ -204,26 +204,24 @@ func TestMatrixRecentColumnsWideDeviceKeepsNarrowLocalTitle(t *testing.T) {
 	}
 }
 
-func TestMatrixRecentDeviceSpacingDoesNotFollowLongestAlias(t *testing.T) {
+func TestMatrixRecentDeviceNamesShareLeftEdge(t *testing.T) {
 	for _, embedded := range []bool{false, true} {
 		for _, compact := range []bool{false, true} {
 			t.Run(fmt.Sprintf("embedded=%v/compact=%v", embedded, compact), func(t *testing.T) {
 				h := matrixRecentColumnsHome(t, "pro")
 				h.embeddedLayout, h.compactSidebar, h.sidebarDensity = embedded, compact, session.SidebarDensityCompact
 				near := matrixRecentColumnsLine(t, h.renderSessionList(80, 20), "Remote")
-				// A different host may need a wide source column; it must not
-				// insert that padding between this short alias and its title.
+				// matrix/hardened: a wider device column keeps short names on
+				// the same left edge, with status/title alignment preserved.
 				h.remoteSessions["long-workstation-alias"] = nil
-				wide := matrixRecentColumnsLine(t, h.renderSessionList(80, 20), "Remote")
-				gap := func(line string) int {
-					return cellWidth(line[strings.Index(line, "pro")+len("pro") : strings.Index(line, "Remote")])
+				view := h.renderSessionList(80, 20)
+				wide := matrixRecentColumnsLine(t, view, "Remote")
+				local := matrixRecentColumnsLine(t, view, "Local")
+				if leadDisplayWidth(near, "pro") != leadDisplayWidth(wide, "pro") || leadDisplayWidth(local, "本机") != leadDisplayWidth(wide, "pro") {
+					t.Fatalf("device names do not share a stable left edge:\n%q\n%q\n%q", near, local, wide)
 				}
-				if gap(near) != gap(wide) {
-					t.Fatalf("long alias widened the device/title gap: %q -> %q", near, wide)
-				}
-				wantGap := 5 // separator, selection, window slot, status, title gap
-				if got := gap(wide); got != wantGap {
-					t.Fatalf("device/title gap = %d, want %d: %q", got, wantGap, wide)
+				if leadDisplayWidth(local, "○") != leadDisplayWidth(wide, "○") {
+					t.Fatalf("left-aligned devices moved status columns apart:\n%q\n%q", local, wide)
 				}
 			})
 		}

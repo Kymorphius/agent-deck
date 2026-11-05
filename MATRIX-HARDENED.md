@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.142`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.144`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -66,7 +66,7 @@
 - `internal/session/claude_hooks.go`：`isAgentDeckHookCommand` 的判断规则：先去掉开头的 `VAR=值`，再要求第二个词是 `hook-handler`、程序名的文件名部分是 `agent-deck`。`RemoveClaudeHooks` 会扫描全部事件，并做 UTC 时间戳备份（约 387–414 行）。
 - `cmd/agent-deck/main.go`（约 4845、5070 行）：`agent-deck uninstall` 会移除这些钩子。`uninstall.sh` 第 253 行附近的 jq 过滤用的是同一套规则（正则），写回时用 `cat >` 保持软链接和权限。
 
-**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.142`。
+**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.144`。
 
 **测试**：以 `_hardened_test.go` 结尾的文件、`update_check_disable_test.go`、`update_timer_wiring_test.go` 等是新增或调整过的测试；`testdata/goldens/*` 里的快照已经按加固后的输出更新。
 
@@ -1169,3 +1169,8 @@ snapshots, compatibility, and validation boundaries.
 - **matrix/hardened:** `KillTmuxServersUnder` 改为递归遍历整棵目录（不跟随符号链接），对找到的每个 socket 用绝对路径执行 `tmux -S … kill-server`。
 - **没有采用的做法**：曾尝试把顶层目录也建到 run-isolated 的 `/tmp/ad-it-*` 下，好让测试程序超时被杀时也能被兜底回收。但这会让每条路径多出约 23 字节，使用长 socket 名的测试（如 `TestInstanceTerminalTmuxAdapterPreservesRawBytesAndExactTarget`）因路径超长失败，所以撤回了。
 - **测试**：`internal/testutil/tmuxenv_nested_helper_test.go` 覆盖嵌套规则：隔离进程内、子进程目录内、run-isolated 根保持顶层布局、缺少隔离标记、其它目录、路径过长。还覆盖真实场景：把测试程序重新启动成子进程，子进程隔离后起 tmux 服务器，再被 SIGKILL；父进程清理后该服务器必须消失。这两项在修复前都失败。实测原来会漏的 send-journal 测试，以及 session 包几个子进程测试，跑完后 `/tmp` 下不再新增目录和服务器；`TestTestMainDoesNotLeakBootstrapServer` 通过。
+
+## 116. 最近交互设备名左对齐
+
+- **matrix/hardened:** `matrix.144` 将经典列表与内嵌侧栏共用的设备列改为左对齐，短名称的填充移到右侧。保留设备列宽度上限、宽字符截断和数字列位置，状态与标题继续按列对齐。
+- **验证**：沿用数字列、设备前置、窄屏、续行及卡片几何回归，将原右对齐间距断言更新为设备左边缘和状态列对齐。此项只需列表端加载新版。

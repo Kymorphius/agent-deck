@@ -45,7 +45,7 @@ import (
 )
 
 // matrix/hardened: identifies our hardened build.
-var Version = "1.16.26+matrix.142" // matrix/hardened: Recent also recognizes native Codex completed UserMessage items; overridden via -ldflags.
+var Version = "1.16.26+matrix.144" // matrix/hardened: Recent device names share a left edge; overridden via -ldflags.
 
 // Table column widths for list command output
 const (
