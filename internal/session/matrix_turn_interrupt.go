@@ -356,14 +356,58 @@ type matrixCodexEvent struct {
 	Timestamp string `json:"timestamp"`
 	Type      string `json:"type"`
 	Payload   struct {
-		Type   string `json:"type"`
-		Reason string `json:"reason"`
-		TurnID string `json:"turn_id"`
-		Error  *struct {
+		Type     string `json:"type"`
+		Reason   string `json:"reason"`
+		TurnID   string `json:"turn_id"`
+		ThreadID string `json:"thread_id"`
+		// matrix/hardened: some Codex versions emit completed UserMessage
+		// items instead of user_message. Raw response_item users also contain
+		// injected context, so only this native submission event is evidence.
+		Item *struct {
+			Type    string          `json:"type"`
+			Content json.RawMessage `json:"content"`
+		} `json:"item"`
+		Error *struct {
 			Message string `json:"message"`
 			Code    string `json:"codex_error_info"`
 		} `json:"error"`
 	} `json:"payload"`
+}
+
+// matrix/hardened: a completed native user item belongs to this exact thread
+// and contains submitted text or an attachment. Agent/tool items and empty
+// records cannot advance interaction time or clear a prior interruption.
+func matrixCodexSubmittedUserItem(ev matrixCodexEvent, threadID string) bool {
+	if ev.Payload.Type != "item_completed" || ev.Payload.Item == nil || ev.Payload.Item.Type != "UserMessage" ||
+		(threadID != "" && ev.Payload.ThreadID != "" && ev.Payload.ThreadID != threadID) {
+		return false
+	}
+	var content []struct {
+		Type     string `json:"type"`
+		Text     string `json:"text"`
+		ImageURL string `json:"image_url"`
+		Path     string `json:"path"`
+	}
+	if json.Unmarshal(ev.Payload.Item.Content, &content) != nil {
+		return false
+	}
+	for _, part := range content {
+		switch part.Type {
+		case "text":
+			if strings.TrimSpace(part.Text) != "" {
+				return true
+			}
+		case "image":
+			if strings.TrimSpace(part.ImageURL) != "" {
+				return true
+			}
+		case "local_image":
+			if strings.TrimSpace(part.Path) != "" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // matrixLatestCodexTurnInterrupt reports whether the latest turn event in the
@@ -381,9 +425,15 @@ func matrixScanLatestCodexTurnInterrupt(path string) (matrixTurnInterrupt, bool,
 	return verdict, found, complete
 }
 
-// matrix/hardened: task events may end a turn but only user_message proves a
-// submitted user turn. Keep both facts in one backwards pass/cache entry.
+// matrix/hardened: keep the low-level interruption reader usable without
+// native metadata; the producer supplies its verified thread ID below.
 func matrixScanLatestCodexTurnFacts(path string) (matrixTurnInterrupt, bool, bool, time.Time) {
+	return matrixScanLatestCodexTurnFactsForThread(path, "")
+}
+
+// matrix/hardened: only native user_message or completed UserMessage items
+// prove input. Keep both facts in one backwards pass/cache entry.
+func matrixScanLatestCodexTurnFactsForThread(path, threadID string) (matrixTurnInterrupt, bool, bool, time.Time) {
 	parsed := true
 	resolved, found := false, false
 	var verdict matrixTurnInterrupt
@@ -397,7 +447,11 @@ func matrixScanLatestCodexTurnFacts(path string) (matrixTurnInterrupt, bool, boo
 		if ev.Type != "event_msg" {
 			return matrixTurnInterrupt{}, false, false
 		}
+		submittedItem := matrixCodexSubmittedUserItem(ev, threadID)
 		if !resolved {
+			if submittedItem {
+				resolved = true
+			}
 			switch ev.Payload.Type {
 			case "turn_aborted":
 				resolved, found = true, true
@@ -418,7 +472,7 @@ func matrixScanLatestCodexTurnFacts(path string) (matrixTurnInterrupt, bool, boo
 				resolved = true
 			}
 		}
-		if ev.Payload.Type == "user_message" {
+		if ev.Payload.Type == "user_message" || submittedItem {
 			if at := matrixInteractionTimestamp(ev.Timestamp); !at.IsZero() {
 				interactionAt = at
 				return matrixTurnInterrupt{}, false, true

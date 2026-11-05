@@ -209,7 +209,7 @@ func matrixParseTurnInterruptFile(tool, path string) matrixTurnInterruptFileResu
 			result.cacheable = result.meta.valid
 			return result
 		}
-		result.verdict, result.found, result.cacheable, result.interactionAt = matrixScanLatestCodexTurnFacts(path)
+		result.verdict, result.found, result.cacheable, result.interactionAt = matrixScanLatestCodexTurnFactsForThread(path, result.meta.ID)
 		if !result.meta.valid || result.meta.ID == "" || result.meta.ThreadSource != "user" {
 			// matrix/hardened: legacy interrupt detection remains fail-open,
 			// but a new interaction requires positive native/main-thread proof.

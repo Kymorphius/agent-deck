@@ -4,7 +4,7 @@
 
 - 分支：`matrix/hardened`（基于上游标签 `v1.16.26`，提交 `34cf369`）
 - 远程：`upstream` = 上游仓库；`origin` = [Kymorphius/agent-deck](https://github.com/Kymorphius/agent-deck)（**公开**，推 `matrix/hardened` 和 `main`）。只在用户要求时推送。仓库公开，本机专属内容一律写进不入库的 `MATRIX-LOCAL.md`，推送前检查没有本机路径、网络设置、私人邮箱。
-- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.141`。由 `scripts/matrix-install.sh` 编译安装。
+- 安装位置：`~/.local/bin/agent-deck`，版本号 `1.16.26+matrix.142`。由 `scripts/matrix-install.sh` 编译安装。
 - **绝不再用 Homebrew 装 agent-deck**（`asheshgoplani/tap`），原因见下文。
 - 背景记录：见不入库的 `MATRIX-LOCAL.md`（审计结论与替换过程）。
 
@@ -66,7 +66,7 @@
 - `internal/session/claude_hooks.go`：`isAgentDeckHookCommand` 的判断规则：先去掉开头的 `VAR=值`，再要求第二个词是 `hook-handler`、程序名的文件名部分是 `agent-deck`。`RemoveClaudeHooks` 会扫描全部事件，并做 UTC 时间戳备份（约 387–414 行）。
 - `cmd/agent-deck/main.go`（约 4845、5070 行）：`agent-deck uninstall` 会移除这些钩子。`uninstall.sh` 第 253 行附近的 jq 过滤用的是同一套规则（正则），写回时用 `cat >` 保持软链接和权限。
 
-**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.141`。
+**版本（R7）**：`cmd/agent-deck/main.go:48` 和 `Makefile` 的 `VERSION ?= 1.16.26+matrix.142`。
 
 **测试**：以 `_hardened_test.go` 结尾的文件、`update_check_disable_test.go`、`update_timer_wiring_test.go` 等是新增或调整过的测试；`testdata/goldens/*` 里的快照已经按加固后的输出更新。
 
@@ -1155,3 +1155,9 @@ snapshots, compatibility, and validation boundaries.
 - **matrix/hardened:** TUI 每 10 秒的定时保存改用 `saveUIStateIfChanged`：编码结果和本进程上次写入的一样就不写。明确的保存（退出、切换视图等）照旧无条件写入。多开时，另一实例写入的状态不会再被本实例每 10 秒覆盖回去。
 - **测试**：`statedb_test.go` 的 `TestHeartbeatWritesAtMostOncePerInterval`；`internal/ui/matrix_quiet_ui_state_test.go` 的 `TestPeriodicUIStateSaveSkipsUnchangedState`（未变不写、他人改写后不抢回、改变后写入、明确保存仍写入）。
 - **部署**：TUI 需在列表 `Ctrl+T` 原地重载，headless Web 需重启，之后才生效；monitor、remote-agent 不用重启。
+
+## 115. 最近交互兼容 Codex 的原生 UserMessage 项
+
+- **问题**：部分 Codex 日志用 `event_msg.item_completed` 内的 `UserMessage` 记录实际提交，没有旧格式 `user_message`。第 110 节的解析器漏掉这种会话，使它的交互时间保持未知，Recent 因而不收录。
+- **matrix/hardened:** `matrix.142` 在同一有界后扫和文件缓存中兼容这类原生用户项，读取事件本身的时间。非空文字、图片和本地图片可建立交互事实；继续核对主线程元数据、原生 ID、事件中明确给出的线程 ID 及当前绑定。空内容、无效或未来时间、其它线程、助手和工具项不计入。原始 `response_item` 的用户角色可能包含环境或 AGENTS 注入，仍不据此计时。
+- **验证**：定向回归覆盖两种用户事件、后续输出与注入、仅附件、空内容和时间、线程归属及缓存。实际部署需更新原生日志所在设备的 monitor；只更新列表端不能补出旧采集程序未识别的交互时间。不扩大扫描预算，不修改“仅查看不重排”的规则。

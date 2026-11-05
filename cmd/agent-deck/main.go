@@ -45,7 +45,7 @@ import (
 )
 
 // matrix/hardened: identifies our hardened build.
-var Version = "1.16.26+matrix.141" // matrix/hardened: heartbeat and unchanged UI-state autosaves no longer commit every few seconds; overridden via -ldflags.
+var Version = "1.16.26+matrix.142" // matrix/hardened: Recent also recognizes native Codex completed UserMessage items; overridden via -ldflags.
 
 // Table column widths for list command output
 const (
