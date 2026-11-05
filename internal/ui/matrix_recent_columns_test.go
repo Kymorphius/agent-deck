@@ -108,7 +108,7 @@ func TestMatrixRecentColumnsDevicePrecedesSession(t *testing.T) {
 	for _, embedded := range []bool{false, true} {
 		for _, width := range []int{27, 40, 80} {
 			t.Run(fmt.Sprintf("embedded=%v/width=%d", embedded, width), func(t *testing.T) {
-				h := matrixRecentColumnsHome(t, "pro")
+				h := matrixRecentColumnsHome(t, "dev")
 				h.embeddedLayout, h.compactSidebar, h.sidebarDensity = embedded, embedded, session.SidebarDensityCompact
 				view := h.renderSessionList(width, 20)
 				local := matrixRecentColumnsLine(t, view, "本机")
@@ -118,12 +118,12 @@ func TestMatrixRecentColumnsDevicePrecedesSession(t *testing.T) {
 					t.Errorf("device column consumed the local title: %q", local)
 				}
 				remote := matrixRecentColumnsLine(t, view, "Remote")
-				for label, line := range map[string]string{"本机": local, "pro": remote} {
+				for label, line := range map[string]string{"本机": local, "dev": remote} {
 					source, status := strings.Index(line, label), strings.Index(line, "○")
 					if source < 0 || status < 0 || source >= status {
 						t.Errorf("source %q must precede status/title: %q", label, line)
 					}
-					if strings.Contains(line, "[pro]") {
+					if strings.Contains(line, "[dev]") {
 						t.Errorf("remote source remained attached to title: %q", line)
 					}
 					if cellWidth(line) > width {
@@ -133,7 +133,7 @@ func TestMatrixRecentColumnsDevicePrecedesSession(t *testing.T) {
 				if leadDisplayWidth(local, "○") != leadDisplayWidth(remote, "○") {
 					t.Errorf("local/remote status columns differ:\n%q\n%q", local, remote)
 				}
-				if strings.Index(remote, "pro") > strings.Index(remote, "▶") {
+				if strings.Index(remote, "dev") > strings.Index(remote, "▶") {
 					t.Errorf("device must precede selection marker: %q", remote)
 				}
 			})
@@ -142,7 +142,7 @@ func TestMatrixRecentColumnsDevicePrecedesSession(t *testing.T) {
 }
 
 func TestMatrixRecentColumnsKeepDeviceWithoutNumbersAndDuringJump(t *testing.T) {
-	h := matrixRecentColumnsHome(t, "pro")
+	h := matrixRecentColumnsHome(t, "dev")
 	h.navCount.noNumbers = true
 	h.jumpMode = true
 	view := h.renderSessionList(80, 16)
@@ -151,7 +151,7 @@ func TestMatrixRecentColumnsKeepDeviceWithoutNumbersAndDuringJump(t *testing.T) 
 		line := matrixRecentColumnsLine(t, view, label)
 		source := "本机"
 		if index == 1 {
-			source = "pro"
+			source = "dev"
 		}
 		at := strings.Index(line, source)
 		if at < 0 {
@@ -208,7 +208,7 @@ func TestMatrixRecentDeviceNamesShareLeftEdge(t *testing.T) {
 	for _, embedded := range []bool{false, true} {
 		for _, compact := range []bool{false, true} {
 			t.Run(fmt.Sprintf("embedded=%v/compact=%v", embedded, compact), func(t *testing.T) {
-				h := matrixRecentColumnsHome(t, "pro")
+				h := matrixRecentColumnsHome(t, "dev")
 				h.embeddedLayout, h.compactSidebar, h.sidebarDensity = embedded, compact, session.SidebarDensityCompact
 				near := matrixRecentColumnsLine(t, h.renderSessionList(80, 20), "Remote")
 				// matrix/hardened: a wider device column keeps short names on
@@ -217,7 +217,7 @@ func TestMatrixRecentDeviceNamesShareLeftEdge(t *testing.T) {
 				view := h.renderSessionList(80, 20)
 				wide := matrixRecentColumnsLine(t, view, "Remote")
 				local := matrixRecentColumnsLine(t, view, "Local")
-				if leadDisplayWidth(near, "pro") != leadDisplayWidth(wide, "pro") || leadDisplayWidth(local, "本机") != leadDisplayWidth(wide, "pro") {
+				if leadDisplayWidth(near, "dev") != leadDisplayWidth(wide, "dev") || leadDisplayWidth(local, "本机") != leadDisplayWidth(wide, "dev") {
 					t.Fatalf("device names do not share a stable left edge:\n%q\n%q\n%q", near, local, wide)
 				}
 				if leadDisplayWidth(local, "○") != leadDisplayWidth(wide, "○") {
