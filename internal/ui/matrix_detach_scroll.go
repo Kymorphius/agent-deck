@@ -33,9 +33,9 @@ func (h *Home) suppressDetachWheel(msg tea.Msg, now time.Time) bool {
 			// A deliberate click starts fresh interaction; passive motion does not.
 			h.detachWheelUntil = time.Time{}
 		}
-	case tea.KeyMsg:
-		// Keep shortcuts immediately responsive, with no sleep or input drain.
-		h.detachWheelUntil = time.Time{}
 	}
+	// matrix/hardened: keys still run immediately but no longer release the
+	// guard. Pressing j/k right after returning used to let the remaining
+	// inertia reports through, moving the cursor several more rows.
 	return false
 }

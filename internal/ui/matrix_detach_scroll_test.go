@@ -26,17 +26,13 @@ func TestDetachWheelInertiaWaitsForQuiet(t *testing.T) {
 
 func TestDetachWheelPreservesFreshInteraction(t *testing.T) {
 	now := time.Unix(100, 0)
-	for _, msg := range []tea.Msg{
-		tea.KeyMsg{Type: tea.KeyDown},
-		tea.MouseMsg{Button: tea.MouseButtonLeft, Action: tea.MouseActionPress},
-	} {
-		h := &Home{}
-		h.beginDetachWheelGuard(now)
-		if h.suppressDetachWheel(msg, now) || !h.detachWheelUntil.IsZero() {
-			t.Fatalf("fresh interaction was not released: %v", msg)
-		}
-	}
 	h := &Home{}
+	h.beginDetachWheelGuard(now)
+	click := tea.MouseMsg{Button: tea.MouseButtonLeft, Action: tea.MouseActionPress}
+	if h.suppressDetachWheel(click, now) || !h.detachWheelUntil.IsZero() {
+		t.Fatal("click did not release the guard")
+	}
+	h = &Home{}
 	h.beginDetachWheelGuard(now)
 	h.suppressDetachWheel(tea.MouseMsg{Action: tea.MouseActionMotion}, now)
 	h.suppressDetachWheel(tea.WindowSizeMsg{Width: 80, Height: 24}, now)
@@ -46,6 +42,25 @@ func TestDetachWheelPreservesFreshInteraction(t *testing.T) {
 	h.insertMode = true
 	if h.suppressDetachWheel(tea.MouseMsg{Button: tea.MouseButtonWheelDown}, now) {
 		t.Fatal("wheel input in a new session was suppressed")
+	}
+}
+
+// matrix/hardened: j/k pressed during the inertia tail moves one row; the
+// remaining wheel reports must not move the cursor further.
+func TestDetachWheelKeyDuringInertiaKeepsGuard(t *testing.T) {
+	h, _, _ := armHomeWithOneSession(t)
+	h.beginDetachWheelGuard(time.Now())
+	h.cursor = 0
+	h.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	if h.cursor != 1 {
+		t.Fatalf("j during guard did not move one row: %d", h.cursor)
+	}
+	h.cursor = 0
+	for range 8 {
+		h.Update(tea.MouseMsg{Button: tea.MouseButtonWheelDown})
+	}
+	if h.cursor != 0 {
+		t.Fatalf("inertia after a key moved the cursor: %d", h.cursor)
 	}
 }
 
